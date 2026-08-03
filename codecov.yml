@@ -28,14 +28,14 @@ flags:
 # из отчёта НЕ исключён намеренно, хотя покрыт нулём: спрятать его значило бы
 # поднять общую цифру, ничего не изменив в тестах. Пусть ноль будет виден.
 ignore:
-  - "tests/**"
-  - "scripts/**"
-  - "packages/tools/**"
-  - "docs/**"
-  - "dist/**"
-  - "**/*.config.ts"
-  - "**/*.d.ts"
+  - 'tests/**'
+  - 'scripts/**'
+  - 'packages/tools/**'
+  - 'docs/**'
+  - 'dist/**'
+  - '**/*.config.ts'
+  - '**/*.d.ts'
 
 comment:
-  layout: "reach, diff, flags"
+  layout: 'reach, diff, flags'
   require_changes: true
