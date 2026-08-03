@@ -826,7 +826,8 @@ export function stepEnemies(s: SimState): void {
     // за другим — и на игрока приходилось бы четыре объявленных атаки вместо
     // трёх, причём тем чаще, чем больше народу на арене.
     const busy = s.ePhase[i] === EnemyPhase.Telegraph || s.ePhase[i] === EnemyPhase.Attack;
-    if (!busy && (s.tick + i) % AI_DECISION_PERIOD === 0) retarget(s, i, activeEnemies);
+    const decides = (s.tick + i) % AI_DECISION_PERIOD === 0;
+    if (!busy && decides) retarget(s, i, activeEnemies);
 
     switch (s.eType[i]) {
       case EnemyType.Wedge:
@@ -859,17 +860,28 @@ export function stepEnemies(s: SimState): void {
      * со стороны это выглядело как враг, который начал разгон и тут же встал.
      * Скольжение вдоль препятствия — нормальный ход тарана, остановка — нет.
      */
-    if (blocked(fromX, fromY, s.eX[i], s.eY[i], s.eVX[i], s.eVY[i])) {
-      if (s.ePhase[i] === EnemyPhase.Attack && s.eType[i] === EnemyType.Wedge) {
-        s.ePhase[i] = EnemyPhase.Recover;
-        s.ePhaseUntil[i] = s.tick + stats.recoverTicks;
-        brake(s, i);
-      } else {
-        // Не в атаке — значит идёт по своим делам и упёрся в колонну.
-        // Разворот стороны обхода это и есть весь его способ обойти
-        // препятствие: полноценный поиск пути арене из шести прямоугольников
-        // не нужен, а застрявший навсегда враг ломает темп боя.
-        s.eFlags[i] ^= EntityFlag.OrbitFlip;
+    /*
+     * Упёрся ли враг — вопрос дорогой, и задаётся он не всем и не всегда.
+     *
+     * Атакующему Клину он нужен каждый тик: таран, потерявший ход, обязан
+     * закончиться в тот же кадр, иначе колонна перестаёт быть укрытием.
+     * Всем остальным хватает частоты принятия решений: разворот стороны
+     * обхода на десятую долю секунды позже незаметен, а считать дробную
+     * геометрию для сорока врагов каждый кадр — это заметная доля тика.
+     */
+    const ramming = s.ePhase[i] === EnemyPhase.Attack && s.eType[i] === EnemyType.Wedge;
+    if (ramming || decides) {
+      if (blocked(fromX, fromY, s.eX[i], s.eY[i], s.eVX[i], s.eVY[i])) {
+        if (ramming) {
+          s.ePhase[i] = EnemyPhase.Recover;
+          s.ePhaseUntil[i] = s.tick + stats.recoverTicks;
+          brake(s, i);
+        } else {
+          // Разворот стороны обхода — весь его способ обойти препятствие:
+          // полноценный поиск пути арене из шести прямоугольников не нужен,
+          // а застрявший навсегда враг ломает темп боя.
+          s.eFlags[i] ^= EntityFlag.OrbitFlip;
+        }
       }
     }
 
