@@ -14,6 +14,9 @@ jobs:
   # Соглашение из CLAUDE.md, проверяемое машиной.
   commits:
     name: Коммиты без упоминаний ИИ
+    # Только на PR: у ручного запуска нет базовой ветки, и диапазон
+    # `origin/..HEAD` уронил бы работу на пустом месте.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
