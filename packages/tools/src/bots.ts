@@ -56,9 +56,16 @@ class RandomBot implements Bot {
         f.aimX = fromInt(nextInt(this.rng, Stream.Waves, 3) - 1);
         f.aimY = fromInt(nextInt(this.rng, Stream.Waves, 3) - 1);
       }
-      f.buttons = 0;
-      if (nextInt(this.rng, Stream.Waves, 100) < 40) f.buttons |= Btn.Fire;
-      if (nextInt(this.rng, Stream.Waves, 100) < 3) f.buttons |= Btn.Dash;
+      // Кнопки тоже держатся, а не дёргаются каждый тик. Причин две.
+      // Живой игрок удерживает огонь, и лог, где кнопка меняется 60 раз в
+      // секунду, не похож ни на один настоящий забег. А ещё именно на нём
+      // ломается RLE-сжатие реплея: повторов не остаётся вовсе, и эталон
+      // раздувается с десятков килобайт до сотен.
+      if (s.tick % 10 === 0) {
+        f.buttons = 0;
+        if (nextInt(this.rng, Stream.Waves, 100) < 40) f.buttons |= Btn.Fire;
+        if (nextInt(this.rng, Stream.Waves, 100) < 3) f.buttons |= Btn.Dash;
+      }
     }
     return this.frames;
   }

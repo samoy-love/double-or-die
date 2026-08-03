@@ -6,9 +6,26 @@
  * ноль интерактивных промптов — иначе ломается и то, и другое.
  */
 
-import { writeFileSync } from 'node:fs';
-import { createState, hashHex, spawnPlayers, step, checkInvariants } from '../../sim/src/index';
+import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import {
+  checkInvariants,
+  createState,
+  deserialize,
+  hashHex,
+  ReplayPlayer,
+  spawnPlayers,
+  step,
+} from '../../sim/src/index';
 import { makeBot, type BotName } from './bots';
+import {
+  CONFIG_VERSION,
+  type Golden,
+  type GoldenResult,
+  recordGolden,
+  verifyGolden,
+} from './golden';
+import { parseScenario, runScenario, type ScenarioResult } from './scenario';
 
 interface Args {
   seed: number;
@@ -20,6 +37,12 @@ interface Args {
   determinismCheck: boolean;
   seeds: number;
   out: string | null;
+  scenario: string | null;
+  golden: string | null;
+  replay: string | null;
+  assertHash: string | null;
+  recordGolden: string | null;
+  rebaseline: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -33,6 +56,12 @@ function parseArgs(argv: string[]): Args {
     determinismCheck: false,
     seeds: 10,
     out: null,
+    scenario: null,
+    golden: null,
+    replay: null,
+    assertHash: null,
+    recordGolden: null,
+    rebaseline: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
@@ -66,6 +95,29 @@ function parseArgs(argv: string[]): Args {
         a.out = v;
         i++;
         break;
+      case '--scenario':
+        a.scenario = v;
+        i++;
+        break;
+      case '--golden':
+        a.golden = v;
+        i++;
+        break;
+      case '--replay':
+        a.replay = v;
+        i++;
+        break;
+      case '--assert-hash':
+        a.assertHash = v;
+        i++;
+        break;
+      case '--record-golden':
+        a.recordGolden = v;
+        i++;
+        break;
+      case '--rebaseline':
+        a.rebaseline = true;
+        break;
       case '--json':
         a.json = true;
         break;
@@ -93,6 +145,13 @@ Headless-раннер Double or Die
   --out <файл>          записать отчёт в файл вместо stdout
   --determinism-check   один сид дважды, сверка хешей
   --seeds <n>           сколько сидов проверять в --determinism-check
+
+  --scenario <путь>     прогнать сценарий: файл или каталог
+  --golden <путь>       сверить эталонные реплеи: файл или каталог
+  --replay <файл>       переиграть лог ввода
+  --assert-hash <хеш>   потребовать итоговый хеш
+
+  --record-golden <кат> ПЕРЕЗАПИСАТЬ эталоны; требует --rebaseline
 `);
 }
 
@@ -138,8 +197,102 @@ function emit(a: Args, data: unknown): void {
   }
 }
 
+/** Файлы .json по пути: принимаем и один файл, и каталог. */
+function jsonFiles(path: string): string[] {
+  return statSync(path).isDirectory()
+    ? readdirSync(path)
+        .filter((f) => f.endsWith('.json'))
+        .sort()
+        .map((f) => join(path, f))
+    : [path];
+}
+
+function doScenarios(a: Args, path: string): never {
+  const results: ScenarioResult[] = [];
+  for (const f of jsonFiles(path)) {
+    results.push(runScenario(parseScenario(readFileSync(f, 'utf8'), f)));
+  }
+  const failed = results.filter((r) => !r.ok);
+  emit(a, { ok: failed.length === 0, total: results.length, failed: failed.length, results });
+  process.exit(failed.length === 0 ? 0 : 1);
+}
+
+function doGolden(a: Args, path: string): never {
+  const results: GoldenResult[] = [];
+  for (const f of jsonFiles(path)) {
+    results.push(verifyGolden(JSON.parse(readFileSync(f, 'utf8')) as Golden));
+  }
+  const failed = results.filter((r) => !r.ok);
+  emit(a, {
+    ok: failed.length === 0,
+    configVersion: CONFIG_VERSION,
+    total: results.length,
+    failed: failed.length,
+    results,
+  });
+  process.exit(failed.length === 0 ? 0 : 1);
+}
+
+function doReplay(a: Args, file: string): never {
+  const text = readFileSync(file, 'utf8');
+  const raw = JSON.parse(text) as Partial<Golden>;
+  // Принимаем и эталон, и голый лог: у эталона реплей лежит внутри строкой.
+  const replay = deserialize(typeof raw.replay === 'string' ? raw.replay : text);
+
+  const s = createState(replay.seed, replay.playerCount);
+  spawnPlayers(s);
+  const p = new ReplayPlayer(replay);
+  while (!p.done) step(s, p.next());
+
+  const hash = hashHex(s);
+  const ok = a.assertHash === null || hash === a.assertHash;
+  emit(a, { ok, seed: replay.seed, ticks: s.tick, hash, expected: a.assertHash });
+  process.exit(ok ? 0 : 1);
+}
+
+/**
+ * Перезапись эталонов.
+ *
+ * Отдельный флаг и громкое предупреждение — не формальность: тест, эталон
+ * которого обновляют заодно с правкой, перестаёт что-либо проверять и
+ * начинает подтверждать любое поведение, какое случилось.
+ */
+function doRecordGolden(a: Args, dir: string): never {
+  if (!a.rebaseline) {
+    console.error(
+      'отказ: перезапись эталонов требует --rebaseline.\n' +
+        'Ре-бейзлайн делается осознанно и попадает в заметки версии (CLAUDE.md).',
+    );
+    process.exit(2);
+  }
+  const written: string[] = [];
+  for (let i = 0; i < a.runs; i++) {
+    const seed = a.seed + i;
+    // Состав перебирается по кругу: 1–4 игрока, потому что масштабирование
+    // на состав — отдельный источник расхождений, и покрыт он должен быть
+    // эталонами, а не только юнит-тестом.
+    const players = (i % 4) + 1;
+    const name = `seed-${seed}-p${players}`;
+    const g = recordGolden(name, seed, players, a.bot, a.ticks);
+    const file = join(dir, `${name}.json`);
+    // Компактно, без отступов: с ними каждое число лога ввода уезжает на
+    // свою строку и двадцать эталонов весят 3.4 МБ вместо 300 КБ. Читать
+    // руками там нечего — это машинный артефакт, а не документ.
+    writeFileSync(file, JSON.stringify(g) + '\n');
+    written.push(file);
+  }
+  console.error(`ЭТАЛОНЫ ПЕРЕЗАПИСАНЫ (${written.length}) при конфиге ${CONFIG_VERSION}`);
+  emit(a, { ok: true, rebaselined: written.length, configVersion: CONFIG_VERSION, written });
+  process.exit(0);
+}
+
 function main(): void {
   const a = parseArgs(process.argv.slice(2));
+
+  if (a.recordGolden) doRecordGolden(a, a.recordGolden);
+  if (a.scenario) doScenarios(a, a.scenario);
+  if (a.golden) doGolden(a, a.golden);
+  if (a.replay) doReplay(a, a.replay);
 
   if (a.determinismCheck) {
     const mismatches: { seed: number; a: string; b: string }[] = [];
@@ -162,6 +315,10 @@ function main(): void {
     results.push({ seed: a.seed + i, ...r });
   }
 
+  // --assert-hash на обычном забеге: точная привязка сида к состоянию,
+  // которой удобно прижать баг-репорт, не таская с собой файл реплея.
+  if (a.assertHash !== null && results[0].hash !== a.assertHash) failures++;
+
   const out = {
     ok: failures === 0,
     runs: a.runs,
@@ -169,6 +326,7 @@ function main(): void {
     bot: a.bot,
     players: a.players,
     ticks: a.ticks,
+    ...(a.assertHash !== null ? { expected: a.assertHash } : {}),
     // При записи в файл отдаём все забеги: файл читает сверка платформ,
     // и ей нужны хеши каждого сида, а не только упавших.
     results: a.out || a.runs <= 20 ? results : results.filter((r) => r.errors.length > 0),

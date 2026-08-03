@@ -1,0 +1,12 @@
+{
+  "name": "трение останавливает игрока после отпускания стика",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "input": { "player": 0, "move": [1, 0] } },
+    { "tick": 60 },
+    { "clearInput": { "player": 0 } },
+    { "tick": 120 },
+    { "expect": { "player": 0, "travelled": { "min": 300, "max": 345 } } }
+  ]
+}

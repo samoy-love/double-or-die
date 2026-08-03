@@ -1,0 +1,14 @@
+{
+  "name": "вчетвером все появляются живыми и расходятся по углам",
+  "seed": 7,
+  "players": 4,
+  "steps": [
+    { "expect": { "player": 0, "hearts": { "min": 3, "max": 3 }, "alive": true } },
+    { "expect": { "player": 3, "hearts": { "min": 3, "max": 3 }, "alive": true } },
+    { "input": { "player": 0, "move": [-1, -1] } },
+    { "input": { "player": 3, "move": [1, 1] } },
+    { "tick": 180 },
+    { "expect": { "player": 0, "x": { "max": 840 }, "alive": true } },
+    { "expect": { "player": 3, "x": { "min": 1080 }, "alive": true } }
+  ]
+}

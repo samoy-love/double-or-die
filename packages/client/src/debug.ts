@@ -11,6 +11,7 @@
  */
 
 import { EntityFlag, fromFloat, toFloat, type SimState } from '../../sim/src/index';
+import type { SimEvent } from './events';
 import type { GameLoop } from './loop';
 import { BUILD, VERSION, GIT_SHA } from './version';
 
@@ -55,6 +56,8 @@ export interface DebugApi {
   state(): DebugState;
   hash(): string;
   perf(): { fps: number };
+  /** События с указанного тика включительно. Без аргумента — все. */
+  events(sinceTick?: number): SimEvent[];
   replay(): string;
   stable(on?: boolean): void;
 }
@@ -121,6 +124,7 @@ export function installDebugApi(loop: GameLoop): void {
     state: () => snapshot(loop.state, loop.hash()),
     hash: () => loop.hash(),
     perf: () => ({ fps: loop.fps }),
+    events: (sinceTick) => loop.events.since(sinceTick),
 
     replay() {
       // Лог инпутов — это и есть баг-репорт: по нему забег

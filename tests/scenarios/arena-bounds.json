@@ -1,0 +1,13 @@
+{
+  "name": "арена не выпускает игрока наружу",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "input": { "player": 0, "move": [1, 1] } },
+    { "tick": 600 },
+    { "expect": { "player": 0, "x": { "max": 1860 }, "y": { "max": 1020 }, "alive": true } },
+    { "input": { "player": 0, "move": [-1, -1] } },
+    { "tick": 600 },
+    { "expect": { "player": 0, "x": { "min": 60 }, "y": { "min": 60 }, "alive": true } }
+  ]
+}
