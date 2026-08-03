@@ -38,8 +38,20 @@ export function watchForUpdates(onAvailable: UpdateListener): () => void {
       // и затевалась, и молча сообщает «всё свежее».
       const res = await fetch('/version.json', { cache: 'no-store' });
       if (!res.ok) return;
-      const remote = (await res.json()) as { build?: string };
-      if (remote.build && remote.build !== BUILD) onAvailable(remote.build);
+      const remote = (await res.json()) as { commit?: string; sha?: string; version?: string };
+      // Сверяется КОММИТ, а не строка версии.
+      //
+      // На проде манифест пишет deploy-kit, и его `version` — метка релиза
+      // вида `release-20260803-165343-ba4f3c9`, которая не совпадает с нашей
+      // никогда. Сравнение по ней объявляло бы обновление при каждой
+      // проверке. Коммит же есть в обоих форматах и означает ровно то, что
+      // нужно: собрано из другого исходника — значит, обновление.
+      //
+      // Прежний код искал поле `build`, которого в манифесте deploy-kit нет
+      // вовсе. Ломалось это молча: проверка честно ходила на сервер и всегда
+      // получала undefined, то есть «обновлений нет» — навсегда.
+      const remoteSha = remote.commit ?? remote.sha;
+      if (remoteSha && remoteSha !== GIT_SHA) onAvailable(remote.version ?? remoteSha);
     } catch {
       // Сеть недоступна — не повод шуметь: игра полностью работает офлайн.
     }
