@@ -196,6 +196,58 @@ jobs:
           bash <(curl -sSf https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
           ./actionlint -color
 
+  # Сквозные тесты: единственная проверка, которая видит РЕНДЕР.
+  #
+  # Ядро проверяется без графики и проверяется хорошо, но между «симуляция
+  # считает верно» и «игра работает» лежит весь WebGL: не собрался шейдер, не
+  # инициализировался контекст, встал цикл — юниты остаются зелёными, а на
+  # экране пусто. Здесь же живёт нагрузочный бенч рендера из плана версии:
+  # 2000 частиц и 200 болванок в бюджете кадра.
+  e2e:
+    name: Сквозные тесты и бенч рендера
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+
+      # Кэшируем ровно ту версию браузера, что просит установленный Playwright:
+      # иначе после обновления пакета в кэше останется несовместимый бинарник.
+      - name: Версия Playwright
+        id: pw
+        run: echo "v=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v6
+        id: pw-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-${{ runner.os }}-${{ steps.pw.outputs.v }}
+
+      # Только Chromium: прогон идёт в нём одном, остальные браузеры — лишние
+      # сотни мегабайт на каждый PR.
+      - name: Поставить Chromium
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+
+      - name: Системные зависимости Chromium
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+
+      - name: Прогон
+        run: npm run e2e
+
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+
   build:
     name: Сборка
     runs-on: ubuntu-latest

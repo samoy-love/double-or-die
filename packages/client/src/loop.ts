@@ -64,6 +64,8 @@ export class GameLoop {
   fps = 0;
   private fpsAcc = 0;
   private fpsFrames = 0;
+  /** Сцена нагружена синтетикой: инварианты боя к ней не применимы. */
+  private benchMode = false;
 
   constructor(canvas: HTMLCanvasElement, opts: LoopOptions) {
     this.state = createState(opts.seed, opts.players);
@@ -132,6 +134,7 @@ export class GameLoop {
 
   /** Начать заново с другим сидом или составом. */
   restart(seed: number, players: number): void {
+    this.benchMode = false;
     this.state = createState(seed, players);
     spawnPlayers(this.state);
     this.recorder = this.makeRecorder();
@@ -238,7 +241,7 @@ export class GameLoop {
     // собой и рендер, и отладочный интерфейс, и агент видит вместо причины
     // застывшую картинку. Останавливаемся сами и говорим, на каком сиде и
     // тике, — этого хватает, чтобы воспроизвести.
-    if (IS_DEV && this.state.tick % 60 === 0) {
+    if (IS_DEV && !this.benchMode && this.state.tick % 60 === 0) {
       try {
         checkInvariants(this.state);
       } catch (e) {
@@ -265,6 +268,16 @@ export class GameLoop {
    * в ней.
    */
   stress(enemies: number, particles: number): void {
+    /*
+     * Стенд перестаёт быть игрой, и инварианты об этом должны знать.
+     *
+     * Нагрузка из плана версии — двести болванок — намеренно выше боевого
+     * потолка читаемости (D9: 40 + 15 на игрока). Это и есть смысл замера:
+     * бюджет обязан держаться с запасом, а не впритык. Оставить проверку
+     * включённой значило бы получать честное нарушение честного правила на
+     * каждом прогоне бенча и приучиться его пролистывать.
+     */
+    this.benchMode = true;
     const s = this.state;
     setSpawning(s, false);
     clearArena(s);
