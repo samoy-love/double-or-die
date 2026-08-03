@@ -17,6 +17,7 @@ import {
   TICK_HZ,
 } from '../../sim/src/index';
 import { ReplayRecorder } from '../../sim/src/replay';
+import { EventLog } from './events';
 import { InputSource } from './input';
 import { Renderer } from './renderer';
 import { BUILD, IS_DEV } from './version';
@@ -36,6 +37,7 @@ export class GameLoop {
   private readonly renderer: Renderer;
   private readonly input: InputSource;
   private recorder: ReplayRecorder;
+  readonly events = new EventLog();
   private acc = 0;
   private last = 0;
   private running = false;
@@ -54,6 +56,7 @@ export class GameLoop {
     this.input.attach(canvas);
     this.paused = opts.autopause;
     this.recorder = this.makeRecorder();
+    this.events.reset(this.state);
   }
 
   private makeRecorder(): ReplayRecorder {
@@ -110,6 +113,7 @@ export class GameLoop {
     this.state = createState(seed, players);
     spawnPlayers(this.state);
     this.recorder = this.makeRecorder();
+    this.events.reset(this.state);
     this.acc = 0;
     this.last = performance.now();
   }
@@ -182,6 +186,7 @@ export class GameLoop {
 
     this.recorder.record(inputs);
     step(this.state, inputs);
+    this.events.observe(this.state);
 
     if (IS_DEV && this.state.tick % 60 === 0) checkInvariants(this.state);
   }

@@ -10,7 +10,7 @@
  */
 
 import { add, clamp, fromFloat, fromInt, mul, sub } from './fixed';
-import { normalize } from './trig';
+import { normalize, normX, normY } from './trig';
 import { type InputFrame, Btn, isDown } from './input';
 import { ARENA_H, ARENA_W, EntityFlag, type SimState, TICK_HZ } from './state';
 
@@ -84,9 +84,9 @@ function stepPlayers(s: SimState, inputs: readonly InputFrame[]): void {
     const dashing = s.tick < s.pDashUntil[i];
 
     if (inp.aimX !== 0 || inp.aimY !== 0) {
-      const [ax, ay] = normalize(inp.aimX, inp.aimY);
-      s.pAimX[i] = ax;
-      s.pAimY[i] = ay;
+      normalize(inp.aimX, inp.aimY);
+      s.pAimX[i] = normX;
+      s.pAimY[i] = normY;
     }
 
     if (dashing) {
@@ -118,7 +118,9 @@ function tryDash(s: SimState, i: number, inp: InputFrame): boolean {
     dx = s.pAimX[i];
     dy = s.pAimY[i];
   }
-  const [nx, ny] = normalize(dx, dy);
+  normalize(dx, dy);
+  const nx = normX;
+  const ny = normY;
   if (nx === 0 && ny === 0) return false;
 
   const perTick = Math.trunc(PLAYER.dashDistance / PLAYER.dashTicks);
@@ -132,7 +134,9 @@ function tryDash(s: SimState, i: number, inp: InputFrame): boolean {
 }
 
 function applyMovement(s: SimState, i: number, inp: InputFrame): void {
-  const [nx, ny] = normalize(inp.moveX, inp.moveY);
+  normalize(inp.moveX, inp.moveY);
+  const nx = normX;
+  const ny = normY;
 
   if (nx !== 0 || ny !== 0) {
     s.pVX[i] = add(s.pVX[i], mul(nx, PLAYER.accel));
@@ -141,7 +145,9 @@ function applyMovement(s: SimState, i: number, inp: InputFrame): void {
     // Ограничение по модулю: без него диагональ быстрее прямой.
     const vx = s.pVX[i];
     const vy = s.pVY[i];
-    const [cx, cy] = normalize(vx, vy);
+    normalize(vx, vy);
+    const cx = normX;
+    const cy = normY;
     const speed2 = mul(vx, vx) + mul(vy, vy);
     const cap2 = mul(PLAYER.speed, PLAYER.speed);
     if (speed2 > cap2) {

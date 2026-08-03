@@ -23,8 +23,11 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
-    "check": "npm run lint && npm run format:check && npm run typecheck && npm run check:boundaries",
+    "check": "npm run lint && npm run format:check && npm run typecheck && npm run check:boundaries && npm run check:palette",
     "check:boundaries": "tsx scripts/check-boundaries.ts",
+    "check:palette": "tsx scripts/check-palette.ts",
+    "golden": "tsx packages/tools/src/cli.ts --golden tests/golden",
+    "scenarios": "tsx packages/tools/src/cli.ts --scenario tests/scenarios",
     "check:no-debug-api": "tsx scripts/check-no-debug-api.ts"
   },
   "devDependencies": {

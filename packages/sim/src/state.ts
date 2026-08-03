@@ -80,10 +80,20 @@ export interface SimState {
   ePhaseUntil: Int32Array;
   eTarget: Int32Array;
   eActive: Uint8Array;
+
+  /**
+   * Все буферы состояния одним списком — для снимка и хеша одним проходом.
+   *
+   * Список строится ОДИН раз при создании состояния и живёт вместе с ним.
+   * Собирать его на каждом вызове означало бы аллокацию из тридцати ссылок
+   * в хеше, снимке и восстановлении — то есть ровно на пути отката и
+   * сетевой сверки, где аллокаций быть не должно. Сами буферы не
+   * пересоздаются никогда, поэтому список верен всё время жизни состояния.
+   */
+  views: readonly (Int32Array | Uint8Array)[];
 }
 
-/** Все буферы состояния подряд — для снимка и хеша одним проходом. */
-function buffers(s: SimState): (Int32Array | Uint8Array)[] {
+function collectBuffers(s: SimState): (Int32Array | Uint8Array)[] {
   return [
     s.rng,
     s.pX,
@@ -124,7 +134,7 @@ export function createState(seed: number, playerCount = 1): SimState {
   const b = () => new Int32Array(MAX_BULLETS);
   const e = () => new Int32Array(MAX_ENEMIES);
 
-  return {
+  const s: SimState = {
     tick: 0,
     seed,
     rng: createStreams(seed),
@@ -162,7 +172,12 @@ export function createState(seed: number, playerCount = 1): SimState {
     ePhaseUntil: e(),
     eTarget: e(),
     eActive: new Uint8Array(MAX_ENEMIES),
+    // Заполняется сразу ниже: список ссылается на те же буферы, что
+    // перечислены выше, и до их создания его собрать нельзя.
+    views: [],
   };
+  s.views = collectBuffers(s);
+  return s;
 }
 
 /** Снимок состояния. Предаллоцируется один раз и переиспользуется. */
@@ -178,7 +193,7 @@ export function createSnapshot(s: SimState): Snapshot {
     tick: 0,
     seed: s.seed,
     playerCount: s.playerCount,
-    data: buffers(s).map((buf) =>
+    data: s.views.map((buf) =>
       buf instanceof Uint8Array ? new Uint8Array(buf.length) : new Int32Array(buf.length),
     ),
   };
@@ -188,7 +203,7 @@ export function saveSnapshot(s: SimState, snap: Snapshot): void {
   snap.tick = s.tick;
   snap.seed = s.seed;
   snap.playerCount = s.playerCount;
-  const src = buffers(s);
+  const src = s.views;
   for (let i = 0; i < src.length; i++) snap.data[i].set(src[i] as never);
 }
 
@@ -196,7 +211,7 @@ export function loadSnapshot(s: SimState, snap: Snapshot): void {
   s.tick = snap.tick;
   s.seed = snap.seed;
   s.playerCount = snap.playerCount;
-  const dst = buffers(s);
+  const dst = s.views;
   for (let i = 0; i < dst.length; i++) dst[i].set(snap.data[i] as never);
 }
 
@@ -211,7 +226,7 @@ export function hashState(s: SimState): number {
   h = (Math.imul(h ^ s.tick, 0x01000193) >>> 0) >>> 0;
   h = (Math.imul(h ^ s.playerCount, 0x01000193) >>> 0) >>> 0;
 
-  for (const buf of buffers(s)) {
+  for (const buf of s.views) {
     if (buf instanceof Uint8Array) {
       for (let i = 0; i < buf.length; i++) h = Math.imul(h ^ buf[i], 0x01000193) >>> 0;
     } else {

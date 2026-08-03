@@ -16,12 +16,24 @@ async function main(): Promise<void> {
   const seed = Number(params.get('seed') ?? 1) || 1;
   const players = Math.min(4, Math.max(1, Number(params.get('players') ?? 1) || 1));
   const autopause = params.get('autopause') === '1';
+  /*
+   * `debug=1` включает ОВЕРЛЕЙ, а не отладочный интерфейс.
+   *
+   * Разница принципиальная. Оверлей показывает кадры, номер тика, хеш и
+   * версию сборки — это то, что нужно в баг-репорте от игрока, и вреда в нём
+   * нет. `__DOD__` даёт полный контроль над симуляцией, и в релизе это чит;
+   * он остаётся вырезанным из прод-сборки навсегда.
+   */
+  const debugOverlay = params.get('debug') === '1';
+  /* Стабильный кадр: анимации замирают, чтобы скриншоты сравнивались. */
+  const stable = params.get('stable') === '1';
 
   const canvas = document.getElementById('game') as HTMLCanvasElement | null;
   if (!canvas) throw new Error('нет элемента #game');
 
   const loop = new GameLoop(canvas, { seed, players, autopause });
-  const overlay = new Overlay(loop, IS_DEV);
+  const overlay = new Overlay(loop, IS_DEV || debugOverlay);
+  if (stable) document.documentElement.dataset.stable = '1';
 
   /*
    * Отладочный интерфейс подключается ТОЛЬКО в dev-сборке и только
@@ -46,7 +58,7 @@ async function main(): Promise<void> {
 
   if (IS_DEV) {
     console.log(
-      `[DOD] ${JSON.stringify({ name: 'boot', build: BUILD, seed, players, autopause })}`,
+      `[DOD] ${JSON.stringify({ name: 'boot', build: BUILD, seed, players, autopause, stable })}`,
     );
   }
 }

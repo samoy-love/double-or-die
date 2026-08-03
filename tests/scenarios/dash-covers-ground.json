@@ -1,0 +1,13 @@
+{
+  "name": "рывок покрывает втрое больше ходьбы за те же тики",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "input": { "player": 0, "move": [1, 0], "buttons": ["dash"] } },
+    { "tick": 1 },
+    { "expect": { "player": 0, "invulnerable": true } },
+    { "input": { "player": 0, "move": [1, 0], "buttons": [] } },
+    { "tick": 19 },
+    { "expect": { "player": 0, "travelled": { "min": 250, "max": 320 } } }
+  ]
+}
