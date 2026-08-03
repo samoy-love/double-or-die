@@ -34,7 +34,7 @@ import { damagePlayer, explode, fireEnemy, killEnemy, statsOf } from './combat';
 import { add, type Fx, fromInt, mul, sub } from './fixed';
 import { Stream, nextInt } from './rng';
 import { EntityFlag, MAX_ENEMIES, MAX_PLAYERS, MAX_SPAWNS, Meta, type SimState } from './state';
-import { length, normalize, normX, normY, within } from './trig';
+import { ANGLE_FULL, cos, length, normalize, normX, normY, sin, within } from './trig';
 
 /** Флаг «новичок» едет в типе отложенного спавна: отдельный массив ради бита избыточен. */
 const NOVICE_BIT = 1 << 8;
@@ -147,6 +147,21 @@ function pickType(s: SimState, budget: number): number {
   return -1;
 }
 
+/** Случайный живой игрок: враги приходят ко всем, а не всегда к первому. */
+function randomLivePlayer(s: SimState): number {
+  let alive = 0;
+  for (let p = 0; p < s.playerCount; p++) if (isAlive(s, p)) alive++;
+  if (alive === 0) return -1;
+
+  let n = nextInt(s.rng, Stream.Waves, alive);
+  for (let p = 0; p < s.playerCount; p++) {
+    if (!isAlive(s, p)) continue;
+    if (n === 0) return p;
+    n--;
+  }
+  return -1;
+}
+
 /**
  * Найти точку спавна не ближе 250 u от каждого игрока и вне колонн.
  *
@@ -155,11 +170,36 @@ function pickType(s: SimState, budget: number): number {
  * та несправедливость, из-за которой игру закрывают.
  */
 function findSpawn(s: SimState, radius: Fx): boolean {
-  for (let attempt = 0; attempt < 24; attempt++) {
-    const x = add(ARENA_PAD, nextInt(s.rng, Stream.Waves, (maxX(s) - ARENA_PAD) >> 16) << 16);
-    const y = add(ARENA_PAD, nextInt(s.rng, Stream.Waves, (maxY(s) - ARENA_PAD) >> 16) << 16);
-    if (!isFreeSpot(s, x, y, radius)) continue;
+  const anchor = randomLivePlayer(s);
 
+  for (let attempt = 0; attempt < 24; attempt++) {
+    let x: Fx;
+    let y: Fx;
+
+    if (anchor < 0) {
+      // Живых нет — привязываться не к кому, берём точку по всей арене.
+      x = add(ARENA_PAD, nextInt(s.rng, Stream.Waves, (maxX(s) - ARENA_PAD) >> 16) << 16);
+      y = add(ARENA_PAD, nextInt(s.rng, Stream.Waves, (maxY(s) - ARENA_PAD) >> 16) << 16);
+    } else {
+      /*
+       * Точка берётся ПРЯМО В КОЛЬЦЕ вокруг игрока, а не бросается по всей
+       * арене с последующей отбраковкой.
+       *
+       * Отбраковка работала, пока у правила была только нижняя граница. С
+       * верхней годное кольцо занимает малую долю площади, и двадцати четырёх
+       * попыток перестало хватать: волна молча не пополнялась, а игрок стоял
+       * в пустой комнате — в замере до минуты подряд. Тихий отказ спавнера
+       * читается игроком как «игра сломалась», и никакой честностью это не
+       * оправдано.
+       */
+      const angle = nextInt(s.rng, Stream.Waves, ANGLE_FULL);
+      const span = (FAIRNESS.maxSpawnDistance - FAIRNESS.minSpawnDistance) >> 16;
+      const r = add(FAIRNESS.minSpawnDistance, nextInt(s.rng, Stream.Waves, span) << 16);
+      x = add(s.pX[anchor], mul(cos(angle), r));
+      y = add(s.pY[anchor], mul(sin(angle), r));
+    }
+
+    if (!isFreeSpot(s, x, y, radius)) continue;
     if (tooCloseToPlayers(s, x, y)) continue;
 
     spawnSpotX = x;
@@ -663,7 +703,9 @@ function orbit(s: SimState, i: number, dx: Fx, dy: Fx): void {
   // случайность здесь ничего не добавляет, а поток сдвигает.
   const band = (i * 7) % WEDGE.orbitBands;
   const preferred = add(WEDGE.orbitMin, band * WEDGE.orbitStep);
-  const side = (i & 1) === 0 ? 1 : -1;
+  // Сторона обхода: из индекса, но переворачивается, когда враг упёрся.
+  const flipped = (s.eFlags[i] & EntityFlag.OrbitFlip) !== 0;
+  const side = ((i & 1) === 0) !== flipped ? 1 : -1;
 
   // Радиальная составляющая держит свою полосу, тангенциальная ведёт по кругу.
   const closing = distance > preferred ? ENEMIES[EnemyType.Wedge].speed : -WEDGE.orbitSpeed;
@@ -817,11 +859,17 @@ export function stepEnemies(s: SimState): void {
      * со стороны это выглядело как враг, который начал разгон и тут же встал.
      * Скольжение вдоль препятствия — нормальный ход тарана, остановка — нет.
      */
-    if (s.ePhase[i] === EnemyPhase.Attack && s.eType[i] === EnemyType.Wedge) {
-      if (blocked(fromX, fromY, s.eX[i], s.eY[i], s.eVX[i], s.eVY[i])) {
+    if (blocked(fromX, fromY, s.eX[i], s.eY[i], s.eVX[i], s.eVY[i])) {
+      if (s.ePhase[i] === EnemyPhase.Attack && s.eType[i] === EnemyType.Wedge) {
         s.ePhase[i] = EnemyPhase.Recover;
         s.ePhaseUntil[i] = s.tick + stats.recoverTicks;
         brake(s, i);
+      } else {
+        // Не в атаке — значит идёт по своим делам и упёрся в колонну.
+        // Разворот стороны обхода это и есть весь его способ обойти
+        // препятствие: полноценный поиск пути арене из шести прямоугольников
+        // не нужен, а застрявший навсегда враг ломает темп боя.
+        s.eFlags[i] ^= EntityFlag.OrbitFlip;
       }
     }
 

@@ -1,6 +1,6 @@
 {
   "name": "double-or-die",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "type": "module",
   "description": "Твин-стик роглайт, где сложность выбираешь ты сам — пари на самого себя",
