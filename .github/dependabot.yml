@@ -1,0 +1,35 @@
+version: 2
+
+# Обновления зависимостей раз в неделю, по понедельникам: реже — и копится
+# пачка, которую разбирают залпом и потому невнимательно; чаще — и PR
+# перестают читать вовсе.
+#
+# open-pull-requests-limit держит очередь короткой намеренно. Двадцать
+# открытых PR от бота — это не двадцать обновлений, а ноль.
+#
+# Сообщения на русском в повелительном наклонении, как везде в этих
+# репозиториях (CLAUDE.md). Префикс deps: отделяет машинные правки от
+# человеческих — и он же выбрасывает их из списка изменений в релизе,
+# потому что «bump actions/checkout» в чате не говорит ничего.
+
+updates:
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: 'deps'
+  # Корневой package.json — единственный в репозитории. В нём объявлены
+  # workspaces: ['packages/*'], но ни в одном из packages/* своего
+  # package.json нет, поэтому отдельных записей на воркспейсы здесь не надо:
+  # dependabot следил бы за манифестами, которых не существует.
+  - package-ecosystem: 'npm'
+    directory: '/'
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: 'deps'
