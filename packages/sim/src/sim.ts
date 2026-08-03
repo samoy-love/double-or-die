@@ -28,10 +28,30 @@ export const PLAYER = {
   dashTicks: Math.round(0.16 * TICK_HZ),
   /** 1.2 с */
   dashCooldownTicks: Math.round(1.2 * TICK_HZ),
-  /** 0.22 с неуязвимости в рывке */
-  dashInvulTicks: Math.round(0.22 * TICK_HZ),
+  /**
+   * Coyote-время рывка: неуязвимость держится столько тиков ПОСЛЕ того, как
+   * движение рывка кончилось.
+   *
+   * Ради этого хвоста рывок и ощущается спасением: игрок жмёт кнопку в
+   * последний момент, видит, что уже не успевает, — и всё равно проходит
+   * сквозь снаряд. Без хвоста рывок «впритык» карает за смелость, а это
+   * ровно та эмоция, которой в игре про ставки на себя быть не должно.
+   *
+   * Число задано здесь и складывается с длительностью рывка ниже, а не
+   * записано отдельной секундой: раньше неуязвимость была независимыми
+   * 0.22 с, и хвост получался побочным следствием двух чисел — три тика
+   * вместо задуманных четырёх. Правка любого из них молча меняла ощущение.
+   */
+  dashCoyoteTicks: 4,
   startHearts: 3,
 } as const;
+
+/**
+ * Сколько тиков держится неуязвимость рывка целиком: само движение плюс
+ * coyote-хвост. Производная, а не третье независимое число — иначе хвост
+ * снова начнёт получаться случайно.
+ */
+export const DASH_INVUL_TICKS = PLAYER.dashTicks + PLAYER.dashCoyoteTicks;
 
 const ARENA_PAD = fromInt(60);
 const MIN_X = ARENA_PAD;
@@ -128,7 +148,7 @@ function tryDash(s: SimState, i: number, inp: InputFrame): boolean {
   s.pVY[i] = mul(ny, perTick);
   s.pDashUntil[i] = s.tick + PLAYER.dashTicks;
   s.pDashReady[i] = s.tick + PLAYER.dashCooldownTicks;
-  s.pInvulUntil[i] = Math.max(s.pInvulUntil[i], s.tick + PLAYER.dashInvulTicks);
+  s.pInvulUntil[i] = Math.max(s.pInvulUntil[i], s.tick + DASH_INVUL_TICKS);
   s.pFlags[i] |= EntityFlag.Invulnerable;
   return true;
 }

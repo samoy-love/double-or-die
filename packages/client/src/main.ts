@@ -10,6 +10,7 @@
 import { GameLoop } from './loop';
 import { BUILD, IS_DEV, registerServiceWorker, watchForUpdates } from './version';
 import { Overlay } from './overlay';
+import { log, logError } from './protocol';
 
 async function main(): Promise<void> {
   const params = new URLSearchParams(location.search);
@@ -57,10 +58,22 @@ async function main(): Promise<void> {
   watchForUpdates((build) => overlay.showUpdate(build));
 
   if (IS_DEV) {
-    console.log(
-      `[DOD] ${JSON.stringify({ name: 'boot', build: BUILD, seed, players, autopause, stable })}`,
-    );
+    log('boot', { build: BUILD, seed, players, autopause, stable });
   }
 }
 
-void main();
+/*
+ * Необработанный сбой обязан попасть в консоль в нашем формате.
+ *
+ * Иначе он теряется среди сообщений браузера: агент фильтрует вывод по
+ * префиксу и молча не увидит ровно того, ради чего смотрит. Обработчики
+ * ставятся ДО main(): сбой на старте — самый частый и самый неудобный.
+ */
+window.addEventListener('error', (e) => {
+  logError('uncaught', { message: String(e.message), source: e.filename, line: e.lineno });
+});
+window.addEventListener('unhandledrejection', (e) => {
+  logError('unhandled_rejection', { reason: String(e.reason) });
+});
+
+void main().catch((e: unknown) => logError('boot_failed', { reason: String(e) }));

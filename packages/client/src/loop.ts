@@ -19,6 +19,7 @@ import {
 import { ReplayRecorder } from '../../sim/src/replay';
 import { EventLog } from './events';
 import { InputSource } from './input';
+import { logInvariant } from './protocol';
 import { Renderer } from './renderer';
 import { BUILD, IS_DEV } from './version';
 
@@ -188,7 +189,19 @@ export class GameLoop {
     step(this.state, inputs);
     this.events.observe(this.state);
 
-    if (IS_DEV && this.state.tick % 60 === 0) checkInvariants(this.state);
+    // Инвариант нарушен — это дефект ядра, а не ситуация. Цикл при этом
+    // останавливается, но НЕ падает исключением наружу: упавший rAF уносит с
+    // собой и рендер, и отладочный интерфейс, и агент видит вместо причины
+    // застывшую картинку. Останавливаемся сами и говорим, на каком сиде и
+    // тике, — этого хватает, чтобы воспроизвести.
+    if (IS_DEV && this.state.tick % 60 === 0) {
+      try {
+        checkInvariants(this.state);
+      } catch (e) {
+        logInvariant(String(e), this.state.seed, this.state.tick);
+        this.pause();
+      }
+    }
   }
 
   snapshotReplay() {

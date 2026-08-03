@@ -13,6 +13,7 @@
 import { EntityFlag, fromFloat, toFloat, type SimState } from '../../sim/src/index';
 import type { SimEvent } from './events';
 import type { GameLoop } from './loop';
+import { log } from './protocol';
 import { BUILD, VERSION, GIT_SHA } from './version';
 
 export interface DebugState {
@@ -81,10 +82,6 @@ function snapshot(s: SimState, hash: string): DebugState {
   }
   return { tick: s.tick, seed: s.seed, hash, playerCount: s.playerCount, players };
 }
-
-/** Протокол консоли: агент фильтрует вывод по префиксу. */
-export const log = (name: string, props?: Record<string, unknown>): void =>
-  console.log(`[DOD] ${JSON.stringify({ name, ...props })}`);
 
 export function installDebugApi(loop: GameLoop): void {
   const api: DebugApi = {

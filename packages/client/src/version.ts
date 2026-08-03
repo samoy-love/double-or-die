@@ -36,7 +36,12 @@ export function watchForUpdates(onAvailable: UpdateListener): () => void {
     try {
       // no-store, иначе проверка читает тот же кеш, из-за которого
       // и затевалась, и молча сообщает «всё свежее».
-      const res = await fetch('/version.json', { cache: 'no-store' });
+      // Сначала манифест релиза (его пишет deploy-kit на проде), при его
+      // отсутствии — собственный манифест сборки. Локальный просмотр собранной
+      // игры deploy-kit не проходит, и без второго адреса проверка обновлений
+      // там не работала бы вовсе.
+      let res = await fetch('/version.json', { cache: 'no-store' });
+      if (res.status === 404) res = await fetch('/build.json', { cache: 'no-store' });
       if (!res.ok) return;
       const remote = (await res.json()) as { commit?: string; sha?: string; version?: string };
       // Сверяется КОММИТ, а не строка версии.
