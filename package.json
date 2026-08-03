@@ -1,6 +1,6 @@
 {
   "name": "double-or-die",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "type": "module",
   "description": "Твин-стик роглайт, где сложность выбираешь ты сам — пари на самого себя",
@@ -17,8 +17,9 @@
     "safety": "tsx packages/tools/src/cli.ts --runs 20 --ticks 5400 --bot random --safety --json",
     "bench": "tsx packages/tools/src/bench.ts",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "e2e": "playwright test",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -35,6 +36,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.62.1",
     "@types/node": "^26.1.2",
     "@vitest/coverage-v8": "^4.1.10",
     "eslint": "^10.8.0",

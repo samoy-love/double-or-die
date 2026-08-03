@@ -179,6 +179,7 @@ npm run sim -- --bot random --runs 500 --json
 npm run sim -- --scenario tests/scenarios
 npm run safety                                # достижимость безопасной точки, D4
 npm run bench
+npm run e2e                                   # рендер: 2000 частиц + 200 болванок
 npm run assets
 ```
 

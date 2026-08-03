@@ -489,7 +489,20 @@ export class Renderer {
       const vy = toFloat(s.pVY[i]);
       const speed = Math.hypot(vx, vy);
       const stretch = Math.min(0.28, speed * 0.05) - fb.playerSquash[i];
-      const angle = speed > 0.01 ? Math.atan2(vy, vx) : 0;
+
+      /*
+       * Кувырок: два оборота за отведённые 0.6 с.
+       *
+       * Отброс ударной волной не наносит урона сверх одного сердца — он
+       * унижает, а не наказывает (GDD §6). Унижение это читается ровно
+       * кувырком: без него отброшенный игрок выглядит просто скользящим, и
+       * механика Fall Guys, ради которой всё затевалось, не считывается.
+       */
+      const ragdollLeft = Math.max(0, s.pRagdollUntil[i] - s.tick);
+      const tumbling = ragdollLeft > 0;
+      const tumble = tumbling ? (1 - ragdollLeft / PLAYER.ragdollTicks) * Math.PI * 4 : 0;
+
+      const angle = tumbling ? tumble : speed > 0.01 ? Math.atan2(vy, vx) : 0;
 
       // Мигание при неуязвимости — по номеру тика, а не по времени: так
       // картинка совпадает с состоянием, а не живёт своей жизнью.
@@ -511,9 +524,11 @@ export class Renderer {
         alphaBody,
       );
 
-      const ax = toFloat(s.pAimX[i]);
-      const ay = toFloat(s.pAimY[i]);
-      this.drawEyes(x, y, r * 0.42, ax, ay, r * 0.3, invul);
+      // В кувырке глаза едут вместе с телом и жмурятся: смотреть на прицел
+      // в этот момент нечем, управления всё равно нет.
+      const ax = tumbling ? Math.cos(tumble) : toFloat(s.pAimX[i]);
+      const ay = tumbling ? Math.sin(tumble) : toFloat(s.pAimY[i]);
+      this.drawEyes(x, y, r * 0.42, ax, ay, r * 0.3, invul || tumbling);
     }
   }
 
