@@ -8,6 +8,14 @@
       name="description"
       content="Роглайт, где сложность выбираешь ты сам — пари на самого себя"
     />
+    <!--
+      Иконка одна и векторная. Ссылка обязательна: без неё браузер сам просит
+      /favicon.ico, получает 404 и пишет об этом в консоль — то есть шумит
+      ровно в том канале, по которому агент читает настоящие ошибки.
+    -->
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <!-- Цвет строки браузера на телефоне: тот же фон, что у арены. -->
+    <meta name="theme-color" content="#1a1033" />
     <link rel="stylesheet" href="/packages/client/src/style.css" />
   </head>
   <body>
