@@ -43,6 +43,16 @@ import { ParticleShape, type Particles } from './particles';
 /** Толщина обводки из арт-дирекшна: 4 u на всём (GDD §21). */
 const STROKE = 4;
 
+/**
+ * Полувысота цифры в HUD.
+ *
+ * Правило UX §4 — минимум 24 px при 1080p, «читается с дивана в двух
+ * метрах». Первая версия рисовала цифры вдвое мельче, и на деле их не было
+ * видно вовсе: палочка толщиной в полторы условные единицы на реальном экране
+ * тоньше пикселя и просто не попадает в растр.
+ */
+const HUD_DIGIT = 13;
+
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 
 export class Renderer {
@@ -54,6 +64,20 @@ export class Renderer {
   private readonly prevEY = new Float64Array(MAX_ENEMIES);
   private readonly prevBX = new Float64Array(MAX_BULLETS);
   private readonly prevBY = new Float64Array(MAX_BULLETS);
+  /**
+   * Кто существовал на прошлом снимке.
+   *
+   * Без этого сущность в первом своём кадре интерполируется от мусора —
+   * от нуля или от того, кто занимал ячейку пула до неё. Выглядит это как
+   * телепортация: игрок в первом кадре забега выезжал из левого верхнего
+   * угла, а каждая пуля вылетала откуда-то сбоку и прыгала на место.
+   * Новая сущность рисуется там, где она есть, и интерполируется со
+   * следующего кадра.
+   */
+  private readonly seenEnemy = new Uint8Array(MAX_ENEMIES);
+  private readonly seenBullet = new Uint8Array(MAX_BULLETS);
+  private seenPlayers = false;
+
   /** Фигур в последнем кадре: по нему видно, во что упирается рендер. */
   lastShapeCount = 0;
 
@@ -91,16 +115,27 @@ export class Renderer {
       this.prevX[i] = toFloat(s.pX[i]);
       this.prevY[i] = toFloat(s.pY[i]);
     }
+    this.seenPlayers = true;
+
     for (let i = 0; i < MAX_ENEMIES; i++) {
+      this.seenEnemy[i] = s.eActive[i];
       if (!s.eActive[i]) continue;
       this.prevEX[i] = toFloat(s.eX[i]);
       this.prevEY[i] = toFloat(s.eY[i]);
     }
     for (let i = 0; i < MAX_BULLETS; i++) {
+      this.seenBullet[i] = s.bActive[i];
       if (!s.bActive[i]) continue;
       this.prevBX[i] = toFloat(s.bX[i]);
       this.prevBY[i] = toFloat(s.bY[i]);
     }
+  }
+
+  /** Забыть прошлый кадр: новый забег начинается без хвостов старого. */
+  forget(): void {
+    this.seenEnemy.fill(0);
+    this.seenBullet.fill(0);
+    this.seenPlayers = false;
   }
 
   /** `alpha` — доля пройденного тика, 0..1. */
@@ -221,8 +256,9 @@ export class Renderer {
 
     for (let i = 0; i < MAX_ENEMIES; i++) {
       if (!s.eActive[i] || s.ePhase[i] !== EnemyPhase.Telegraph) continue;
-      const x = lerp(this.prevEX[i], toFloat(s.eX[i]), alpha);
-      const y = lerp(this.prevEY[i], toFloat(s.eY[i]), alpha);
+      const a = this.seenEnemy[i] ? alpha : 1;
+      const x = lerp(this.prevEX[i], toFloat(s.eX[i]), a);
+      const y = lerp(this.prevEY[i], toFloat(s.eY[i]), a);
       const stats = ENEMIES[s.eType[i]];
       const left = Math.max(0, s.ePhaseUntil[i] - s.tick);
       // Пульсация — не украшение: по ней читается, сколько осталось.
@@ -314,8 +350,9 @@ export class Renderer {
 
     for (let i = 0; i < MAX_ENEMIES; i++) {
       if (!s.eActive[i]) continue;
-      const x = lerp(this.prevEX[i], toFloat(s.eX[i]), alpha);
-      const y = lerp(this.prevEY[i], toFloat(s.eY[i]), alpha);
+      const a = this.seenEnemy[i] ? alpha : 1;
+      const x = lerp(this.prevEX[i], toFloat(s.eX[i]), a);
+      const y = lerp(this.prevEY[i], toFloat(s.eY[i]), a);
       const type = s.eType[i] as EnemyType;
       const stats = ENEMIES[type];
       const r = toFloat(stats.radius);
@@ -420,8 +457,9 @@ export class Renderer {
     for (let i = 0; i < s.playerCount; i++) {
       if ((s.pFlags[i] & EntityFlag.Alive) === 0) continue;
 
-      const x = lerp(this.prevX[i], toFloat(s.pX[i]), alpha);
-      const y = lerp(this.prevY[i], toFloat(s.pY[i]), alpha);
+      const a = this.seenPlayers ? alpha : 1;
+      const x = lerp(this.prevX[i], toFloat(s.pX[i]), a);
+      const y = lerp(this.prevY[i], toFloat(s.pY[i]), a);
       const colour = PALETTE.player[i] as Rgb;
       const invul = (s.pFlags[i] & EntityFlag.Invulnerable) !== 0;
       const r = toFloat(PLAYER.visualRadius);
@@ -484,8 +522,9 @@ export class Renderer {
     const e = PALETTE.danger;
     for (let i = 0; i < MAX_BULLETS; i++) {
       if (!s.bActive[i]) continue;
-      const x = lerp(this.prevBX[i], toFloat(s.bX[i]), alpha);
-      const y = lerp(this.prevBY[i], toFloat(s.bY[i]), alpha);
+      const a = this.seenBullet[i] ? alpha : 1;
+      const x = lerp(this.prevBX[i], toFloat(s.bX[i]), a);
+      const y = lerp(this.prevBY[i], toFloat(s.bY[i]), a);
       const vx = toFloat(s.bVX[i]);
       const vy = toFloat(s.bVY[i]);
       const enemy = s.bOwner[i] < 0;
@@ -580,7 +619,7 @@ export class Renderer {
         );
       }
       // Кошелёк рядом со своими сердцами: чьи фишки — видно без подписи.
-      drawNumber(b, s.pChips[i], baseX + 120, top, 11, PALETTE.chip);
+      drawNumber(b, s.pChips[i], baseX + 150, top, HUD_DIGIT, PALETTE.chip);
     }
 
     // Волна — пипсами справа: сколько всего и сколько прошло.
@@ -606,14 +645,14 @@ export class Renderer {
         0.6,
       );
     }
-    drawNumber(b, s.meta[Meta.Room], w - 40 - waves * 26 - 40, top, 11, PALETTE.hudDim);
+    drawNumber(b, s.meta[Meta.Room], w - 40 - waves * 26 - 50, top, HUD_DIGIT, PALETTE.hudDim);
 
     // Ожидание перезапуска после гибели: игрок должен видеть, что игра жива.
     if (s.meta[Meta.RestartAt] !== 0) {
       const left = Math.max(0, s.meta[Meta.RestartAt] - s.tick);
       const c = PALETTE.danger;
       b.push(Shape.Ring, w / 2, h / 2, 60, 60, 0, 0, 0, 0, 0, 6, c.r, c.g, c.b, 0.9);
-      drawNumber(b, Math.ceil(left / 60), w / 2 - 12, h / 2, 22, PALETTE.hudText);
+      drawNumber(b, Math.ceil(left / 60), w / 2, h / 2, 42, PALETTE.hudText);
     }
   }
 
@@ -647,11 +686,15 @@ const enemyColour = (type: EnemyType): Rgb =>
 const channels = (c: Rgb): [number, number, number] => [c.r, c.g, c.b];
 
 /**
- * Число семисегментными палочками.
+ * Число семисегментными палочками, по центру относительно `x`.
  *
  * Шрифта в игре пока нет и до стадии F2 не будет, а счёт показывать надо.
  * Семь отрезков — это семь инстансов на цифру, то есть тот же батч, никакого
  * атласа и никакой возни с кириллицей.
+ *
+ * Центрируется всё число целиком, а не первая его цифра: раньше `x` был левым
+ * краем, и таймер в кольце приходилось двигать поправкой на глаз — она
+ * подходила однозначным числам и мазала на всех остальных.
  */
 const SEGMENTS: readonly number[] = [
   0b1110111, 0b0100100, 0b1011101, 0b1101101, 0b0101110, 0b1101011, 0b1111011, 0b0100101, 0b1111111,
@@ -668,10 +711,18 @@ function drawNumber(
 ): void {
   const text = String(Math.max(0, Math.trunc(value)));
   const w = size * 0.6;
-  const t = Math.max(1.5, size * 0.16);
+  // Толщина палочки: не тоньше двух единиц, иначе цифра пропадает в растре.
+  const t = Math.max(2, size * 0.2);
+  const advance = w * 2 + size * 0.5;
+  const left = x - (advance * (text.length - 1)) / 2;
+
   for (let i = 0; i < text.length; i++) {
-    const mask = SEGMENTS[text.charCodeAt(i) - 48] ?? 0;
-    const cx = x + i * (w * 2 + size * 0.5);
+    const digit = text.charCodeAt(i) - 48;
+    const mask = SEGMENTS[digit] ?? 0;
+    // Единица горит только правой парой отрезков и потому висит в своей
+    // клетке справа. Сдвигаем её к середине — иначе «1» в кольце таймера
+    // стоит не там, где все остальные цифры.
+    const cx = left + i * advance - (digit === 1 ? w : 0);
     // Порядок битов: верх, левый верх, правый верх, середина, левый низ,
     // правый низ, низ.
     if (mask & 0b0000001) hbar(b, cx, y - size, w, t, c);

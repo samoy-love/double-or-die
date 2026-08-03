@@ -14,6 +14,7 @@ import {
   fromFloat,
   hashHex,
   type InputFrame,
+  Meta,
   setSpawning,
   type SimState,
   spawnEnemy,
@@ -136,6 +137,7 @@ export class GameLoop {
     this.recorder = this.makeRecorder();
     this.events.reset(this.state);
     this.feedback.reset(this.state);
+    this.renderer.forget();
     this.acc = 0;
     this.last = performance.now();
   }
@@ -220,10 +222,16 @@ export class GameLoop {
       );
     }
 
+    const deaths = this.state.meta[Meta.Deaths];
     this.recorder.record(inputs);
     step(this.state, inputs);
     this.events.observe(this.state);
     this.feedback.observe(this.state);
+
+    // Перезапуск после гибели переставляет игрока в центр одним тиком.
+    // Интерполировать этот скачок нельзя: получится, что мёртвый доехал до
+    // точки старта, а не появился в ней.
+    if (this.state.meta[Meta.Deaths] !== deaths) this.renderer.forget();
 
     // Инвариант нарушен — это дефект ядра, а не ситуация. Цикл при этом
     // останавливается, но НЕ падает исключением наружу: упавший rAF уносит с

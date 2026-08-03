@@ -22,6 +22,7 @@ import {
   Meta,
   WEDGE,
   createState,
+  explode,
   fromInt,
   makeFrame,
   roomBudget,
@@ -165,13 +166,18 @@ describe('Фитиль', () => {
    */
   it('взрыв задевает своих: убивает Клина, но не Кирпича', () => {
     const s = arena();
-    const fuse = spawnEnemy(s, EnemyType.Fuse, fromInt(CX + 400), fromInt(CY));
-    const wedge = spawnEnemy(s, EnemyType.Wedge, fromInt(CX + 430), fromInt(CY + 60));
-    const brick = spawnEnemy(s, EnemyType.Brick, fromInt(CX + 430), fromInt(CY - 60));
+    const wedge = spawnEnemy(s, EnemyType.Wedge, fromInt(CX + 400), fromInt(CY + 60));
+    const brick = spawnEnemy(s, EnemyType.Brick, fromInt(CX + 400), fromInt(CY - 60));
 
-    while (s.eActive[fuse]) run(s, 1);
+    // Взрываем в точке напрямую, а не сводим Фитиль с ними в бою: расталкивание
+    // за восемь десятых секунды горения растащит их куда угодно, и тест начнёт
+    // проверять уже не урон по своим, а траектории. Правило же в другом —
+    // двадцать пять очков убивают Клина (20) и не убивают Кирпича (30).
+    explode(s, fromInt(CX + 400), fromInt(CY), -1);
+
     expect(s.eActive[wedge]).toBe(0);
     expect(s.eActive[brick]).toBe(1);
+    expect(s.eHP[brick]).toBe(ENEMIES[EnemyType.Brick].hp - FUSE.blastDamage);
   });
 
   it('ударная волна отбрасывает игрока кувырком', () => {

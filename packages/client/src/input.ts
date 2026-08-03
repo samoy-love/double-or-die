@@ -54,7 +54,23 @@ export class InputSource {
       }
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
-    window.addEventListener('blur', () => this.keys.clear());
+
+    /*
+     * Потеря фокуса снимает ВЕСЬ ввод, а не только клавиши.
+     *
+     * Отпускание за пределами вкладки до неё не доходит: свернул игру с
+     * зажатой кнопкой мыши — и `mouseup` уходит операционной системе, а игра
+     * остаётся с намертво зажатым курком. Вернувшись, игрок стреляет без
+     * нажатия и не может это прекратить, потому что отпускать уже нечего.
+     *
+     * `visibilitychange` нужен рядом с `blur` не для полноты: сворачивание
+     * окна и переключение вкладки — разные события, и приходит из них не
+     * всегда оба.
+     */
+    window.addEventListener('blur', () => this.releaseAll());
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) this.releaseAll();
+    });
 
     canvas.addEventListener('mousemove', (e) => {
       const r = canvas.getBoundingClientRect();
@@ -130,6 +146,15 @@ export class InputSource {
     f.aimY = fromFloat(ay);
     f.buttons = buttons;
     return f;
+  }
+
+  /** Снять всё удерживаемое: клавиши, мышь и буферизованные нажатия. */
+  private releaseAll(): void {
+    this.keys.clear();
+    this.mouseDown = false;
+    this.held.dash = 0;
+    this.held.take = 0;
+    this.held.cashOut = 0;
   }
 
   private k(code: string): boolean {

@@ -38,6 +38,19 @@ const HIT_SQUASH = 0.15;
 
 const rand = (): number => Math.random() * 2 - 1;
 
+/**
+ * Высота звука по типу врага.
+ *
+ * Звук здесь несёт данные: в каше из двадцати смертей игрок различает, кого
+ * убил, не глядя на экран. Клин мелкий и звонкий, Кирпич тяжёлый и низкий,
+ * Фитиль между ними — та же иерархия, что в их формах и в их угрозе.
+ */
+const PITCH: Record<number, number> = {
+  [EnemyType.Wedge]: 1.18,
+  [EnemyType.Brick]: 0.82,
+  [EnemyType.Fuse]: 1,
+};
+
 export class Feedback {
   /** Остаток вспышки на каждом враге, секунды. Читает рендер. */
   readonly enemyFlash = new Float32Array(MAX_ENEMIES);
@@ -109,8 +122,16 @@ export class Feedback {
       const was = this.prevActive[i] !== 0;
       const now = s.eActive[i] !== 0;
 
-      if (was && now && s.eHP[i] < this.prevHP[i]) {
-        this.onHit(i, toFloat(s.eX[i]), toFloat(s.eY[i]));
+      if (was && now) {
+        if (s.eHP[i] < this.prevHP[i]) {
+          this.onHit(i, toFloat(s.eX[i]), toFloat(s.eY[i]));
+          continue;
+        }
+        // Объявленная атака обязана звучать: часть угроз игрок считывает,
+        // не глядя на экран, и телеграф — первая из них.
+        if (s.ePhase[i] === EnemyPhase.Telegraph && this.prevPhase[i] !== EnemyPhase.Telegraph) {
+          this.audio.play('telegraph', PITCH[s.eType[i]] ?? 1);
+        }
         continue;
       }
 
@@ -123,7 +144,7 @@ export class Feedback {
       if (this.prevType[i] === EnemyType.Fuse && this.prevPhase[i] === EnemyPhase.Telegraph) {
         this.onExplosion(x, y);
       } else {
-        this.onKill(x, y);
+        this.onKill(x, y, this.prevType[i]);
       }
     }
   }
@@ -147,10 +168,10 @@ export class Feedback {
     }
   }
 
-  private onKill(x: number, y: number): void {
+  private onKill(x: number, y: number, type: number): void {
     this.feel.freeze(0.04);
     this.feel.shake(3, 0.12);
-    this.audio.play('kill');
+    this.audio.play('kill', PITCH[type] ?? 1);
     // Двенадцать осколков — число из таблицы сочности, не «на глаз».
     for (let n = 0; n < 12; n++) {
       const a = (n / 12) * Math.PI * 2 + rand() * 0.3;
