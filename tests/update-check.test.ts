@@ -42,7 +42,7 @@ async function loadWatcher(manifest: unknown, ok = true) {
   vi.stubGlobal('__DEV_BUILD__', false);
   vi.stubGlobal(
     'fetch',
-    vi.fn(async () => ({ ok, json: async () => manifest })),
+    vi.fn(async () => ({ ok, status: ok ? 200 : 500, json: async () => manifest })),
   );
   vi.resetModules();
   return await import('../packages/client/src/version');
@@ -84,6 +84,34 @@ describe('проверка обновлений', () => {
     const stop = watchForUpdates((v) => seen.push(v));
     await settle();
     stop();
+    expect(seen).toHaveLength(1);
+  });
+
+  // Локальный просмотр собранной игры идёт без deploy-kit: манифеста релиза
+  // там нет, и без запасного адреса проверка обновлений молчала бы всегда.
+  it('падает на собственный манифест, когда манифеста релиза нет', async () => {
+    vi.stubGlobal('__VERSION__', '0.1.0');
+    vi.stubGlobal('__GIT_SHA__', GIT_SHA);
+    vi.stubGlobal('__DEV_BUILD__', false);
+    const seenUrls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        seenUrls.push(url);
+        return url === '/version.json'
+          ? { ok: false, status: 404, json: async () => ({}) }
+          : { ok: true, status: 200, json: async () => ownManifest('0000abc') };
+      }),
+    );
+    vi.resetModules();
+    const { watchForUpdates } = await import('../packages/client/src/version');
+
+    const seen: string[] = [];
+    const stop = watchForUpdates((v) => seen.push(v));
+    await settle();
+    stop();
+
+    expect(seenUrls).toEqual(['/version.json', '/build.json']);
     expect(seen).toHaveLength(1);
   });
 

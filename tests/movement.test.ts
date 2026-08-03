@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import {
   Btn,
   EntityFlag,
+  DASH_INVUL_TICKS,
   PLAYER,
   createState,
   fromFloat,
@@ -108,7 +109,32 @@ describe('рывок', () => {
   it('неуязвимость кончается вместе с окном', () => {
     const s = newRun();
     step(s, frame({ moveX: fromFloat(1), buttons: Btn.Dash }));
-    runTicks(s, PLAYER.dashInvulTicks + 2, frame());
+    runTicks(s, DASH_INVUL_TICKS + 2, frame());
+    expect(s.pFlags[0] & EntityFlag.Invulnerable).toBeFalsy();
+  });
+
+  // Coyote-время: рывок, нажатый впритык, обязан спасать. Проверяется именно
+  // хвост — тики ПОСЛЕ того, как движение рывка уже кончилось.
+  it('держит неуязвимость ещё четыре тика после конца движения', () => {
+    const s = newRun();
+    step(s, frame({ moveX: fromFloat(1), buttons: Btn.Dash }));
+
+    // Срок неуязвимости назначен от начала рывка и складывается из движения
+    // и хвоста — это и есть смысл coyote-времени.
+    expect(s.pInvulUntil[0]).toBe(PLAYER.dashTicks + PLAYER.dashCoyoteTicks);
+
+    // Досматриваем ровно до конца ДВИЖЕНИЯ рывка: дальше игрок уже не летит.
+    runTicks(s, PLAYER.dashTicks - 1, frame());
+    expect(s.tick).toBe(PLAYER.dashTicks);
+    expect(s.tick).toBeGreaterThanOrEqual(s.pDashUntil[0]);
+    expect(s.pFlags[0] & EntityFlag.Invulnerable).toBeTruthy();
+
+    // Хвост держится все четыре тика.
+    runTicks(s, PLAYER.dashCoyoteTicks, frame());
+    expect(s.pFlags[0] & EntityFlag.Invulnerable).toBeTruthy();
+
+    // И кончается сразу после него, а не тянется дальше.
+    runTicks(s, 1, frame());
     expect(s.pFlags[0] & EntityFlag.Invulnerable).toBeFalsy();
   });
 
