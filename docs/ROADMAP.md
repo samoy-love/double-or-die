@@ -176,8 +176,10 @@ npm run bench
 
 ```bash
 npm run sim -- --bot random --runs 500 --json
-npm run sim -- --scenario tests/scenarios/dash-iframes.json
+npm run sim -- --scenario tests/scenarios
+npm run safety                                # достижимость безопасной точки, D4
 npm run bench
+npm run assets
 ```
 
 > **🚪 Ворота (самые важные в проекте).** В бой приятно играть **пять минут без единой ставки**. Проверяется человеком, не ботом. Если скучно — чиним бой; ставки его не спасут, они его замаскируют, и мы узнаем правду на релизе.

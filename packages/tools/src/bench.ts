@@ -15,8 +15,12 @@
  * разброс между прогонами и так десятки процентов, и строгий порог давал бы
  * красный цвет на ровном месте — а такой тест перестают читать.
  *
- * Нагрузочный бенч рендера (тысячи частиц) появится в 0.2.0 вместе с самими
- * частицами и WebGL2: мерить нечего, пока рисуются четыре квадрата.
+ * Часть нагрузки рендера меряется здесь же — система частиц. Она чистая
+ * арифметика над типизированными массивами и от WebGL не зависит вовсе,
+ * поэтому её регрессия ловится в Node, а не только глазами в браузере.
+ * Собственно отрисовка (2000 частиц и 200 болванок в одном батче) меряется
+ * там, где она живёт, — в браузере через `__DOD__.stress()` и `render()`,
+ * см. DEVLOOP §4.
  */
 
 import {
@@ -30,6 +34,7 @@ import {
   step,
 } from '../../sim/src/index';
 import { makeBot } from './bots';
+import { Particles, ParticleShape } from '../../client/src/particles';
 
 const FRAME_BUDGET_MS = 1000 / 60;
 /** Тик обязан быть дешевле кадра хотя бы во столько раз. */
@@ -84,6 +89,33 @@ function benchTick(players: number): Measure {
   return measure(`тик, игроков ${players}`, 200_000, () => step(s, bot.inputs(s)));
 }
 
+/**
+ * Система частиц под полной нагрузкой из плана версии: 2000 штук.
+ *
+ * Меряется шаг, а не отрисовка: именно он идёт по всем частицам каждый кадр
+ * и именно он молча становится квадратичным, если однажды добавить в него
+ * взаимодействие между частицами.
+ */
+function benchParticles(): Measure {
+  const particles = new Particles();
+  const colour = { r: 1, g: 0.8, b: 0.2 };
+  for (let i = 0; i < 2000; i++) {
+    const a = (i / 2000) * Math.PI * 2 * 13;
+    particles.spawn(
+      (i % 3) as ParticleShape,
+      Math.cos(a) * 800,
+      Math.sin(a) * 400,
+      Math.cos(a) * 60,
+      Math.sin(a) * 60,
+      8,
+      // Живут дольше замера: гаснущие частицы мерили бы пустой цикл.
+      3600,
+      colour,
+    );
+  }
+  return measure('2000 частиц', 20_000, () => particles.update(1 / 60));
+}
+
 function benchHash(): Measure {
   const s = freshState(4);
   return measure('хеш состояния', 50_000, () => void hashState(s));
@@ -109,7 +141,14 @@ function freshState(players: number): SimState {
 }
 
 function main(): void {
-  const results = [benchTick(1), benchTick(4), benchHash(), benchSnapshot(), benchRestore()];
+  const results = [
+    benchTick(1),
+    benchTick(4),
+    benchParticles(),
+    benchHash(),
+    benchSnapshot(),
+    benchRestore(),
+  ];
 
   const failed = results.filter((r) => !r.ok);
   const json = process.argv.includes('--json');

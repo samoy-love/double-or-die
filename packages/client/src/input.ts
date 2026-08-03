@@ -25,9 +25,28 @@ export class InputSource {
   private mouseY = 0;
   private mouseDown = false;
   private readonly held: Held = { dash: 0, take: 0, cashOut: 0 };
+  private firstInput: (() => void) | null = null;
+
+  /**
+   * Позвать один раз, как только игрок что-нибудь нажал.
+   *
+   * Нужно звуку: Web Audio не запускается до жеста пользователя, и контекст,
+   * созданный на загрузке, остаётся навсегда приостановленным.
+   */
+  onFirstInput(fn: () => void): void {
+    this.firstInput = fn;
+  }
+
+  private touched(): void {
+    if (!this.firstInput) return;
+    const fn = this.firstInput;
+    this.firstInput = null;
+    fn();
+  }
 
   attach(canvas: HTMLCanvasElement): void {
     window.addEventListener('keydown', (e) => {
+      this.touched();
       this.keys.add(e.code);
       // Пробел и стрелки скроллят страницу — в игре это раздражает.
       if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
@@ -42,7 +61,10 @@ export class InputSource {
       this.mouseX = ((e.clientX - r.left) / r.width) * 1920;
       this.mouseY = ((e.clientY - r.top) / r.height) * 1080;
     });
-    canvas.addEventListener('mousedown', () => (this.mouseDown = true));
+    canvas.addEventListener('mousedown', () => {
+      this.touched();
+      this.mouseDown = true;
+    });
     window.addEventListener('mouseup', () => (this.mouseDown = false));
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   }
@@ -59,6 +81,7 @@ export class InputSource {
     let buttons = 0;
 
     if (pad) {
+      if (pad.buttons.some((btn) => btn.pressed)) this.touched();
       [mx, my] = applyDeadzone(pad.axes[0] ?? 0, pad.axes[1] ?? 0);
       [ax, ay] = applyDeadzone(pad.axes[2] ?? 0, pad.axes[3] ?? 0);
       if ((pad.buttons[7]?.value ?? 0) > 0.5) buttons |= Btn.Fire;

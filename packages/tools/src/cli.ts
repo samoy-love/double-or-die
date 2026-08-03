@@ -26,6 +26,7 @@ import {
   verifyGolden,
 } from './golden';
 import { parseScenario, runScenario, type ScenarioResult } from './scenario';
+import { checkSafety } from './safety';
 
 interface Args {
   seed: number;
@@ -43,6 +44,7 @@ interface Args {
   assertHash: string | null;
   recordGolden: string | null;
   rebaseline: boolean;
+  safety: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -62,6 +64,7 @@ function parseArgs(argv: string[]): Args {
     assertHash: null,
     recordGolden: null,
     rebaseline: false,
+    safety: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
@@ -118,6 +121,9 @@ function parseArgs(argv: string[]): Args {
       case '--rebaseline':
         a.rebaseline = true;
         break;
+      case '--safety':
+        a.safety = true;
+        break;
       case '--json':
         a.json = true;
         break;
@@ -145,6 +151,7 @@ Headless-раннер Double or Die
   --out <файл>          записать отчёт в файл вместо stdout
   --determinism-check   один сид дважды, сверка хешей
   --seeds <n>           сколько сидов проверять в --determinism-check
+  --safety              проверять достижимость безопасной точки (D4) каждый тик
 
   --scenario <путь>     прогнать сценарий: файл или каталог
   --golden <путь>       сверить эталонные реплеи: файл или каталог
@@ -156,7 +163,7 @@ Headless-раннер Double or Die
 }
 
 /** Один забег. Возвращает итоговый хеш и признак успеха. */
-function runOnce(seed: number, players: number, ticks: number, bot: BotName) {
+function runOnce(seed: number, players: number, ticks: number, bot: BotName, safety = false) {
   const s = createState(seed, players);
   spawnPlayers(s);
   const b = makeBot(bot, seed, players);
@@ -171,6 +178,16 @@ function runOnce(seed: number, players: number, ticks: number, bot: BotName) {
         checkInvariants(s);
       } catch (e) {
         errors.push(String(e));
+        break;
+      }
+    }
+    // Достижимость безопасной точки проверяется КАЖДЫЙ тик, а не раз в
+    // секунду: непроходимой комбинация бывает ровно один кадр, и именно в
+    // этот кадр игрок теряет сердце.
+    if (safety) {
+      const fail = checkSafety(s);
+      if (fail) {
+        errors.push(`безопасной точки нет: игрок ${fail.player}, угроз ${fail.threats} (D4)`);
         break;
       }
     }
@@ -310,7 +327,7 @@ function main(): void {
   const results = [];
   let failures = 0;
   for (let i = 0; i < a.runs; i++) {
-    const r = runOnce(a.seed + i, a.players, a.ticks, a.bot);
+    const r = runOnce(a.seed + i, a.players, a.ticks, a.bot, a.safety);
     if (r.errors.length > 0) failures++;
     results.push({ seed: a.seed + i, ...r });
   }

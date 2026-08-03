@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "assets": [
+    {
+      "id": "favicon",
+      "file": "public/favicon.svg",
+      "source": "own",
+      "license": "MIT (этот репозиторий)",
+      "stage": "final",
+      "usedBy": "index.html",
+      "note": "Иконка вкладки: цилиндр Туза. Рисуется вектором, растровых версий не держим."
+    },
+    {
+      "id": "service-worker",
+      "file": "public/sw.js",
+      "source": "own",
+      "license": "MIT (этот репозиторий)",
+      "stage": "final",
+      "usedBy": "packages/client/src/version.ts",
+      "note": "Не ассет в художественном смысле, но файл, отсутствие которого ломает доставку."
+    }
+  ]
+}

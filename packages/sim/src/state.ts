@@ -7,6 +7,7 @@
  * для сверки детерминизма.
  */
 
+import { arenaScale } from './config';
 import { fromInt } from './fixed';
 import { createStreams, type RngState, STREAM_COUNT } from './rng';
 
@@ -15,19 +16,75 @@ export const MAX_ENEMIES = 200;
 export const MAX_BULLETS = 800;
 export const MAX_CARDS = 8;
 export const MAX_CHIPS = 256;
+/** Отложенные спавны: метка на полу живёт полсекунды до появления врага. */
+export const MAX_SPAWNS = 32;
 
-/** Виртуальное разрешение арены в условных единицах. */
+/** Виртуальное разрешение арены соло, в условных единицах. */
 export const ARENA_W = fromInt(1920);
 export const ARENA_H = fromInt(1080);
 
-export const TICK_HZ = 60;
+/** Размер арены с поправкой на состав: +8% на каждого игрока сверх первого. */
+export const arenaWidth = (players: number): number =>
+  Math.trunc((ARENA_W * arenaScale(players)) / 100);
+export const arenaHeight = (players: number): number =>
+  Math.trunc((ARENA_H * arenaScale(players)) / 100);
 
 export const enum EntityFlag {
   Alive = 1 << 0,
   /** Неуязвим: i-frames после урона или во время рывка. */
   Invulnerable = 1 << 1,
-  /** Отброшен ударом, управление временно отнято. */
+  /** Отброшен ударной волной, управление временно отнято. */
   Ragdoll = 1 << 2,
+  /**
+   * Первый враг своего типа за забег: телеграф растянут в полтора раза.
+   * Обучение без туториала (DIFFICULTY §7).
+   */
+  Novice = 1 << 3,
+}
+
+/**
+ * Скаляры состояния, которые обязаны попасть в хеш.
+ *
+ * Отдельным массивом, а не полями объекта: снимок, восстановление и хеш идут
+ * одним проходом по `views`, и поле, забытое в этом проходе, — это десинк,
+ * который проявится через полчаса игры и ни на что не будет похож.
+ */
+export const enum Meta {
+  /** Номер комнаты, с единицы. */
+  Room = 0,
+  /** Номер волны внутри комнаты, с единицы. Ноль — пауза между волнами. */
+  Wave = 1,
+  /** Сколько очков угрозы ещё предстоит выпустить в текущей волне. */
+  WaveBudget = 2,
+  /** Тик, на котором начнётся следующая волна или комната. */
+  NextWaveAt = 3,
+  /** Битовая маска уже показанных игроку типов врагов. */
+  SeenTypes = 4,
+  /** Убито врагов за забег — самая дешёвая метрика прогресса. */
+  Kills = 5,
+  /** Тик начала текущей комнаты: из него считается её длительность. */
+  RoomStartTick = 6,
+  /** Сколько раз забег обрывался смертью. */
+  Deaths = 7,
+  /**
+   * Тик, на котором забег начнётся заново после гибели всех игроков.
+   * Ноль — никто не ждёт перезапуска.
+   *
+   * Перезапуск живёт в симуляции, а не в клиенте, ровно по той же причине,
+   * по которой там живёт всё остальное: реплей обязан переигрываться целиком,
+   * включая смерть и то, что было после неё.
+   */
+  RestartAt = 8,
+  /**
+   * Волны выключены: арена не пополняется сама.
+   *
+   * Нужно двум непохожим потребителям сразу. Сценарий про движение или рывок
+   * не должен зависеть от того, кто на него набежал, — иначе он проверяет уже
+   * не движение. А отладочный интерфейс так получает пустую арену, на которую
+   * можно поставить ровно тех врагов, ради которых всё затевалось.
+   */
+  SpawnOff = 9,
+  Count = 10,
 }
 
 export interface SimState {
@@ -35,6 +92,15 @@ export interface SimState {
   tick: number;
   seed: number;
   rng: RngState;
+  /** Скаляры забега, см. `Meta`. */
+  meta: Int32Array;
+
+  /**
+   * Размер арены. Производная от состава, а не отдельная степень свободы,
+   * поэтому в хеш не входит: `playerCount` уже там, и разойтись они не могут.
+   */
+  arenaW: number;
+  arenaH: number;
 
   // --- Игроки ---
   playerCount: number;
@@ -52,8 +118,10 @@ export interface SimState {
   pDashReady: Int32Array;
   /** Тик окончания текущего рывка. */
   pDashUntil: Int32Array;
-  /** Тик последнего выстрела — для темпа стрельбы. */
-  pLastShot: Int32Array;
+  /** Тик окончания кувырка после ударной волны. */
+  pRagdollUntil: Int32Array;
+  /** Накопленная доля выстрела в Q16.16: темп 6.5/с не кратен тику. */
+  pShotAcc: Int32Array;
   pChips: Int32Array;
 
   // --- Снаряды ---
@@ -74,12 +142,35 @@ export interface SimState {
   eVY: Int32Array;
   eHP: Int32Array;
   eType: Int32Array;
-  /** Состояние автомата врага. */
+  /** Состояние автомата врага, см. `EnemyPhase`. */
   ePhase: Int32Array;
   /** Тик перехода в следующее состояние. */
   ePhaseUntil: Int32Array;
   eTarget: Int32Array;
+  /** Тик, на котором цель разрешено пересмотреть: память о цели 2 с. */
+  eTargetUntil: Int32Array;
+  /** Зафиксированное направление атаки: Клин в рывке не наводится. */
+  eDirX: Int32Array;
+  eDirY: Int32Array;
+  eFlags: Int32Array;
   eActive: Uint8Array;
+
+  // --- Отложенные спавны ---
+  /** Метка на полу: где и когда появится враг. */
+  spX: Int32Array;
+  spY: Int32Array;
+  spType: Int32Array;
+  spAt: Int32Array;
+  spActive: Uint8Array;
+
+  // --- Фишки ---
+  cX: Int32Array;
+  cY: Int32Array;
+  cVX: Int32Array;
+  cVY: Int32Array;
+  cValue: Int32Array;
+  cDeadline: Int32Array;
+  cActive: Uint8Array;
 
   /**
    * Все буферы состояния одним списком — для снимка и хеша одним проходом.
@@ -96,6 +187,7 @@ export interface SimState {
 function collectBuffers(s: SimState): (Int32Array | Uint8Array)[] {
   return [
     s.rng,
+    s.meta,
     s.pX,
     s.pY,
     s.pVX,
@@ -107,7 +199,8 @@ function collectBuffers(s: SimState): (Int32Array | Uint8Array)[] {
     s.pInvulUntil,
     s.pDashReady,
     s.pDashUntil,
-    s.pLastShot,
+    s.pRagdollUntil,
+    s.pShotAcc,
     s.pChips,
     s.bX,
     s.bY,
@@ -125,7 +218,23 @@ function collectBuffers(s: SimState): (Int32Array | Uint8Array)[] {
     s.ePhase,
     s.ePhaseUntil,
     s.eTarget,
+    s.eTargetUntil,
+    s.eDirX,
+    s.eDirY,
+    s.eFlags,
     s.eActive,
+    s.spX,
+    s.spY,
+    s.spType,
+    s.spAt,
+    s.spActive,
+    s.cX,
+    s.cY,
+    s.cVX,
+    s.cVY,
+    s.cValue,
+    s.cDeadline,
+    s.cActive,
   ];
 }
 
@@ -133,11 +242,16 @@ export function createState(seed: number, playerCount = 1): SimState {
   const p = () => new Int32Array(MAX_PLAYERS);
   const b = () => new Int32Array(MAX_BULLETS);
   const e = () => new Int32Array(MAX_ENEMIES);
+  const sp = () => new Int32Array(MAX_SPAWNS);
+  const c = () => new Int32Array(MAX_CHIPS);
 
   const s: SimState = {
     tick: 0,
     seed,
     rng: createStreams(seed),
+    meta: new Int32Array(Meta.Count),
+    arenaW: arenaWidth(playerCount),
+    arenaH: arenaHeight(playerCount),
 
     playerCount,
     pX: p(),
@@ -151,7 +265,8 @@ export function createState(seed: number, playerCount = 1): SimState {
     pInvulUntil: p(),
     pDashReady: p(),
     pDashUntil: p(),
-    pLastShot: p(),
+    pRagdollUntil: p(),
+    pShotAcc: p(),
     pChips: p(),
 
     bX: b(),
@@ -171,7 +286,25 @@ export function createState(seed: number, playerCount = 1): SimState {
     ePhase: e(),
     ePhaseUntil: e(),
     eTarget: e(),
+    eTargetUntil: e(),
+    eDirX: e(),
+    eDirY: e(),
+    eFlags: e(),
     eActive: new Uint8Array(MAX_ENEMIES),
+
+    spX: sp(),
+    spY: sp(),
+    spType: sp(),
+    spAt: sp(),
+    spActive: new Uint8Array(MAX_SPAWNS),
+
+    cX: c(),
+    cY: c(),
+    cVX: c(),
+    cVY: c(),
+    cValue: c(),
+    cDeadline: c(),
+    cActive: new Uint8Array(MAX_CHIPS),
     // Заполняется сразу ниже: список ссылается на те же буферы, что
     // перечислены выше, и до их создания его собрать нельзя.
     views: [],

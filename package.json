@@ -1,6 +1,6 @@
 {
   "name": "double-or-die",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Твин-стик роглайт, где сложность выбираешь ты сам — пари на самого себя",
@@ -13,9 +13,8 @@
   ],
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build && tsx scripts/write-version.ts",
-    "preview": "vite preview",
     "sim": "tsx packages/tools/src/cli.ts",
+    "safety": "tsx packages/tools/src/cli.ts --runs 20 --ticks 5400 --bot random --safety --json",
     "bench": "tsx packages/tools/src/bench.ts",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -26,9 +25,12 @@
     "check": "npm run lint && npm run format:check && npm run typecheck && npm run check:boundaries && npm run check:palette",
     "check:boundaries": "tsx scripts/check-boundaries.ts",
     "check:palette": "tsx scripts/check-palette.ts",
+    "check:no-debug-api": "tsx scripts/check-no-debug-api.ts",
+    "assets": "tsx scripts/check-assets.ts",
     "golden": "tsx packages/tools/src/cli.ts --golden tests/golden",
     "scenarios": "tsx packages/tools/src/cli.ts --scenario tests/scenarios",
-    "check:no-debug-api": "tsx scripts/check-no-debug-api.ts"
+    "build": "tsc --noEmit && vite build && tsx scripts/write-version.ts",
+    "preview": "vite preview"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

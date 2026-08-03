@@ -32,6 +32,7 @@ npm install
 npm run dev      # game on localhost:5173
 npm test         # unit tests and determinism
 npm run sim      # headless runner, no graphics
+npm run safety   # is there always somewhere for the player to go
 npm run check    # lint, types, module boundaries
 ```
 
@@ -52,5 +53,11 @@ Written in Russian.
 
 ## Status
 
-Version **0.1.0 "Skeleton"**: deterministic core, verification tooling, build
-delivery. No gameplay yet — combat lands in 0.2.0, bets in 0.3.0.
+Version **0.2.0 "Shooting Range"**: combat. The player shoots and dodges,
+three enemies — Wedge, Brick and Fuse — arrive in waves sized by a threat
+budget, an arena with columns provides cover, and the dead drop chips.
+Rendering moved to WebGL2: the whole frame ships in a single draw call, so
+hitstop, screen shake, flashes and two thousand particles fit the budget with
+room to spare. Audio is synthesised in Web Audio — zero assets.
+
+Bets land in 0.3.0. Until then this is an honest twin-stick with no cards.
