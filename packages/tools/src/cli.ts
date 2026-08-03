@@ -6,6 +6,7 @@
  * ноль интерактивных промптов — иначе ломается и то, и другое.
  */
 
+import { writeFileSync } from 'node:fs';
 import { createState, hashHex, spawnPlayers, step, checkInvariants } from '../../sim/src/index';
 import { makeBot, type BotName } from './bots';
 
@@ -18,6 +19,7 @@ interface Args {
   json: boolean;
   determinismCheck: boolean;
   seeds: number;
+  out: string | null;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -30,6 +32,7 @@ function parseArgs(argv: string[]): Args {
     json: false,
     determinismCheck: false,
     seeds: 10,
+    out: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
@@ -59,6 +62,10 @@ function parseArgs(argv: string[]): Args {
         a.seeds = Number(v);
         i++;
         break;
+      case '--out':
+        a.out = v;
+        i++;
+        break;
       case '--json':
         a.json = true;
         break;
@@ -83,6 +90,7 @@ Headless-раннер Double or Die
   --players <n>         игроков 1..4
   --bot <имя>           idle | random
   --json                машинный вывод
+  --out <файл>          записать отчёт в файл вместо stdout
   --determinism-check   один сид дважды, сверка хешей
   --seeds <n>           сколько сидов проверять в --determinism-check
 `);
@@ -112,6 +120,24 @@ function runOnce(seed: number, players: number, ticks: number, bot: BotName) {
   return { hash: hashHex(s), ticks: s.tick, errors };
 }
 
+/**
+ * Отдать отчёт: в файл, если попросили, иначе в stdout.
+ *
+ * Файл пишем сами, а не через `> out.json` в оболочке: перенаправление
+ * захватывает и баннер npm («> double-or-die@0.1.0 sim»), и любые его
+ * предупреждения — на выходе получается не JSON. Ловится это только там, где
+ * файл потом читают, то есть далеко от причины.
+ */
+function emit(a: Args, data: unknown): void {
+  const text = JSON.stringify(data, null, a.json || a.out ? 0 : 2);
+  if (a.out) {
+    writeFileSync(a.out, text + '\n');
+    console.log(`отчёт записан: ${a.out}`);
+  } else {
+    console.log(text);
+  }
+}
+
 function main(): void {
   const a = parseArgs(process.argv.slice(2));
 
@@ -124,9 +150,7 @@ function main(): void {
       if (r1.hash !== r2.hash) mismatches.push({ seed, a: r1.hash, b: r2.hash });
     }
     const ok = mismatches.length === 0;
-    console.log(
-      JSON.stringify({ ok, checked: a.seeds, mismatches, ticks: a.ticks }, null, a.json ? 0 : 2),
-    );
+    emit(a, { ok, checked: a.seeds, mismatches, ticks: a.ticks });
     process.exit(ok ? 0 : 1);
   }
 
@@ -145,9 +169,11 @@ function main(): void {
     bot: a.bot,
     players: a.players,
     ticks: a.ticks,
-    results: a.runs <= 20 ? results : results.filter((r) => r.errors.length > 0),
+    // При записи в файл отдаём все забеги: файл читает сверка платформ,
+    // и ей нужны хеши каждого сида, а не только упавших.
+    results: a.out || a.runs <= 20 ? results : results.filter((r) => r.errors.length > 0),
   };
-  console.log(JSON.stringify(out, null, a.json ? 0 : 2));
+  emit(a, out);
   process.exit(out.ok ? 0 : 1);
 }
 

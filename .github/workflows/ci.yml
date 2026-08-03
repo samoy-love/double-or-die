@@ -90,8 +90,10 @@ jobs:
 
       # Хеши уезжают артефактом: если платформы разойдутся, сравнивать нужно
       # конкретные числа, а не пересказ.
+      # Раннер пишет файл сам: перенаправление `> файл` захватило бы ещё и
+      # баннер npm, и на выходе получился бы не JSON.
       - name: Снять эталонные хеши
-        run: npm run sim -- --runs 20 --bot random --ticks 1800 --json > hashes-${{ matrix.os }}.json
+        run: npm run sim -- --runs 20 --bot random --ticks 1800 --out hashes-${{ matrix.os }}.json
 
       - uses: actions/upload-artifact@v7
         with:
