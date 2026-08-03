@@ -66,7 +66,7 @@ const rotl = (x: number, k: number): number => (x << k) | (x >>> (32 - k)) | 0;
 export function next(s: RngState, stream: Stream): number {
   const o = stream * 4;
   const s0 = s[o];
-  let s1 = s[o + 1];
+  const s1 = s[o + 1];
   const s2 = s[o + 2];
   const s3 = s[o + 3];
 
@@ -80,7 +80,6 @@ export function next(s: RngState, stream: Stream): number {
   s[o + 2] = s[o + 2] ^ t;
   s[o + 3] = rotl(s[o + 3], 11);
 
-  s1 = s[o + 1];
   return result | 0;
 }
 

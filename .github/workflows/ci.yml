@@ -46,7 +46,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: '24'
           cache: npm
       - run: npm ci
 
@@ -83,7 +83,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: '24'
           cache: npm
       - run: npm ci
 
@@ -123,7 +123,7 @@ jobs:
     needs: determinism
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: hashes-*
           merge-multiple: false
@@ -152,6 +152,21 @@ jobs:
           console.log('все платформы согласны: ' + base.data.results.length + ' сидов');
           "
 
+  # Workflow — тоже код, и ломается он ровно так же: опечатка в имени поля,
+  # несуществующий вход у переиспользуемого workflow, устаревшая версия
+  # runner. Разница в том, что ошибка видна только в момент запуска, а
+  # запускается это на мерже в main — то есть уже на проде.
+  workflows:
+    name: Сами workflow разбираются
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: actionlint
+        run: |
+          bash <(curl -sSf https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
+
   build:
     name: Сборка
     runs-on: ubuntu-latest
@@ -159,7 +174,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: '24'
           cache: npm
       - run: npm ci
       - run: npm run build

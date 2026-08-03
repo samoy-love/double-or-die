@@ -7,10 +7,6 @@
  * осмысленной.
  */
 
-declare const __VERSION__: string;
-declare const __GIT_SHA__: string;
-declare const __DEV_BUILD__: boolean;
-
 export const VERSION = __VERSION__;
 export const GIT_SHA = __GIT_SHA__;
 export const IS_DEV = __DEV_BUILD__;

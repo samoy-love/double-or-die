@@ -15,13 +15,7 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "noEmit": true,
-    "types": ["node", "vitest/globals"],
-    "paths": {
-      "@sim/*": ["./packages/sim/src/*"],
-      "@shared/*": ["./packages/shared/src/*"],
-      "@client/*": ["./packages/client/src/*"]
-    },
-    "baseUrl": "."
+    "types": ["node", "vitest/globals"]
   },
   "include": ["packages/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts", "vite.config.ts"],
   "exclude": ["node_modules", "dist", "stage"]

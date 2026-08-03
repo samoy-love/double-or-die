@@ -326,7 +326,10 @@ export function parseScenario(json: string, source: string): Scenario {
   try {
     o = JSON.parse(json);
   } catch (e) {
-    throw new Error(`${source}: не разбирается как JSON — ${String(e)}`);
+    // Исходная ошибка едет причиной, а не только строкой в сообщении: в ней
+    // позиция сбоя, а без неё опечатку в сценарии на сотню строк искать
+    // глазами.
+    throw new Error(`${source}: не разбирается как JSON — ${String(e)}`, { cause: e });
   }
   const sc = o as Partial<Scenario>;
   if (typeof sc.name !== 'string' || !sc.name) throw new Error(`${source}: нет поля name`);

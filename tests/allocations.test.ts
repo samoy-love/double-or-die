@@ -48,7 +48,7 @@ import { makeBot } from '../packages/tools/src/bots';
  * при четырёх тысячах он падает вчетверо и перестаёт мешать.
  */
 const WINDOW = 4000;
-/** Сколько окон снять. Нечётное — чтобы медиана была настоящим замером. */
+/** Сколько окон снять. Берём лучшее из них, поэтому чем больше, тем надёжнее. */
 const ROUNDS = 7;
 
 /**
@@ -60,17 +60,39 @@ const ROUNDS = 7;
  */
 const MAX_BYTES_PER_ITERATION = 64;
 
+/**
+ * Свой лимит времени: замер здесь долгий по построению.
+ *
+ * Восемь окон по четыре тысячи итераций с принудительной сборкой мусора между
+ * ними — это секунды. В умолчание Vitest замер укладывался случайно, а после
+ * обновления перестал и начал падать по таймауту, то есть отчитываться о
+ * времени прогона вместо аллокаций. Уменьшать окна нельзя: на коротких
+ * ступенька роста кучи снова становится шумом.
+ */
+const TIMEOUT = 60_000;
+
 const gc = globalThis.gc;
 
-function median(xs: readonly number[]): number {
-  return [...xs].sort((a, b) => a - b)[xs.length >> 1];
-}
-
-/** Байт на итерацию: медиана по окнам, каждое с чистой куче на старте. */
+/**
+ * Байт на итерацию: САМОЕ ЧИСТОЕ из окон, а не медиана по ним.
+ *
+ * Куча в процессе общая, и рядом работают соседние файлы набора: их прогрев,
+ * их скрытые классы, их отложенная компиляция — всё это растит `heapUsed`
+ * внутри нашего окна и приписывается измеряемому циклу. На разработческой
+ * машине это единицы байт, на общем раннере CI доходило до семисот — и тест
+ * падал не на аллокации, а на соседях.
+ *
+ * Минимум устойчив к такой помехе ровно потому, что помеха односторонняя:
+ * чужая работа может только ДОБАВИТЬ роста, убавить она его не может. У
+ * чистого цикла хотя бы одно окно из семи оказывается неиспорченным и даёт
+ * почти ноль; у цикла, который аллоцирует сам, грязны все окна без
+ * исключения, и минимум остаётся высоким. Проверку на заведомо аллоцирующем
+ * контроле ниже это подтверждает.
+ */
 function bytesPerIteration(fn: () => void): number {
   // Первое окно выбрасывается: в нём догреваются скрытые классы и
   // оптимизатор, и оно систематически дороже остальных.
-  const rounds: number[] = [];
+  let best = Infinity;
   for (let r = 0; r <= ROUNDS; r++) {
     // Дважды: первый проход освобождает, второй добирает то, что стало
     // недостижимым в первом.
@@ -79,54 +101,97 @@ function bytesPerIteration(fn: () => void): number {
     const before = process.memoryUsage().heapUsed;
     for (let i = 0; i < WINDOW; i++) fn();
     const growth = (process.memoryUsage().heapUsed - before) / WINDOW;
-    if (r > 0) rounds.push(growth);
+    if (r > 0 && growth < best) best = growth;
   }
-  return median(rounds);
+  return best;
 }
 
-/** Прогретое состояние: первые тики законно аллоцируют скрытые классы V8. */
+/**
+ * Прогрев: длинный намеренно.
+ *
+ * Пока V8 не оптимизировал функцию, КАЖДОЕ дробное промежуточное значение в
+ * ней живёт объектом в куче. Ядро считает дробями много — расстояния, доли,
+ * силы расталкивания, — и в неоптимизированном виде тик честно аллоцирует
+ * сотни байт, не имея в себе ни одного литерала. Порог такого не переживает.
+ *
+ * Двух тысяч тиков хватало на разработческой машине и не хватало на общем
+ * раннере CI: там тик показывал шестьсот байт против одного локально. Это не
+ * дефект ядра, а незавершённый прогрев — и лечится он прогревом, а не
+ * поблажкой в пороге.
+ */
+const WARMUP = 30_000;
+
 function warmRun(players = 4) {
   const s = createState(1, players);
   spawnPlayers(s);
   const bot = makeBot('random', 1, players);
-  for (let t = 0; t < 2000; t++) step(s, bot.inputs(s));
+  for (let t = 0; t < WARMUP; t++) step(s, bot.inputs(s));
   return { s, bot };
 }
 
-describe.skipIf(!gc)('аллокации', () => {
+describe('аллокации', () => {
+  /*
+   * Отсутствие `gc` — отказ настройки, а не повод пропустить проверку.
+   *
+   * Раньше здесь стоял `describe.skipIf(!gc)`, и это едва не обошлось дорого:
+   * Vitest 4 перенёс настройки пула на верхний уровень, `--expose-gc`
+   * перестал доезжать до воркера — и весь файл начал молча пропускаться.
+   * Набор остался зелёным, перестав проверять главное правило ядра. Падение
+   * с внятной причиной честнее зелени, которая ничего не значит.
+   */
+  it('замер вообще возможен: --expose-gc доехал до воркера', () => {
+    expect(gc, 'нет globalThis.gc — проверьте execArgv в vitest.config.ts').toBeTypeOf('function');
+  });
+
   // Контроль над контролем: если замер перестанет ловить объект в цикле, все
   // остальные проверки файла станут зелёными, ничего не проверяя.
-  it('замер видит аллокацию, если она есть', () => {
-    const sink: unknown[] = [];
-    const bytes = bytesPerIteration(() => {
-      sink.length = 0;
-      sink.push({ x: 1, y: 2 });
-    });
-    expect(bytes).toBeGreaterThan(MAX_BYTES_PER_ITERATION);
-  });
+  it(
+    'замер видит аллокацию, если она есть',
+    () => {
+      const sink: unknown[] = [];
+      const bytes = bytesPerIteration(() => {
+        sink.length = 0;
+        sink.push({ x: 1, y: 2 });
+      });
+      expect(bytes).toBeGreaterThan(MAX_BYTES_PER_ITERATION);
+    },
+    TIMEOUT,
+  );
 
-  it('тик боя не аллоцирует', () => {
-    const { s, bot } = warmRun();
-    expect(bytesPerIteration(() => step(s, bot.inputs(s)))).toBeLessThan(MAX_BYTES_PER_ITERATION);
-  });
+  it(
+    'тик боя не аллоцирует',
+    () => {
+      const { s, bot } = warmRun();
+      expect(bytesPerIteration(() => step(s, bot.inputs(s)))).toBeLessThan(MAX_BYTES_PER_ITERATION);
+    },
+    TIMEOUT,
+  );
 
-  it('хеш и снимок не аллоцируют', () => {
-    const { s } = warmRun();
-    const snap = createSnapshot(s);
-    for (let i = 0; i < 2000; i++) saveSnapshot(s, snap);
+  it(
+    'хеш и снимок не аллоцируют',
+    () => {
+      const { s } = warmRun();
+      const snap = createSnapshot(s);
+      for (let i = 0; i < 2000; i++) saveSnapshot(s, snap);
 
-    const bytes = bytesPerIteration(() => {
-      hashState(s);
-      saveSnapshot(s, snap);
-    });
-    expect(bytes).toBeLessThan(MAX_BYTES_PER_ITERATION);
-  });
+      const bytes = bytesPerIteration(() => {
+        hashState(s);
+        saveSnapshot(s, snap);
+      });
+      expect(bytes).toBeLessThan(MAX_BYTES_PER_ITERATION);
+    },
+    TIMEOUT,
+  );
 
   // Инварианты идут в dev-сборке по тику: замыкание внутри них стоило бы
   // столько же, сколько сама проверка.
-  it('проверка инвариантов не аллоцирует', () => {
-    const { s } = warmRun();
-    for (let i = 0; i < 2000; i++) checkInvariants(s);
-    expect(bytesPerIteration(() => checkInvariants(s))).toBeLessThan(MAX_BYTES_PER_ITERATION);
-  });
+  it(
+    'проверка инвариантов не аллоцирует',
+    () => {
+      const { s } = warmRun();
+      for (let i = 0; i < 2000; i++) checkInvariants(s);
+      expect(bytesPerIteration(() => checkInvariants(s))).toBeLessThan(MAX_BYTES_PER_ITERATION);
+    },
+    TIMEOUT,
+  );
 });
