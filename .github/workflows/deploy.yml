@@ -1,0 +1,51 @@
+name: Deploy
+
+# Две цели: прод и nightly. Разделены, потому что проверять сборку нужно
+# ровно так, как её увидит игрок, но не роняя при этом то, во что играют.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Что катим'
+        type: choice
+        options: [all, game, dev]
+        default: all
+      dry-run:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Nightly едет первым: он и существует ради того, чтобы поймать то, что
+  # не поймал CI, до того как это увидит игрок.
+  dev:
+    if: inputs.target == '' || inputs.target == 'all' || inputs.target == 'dev'
+    uses: tr0llex/deploy-kit/.github/workflows/static-site.yml@main
+    with:
+      config: .deploy-kit/dev.env
+      gates: npm ci && npm run check && npm test && npm run build && npm run check:no-debug-api
+      dry-run: ${{ inputs.dry-run == true }}
+    secrets: inherit
+
+  game:
+    needs: dev
+    # Обе цели используют один переиспользуемый workflow с общей очередью на
+    # репозиторий: запущенные параллельно, они вытесняют друг друга.
+    if: >-
+      !cancelled()
+      && (needs.dev.result == 'success' || needs.dev.result == 'skipped')
+      && (inputs.target == '' || inputs.target == 'all' || inputs.target == 'game')
+    uses: tr0llex/deploy-kit/.github/workflows/static-site.yml@main
+    with:
+      config: .deploy-kit/game.env
+      gates: npm ci && npm run check && npm test && npm run build && npm run check:no-debug-api
+      dry-run: ${{ inputs.dry-run == true }}
+    secrets: inherit

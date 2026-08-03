@@ -1,0 +1,150 @@
+name: CI
+
+on:
+  # Только pull_request: гейт — мерж, а мерж идёт через PR. Проверять нужно
+  # результат слияния с main, а не голую ветку, и делать это один раз, а не
+  # дважды на тот же коммит.
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Соглашение из CLAUDE.md, проверяемое машиной.
+  commits:
+    name: Коммиты без упоминаний ИИ
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Проверить сообщения
+        run: |
+          RANGE="origin/${{ github.base_ref }}..HEAD"
+          echo "проверяю $RANGE"
+
+          BAD=$(git log "$RANGE" --format='%H %B' \
+            | grep -iE '^Co-[Aa]uthored-[Bb]y:.*(claude|anthropic|copilot|gpt)|(generated|created|written) with .*(claude|copilot|chatgpt)|🤖' \
+            || true)
+
+          if [ -n "$BAD" ]; then
+            echo "::error::в сообщениях коммитов есть упоминания ИИ — авторство принадлежит владельцу репозитория (CLAUDE.md)"
+            echo "$BAD"
+            exit 1
+          fi
+          echo "чисто"
+
+  quality:
+    name: Линт, типы, границы
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      # Линтеры идут до сборки: падают за секунды, сборка дольше.
+      - name: Формат
+        run: npm run format:check
+
+      - name: Типы
+        run: npm run typecheck
+
+      # Ядро симуляции обязано оставаться чистым. Пропущенный Math.random
+      # внутрь ломает реплеи, дейли, античит и онлайн разом, причём молча.
+      - name: Границы модулей
+        run: npm run check:boundaries
+
+  # Детерминизм на трёх ОС — главный гейт этого проекта.
+  #
+  # Расхождение хешей между Windows, macOS и Linux означает, что игроки на
+  # разных платформах увидят разные миры, а golden-реплеи перестанут сходиться.
+  # Поймать это иначе невозможно: на одной машине всё работает всегда.
+  determinism:
+    name: Детерминизм (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Тесты
+        run: npm test
+
+      - name: Один сид — один хеш
+        run: npm run sim -- --determinism-check --seeds 100 --ticks 1800 --bot random
+
+      # Хеши уезжают артефактом: если платформы разойдутся, сравнивать нужно
+      # конкретные числа, а не пересказ.
+      - name: Снять эталонные хеши
+        run: npm run sim -- --runs 20 --bot random --ticks 1800 --json > hashes-${{ matrix.os }}.json
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hashes-${{ matrix.os }}
+          path: hashes-${{ matrix.os }}.json
+          retention-days: 7
+
+  # Сверка хешей между платформами. Тесты выше проверяют, что машина
+  # воспроизводит саму себя; здесь — что все три согласны друг с другом.
+  cross-platform:
+    name: Платформы согласны
+    needs: determinism
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: hashes-*
+          merge-multiple: false
+
+      - name: Сравнить
+        run: |
+          node -e "
+          const fs = require('fs');
+          const dirs = fs.readdirSync('.').filter(d => d.startsWith('hashes-'));
+          const runs = dirs.map(d => {
+            const f = fs.readdirSync(d)[0];
+            return { os: d, data: JSON.parse(fs.readFileSync(d + '/' + f, 'utf8')) };
+          });
+          const base = runs[0];
+          let bad = 0;
+          for (const r of runs.slice(1)) {
+            for (let i = 0; i < base.data.results.length; i++) {
+              const a = base.data.results[i], b = r.data.results[i];
+              if (a.hash !== b.hash) {
+                console.error('расхождение сид ' + a.seed + ': ' + base.os + '=' + a.hash + ' ' + r.os + '=' + b.hash);
+                bad++;
+              }
+            }
+          }
+          if (bad) { console.error('::error::детерминизм сломан между платформами'); process.exit(1); }
+          console.log('все платформы согласны: ' + base.data.results.length + ' сидов');
+          "
+
+  build:
+    name: Сборка
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+      # Отладочный интерфейс даёт полный контроль над симуляцией — в релизе
+      # это чит, а не удобство. Проверка функциональная, а не поиск строки.
+      - name: В релизе нет отладочного интерфейса
+        run: npm run check:no-debug-api

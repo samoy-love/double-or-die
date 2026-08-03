@@ -1,0 +1,100 @@
+/**
+ * Сидованный генератор псевдослучайных чисел xoshiro128**.
+ *
+ * `Math.random()` в симуляции запрещён: он не воспроизводится, а вместе с ним
+ * рассыпаются реплеи, дейли, античит и golden-тесты.
+ *
+ * Потоков шесть, и они независимы намеренно. С общим генератором правка любой
+ * системы сдвигает последовательность у всех остальных: добавили врагу одно
+ * обращение к случайности — и раскладка карт в том же сиде стала другой,
+ * а дейли перестал воспроизводиться между версиями.
+ */
+
+export const enum Stream {
+  /** Расстановка колонн и выбор шаблона арены. */
+  Layout = 0,
+  /** Состав волн. */
+  Waves = 1,
+  /** Какие пари попадают в раскладку. */
+  Bets = 2,
+  /** Позиции карт на арене и подбросы Туза. */
+  Cards = 3,
+  /** Дроп фишек. */
+  Loot = 4,
+  /** Ассортимент магазина. */
+  Shop = 5,
+}
+
+export const STREAM_COUNT = 6;
+
+/** Состояние одного потока: четыре 32-битных слова. */
+export type RngState = Int32Array;
+
+export function createStreams(seed: number): RngState {
+  // 4 слова на поток, все потоки в одном массиве — так состояние целиком
+  // копируется одним `set()` при снимке.
+  const s = new Int32Array(STREAM_COUNT * 4);
+  for (let i = 0; i < STREAM_COUNT; i++) {
+    // splitmix64-подобная развёртка сида: разные потоки от одного сида
+    // должны стартовать из непохожих состояний, иначе они пойдут в ногу.
+    let z = (seed + Math.imul(i + 1, 0x9e3779b9)) | 0;
+    for (let w = 0; w < 4; w++) {
+      z = (z + 0x9e3779b9) | 0;
+      let x = z;
+      x = Math.imul(x ^ (x >>> 16), 0x21f0aaad);
+      x = Math.imul(x ^ (x >>> 15), 0x735a2d97);
+      x = x ^ (x >>> 15);
+      // Ноль во всех словах — вырожденное состояние xoshiro.
+      s[i * 4 + w] = x === 0 ? 0x1a2b3c4d : x;
+    }
+  }
+  return s;
+}
+
+const rotl = (x: number, k: number): number => (x << k) | (x >>> (32 - k)) | 0;
+
+/** Следующее 32-битное знаковое из потока. */
+export function next(s: RngState, stream: Stream): number {
+  const o = stream * 4;
+  const s0 = s[o];
+  let s1 = s[o + 1];
+  const s2 = s[o + 2];
+  const s3 = s[o + 3];
+
+  const result = Math.imul(rotl(Math.imul(s1, 5), 7), 9);
+
+  const t = (s1 << 9) | 0;
+  s[o + 2] = s2 ^ s0;
+  s[o + 3] = s3 ^ s1;
+  s[o + 1] = s1 ^ s[o + 2];
+  s[o] = s0 ^ s[o + 3];
+  s[o + 2] = s[o + 2] ^ t;
+  s[o + 3] = rotl(s[o + 3], 11);
+
+  s1 = s[o + 1];
+  return result | 0;
+}
+
+/** Целое в диапазоне [0, bound). Отсечение смещения — чтобы распределение было ровным. */
+export function nextInt(s: RngState, stream: Stream, bound: number): number {
+  if (bound <= 1) return 0;
+  // Берём беззнаковое и отбрасываем хвост, который не делится на bound нацело:
+  // иначе младшие значения выпадают чаще, и это видно на бюджетах волн.
+  const limit = (0x100000000 - (0x100000000 % bound)) >>> 0;
+  let v: number;
+  do {
+    v = next(s, stream) >>> 0;
+  } while (v >= limit);
+  return v % bound;
+}
+
+/** Целое в диапазоне [lo, hi] включительно. */
+export const nextRange = (s: RngState, stream: Stream, lo: number, hi: number): number =>
+  lo + nextInt(s, stream, hi - lo + 1);
+
+/** Дробь [0, 1) в Q16.16. */
+export const nextFx = (s: RngState, stream: Stream): number => (next(s, stream) >>> 16) & 0xffff;
+
+/** Случайный выбор элемента массива. */
+export const pick = <T>(s: RngState, stream: Stream, arr: readonly T[]): T =>
+  arr[nextInt(s, stream, arr.length)];
