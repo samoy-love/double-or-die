@@ -1,0 +1,59 @@
+name: Покрытие main
+
+# ЗАЧЕМ ОТДЕЛЬНЫЙ ВОРКФЛОУ, А НЕ ШАГ В ci.yml.
+#
+# Codecov привязывает отчёт к КОММИТУ, а бейдж и «project»-статус считает по
+# ветке по умолчанию. Отчёты из ci.yml приходят на коммиты веток PR — для main
+# они не приезжают никогда, потому что ci.yml намеренно ходит только по
+# pull_request. Без этого файла цифра main не обновлялась бы вовсе, а бейдж
+# показывал бы прогон недельной давности — то самое «украшение, которое врёт».
+#
+# Возвращать `push: branches: [main]` в ci.yml дороже: там ещё линтеры, сборка,
+# проверки детерминизма и кроссплатформенности — всё это уже отработало на PR
+# и на том же дереве. Здесь только то, что даёт цифру.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Мержи иногда идут подряд; предыдущий счёт не нужен, важен последний main.
+concurrency:
+  group: coverage-main
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    name: Покрытие main в Codecov
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Ровно та же команда, что и на PR: цифры обязаны считаться одинаково,
+      # иначе сравнение «PR против main» перестаёт что-либо значить.
+      - name: Test
+        run: npm run test:coverage
+
+      - name: Отправить покрытие в Codecov
+        # Приколот к SHA, а не к тегу: тег мутабелен, и у Codecov уже был
+        # прецедент компрометации релиза.
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: ./coverage/lcov.info
+          flags: unit
+          # Репозиторий ЗАКРЫТЫЙ, поэтому токен обязателен: бестокенная
+          # загрузка работает только у публичных, и без секрета шаг упадёт.
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # Здесь строго: молча не отправленный отчёт означает застывший бейдж,
+          # а это ровно та поломка, ради которой файл и заведён.
+          fail_ci_if_error: true
