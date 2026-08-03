@@ -1,0 +1,47 @@
+#!/bin/sh
+# Не пускать прямой пуш в main.
+#
+# Правило записано в CLAUDE.md: работа идёт в ветке, main защищён, мерж — после
+# зелёного CI. Обычно это держит сам GitHub, но здесь не может: защита ветки и
+# rulesets для ПРИВАТНОГО репозитория требуют GitHub Pro, а видимость менять
+# нельзя — исходники детерминированной симуляции это и античит-модель, и полная
+# карта баланса (TECH §12А).
+#
+# Поэтому единственная преграда — здесь. Цена ошибки высокая и несимметричная:
+# каждый коммит в main уезжает на прод, то есть случайный пуш выкатывает
+# непроверенный код игрокам, а откат — это отдельная процедура на сервере.
+#
+# Включается один раз на репозиторий, вместе с остальными хуками:
+#
+#     git config core.hooksPath .githooks
+#
+# Обойти осознанно: git push --no-verify. Нормальный путь ровно один — чинить
+# сломанный main, когда PR завести уже нечем.
+
+remote_ref_prefix='refs/heads/'
+protected='main'
+
+# stdin даёт по строке на каждую пушимую ссылку:
+#   <local ref> <local sha> <remote ref> <remote sha>
+while read -r _local_ref local_sha remote_ref _remote_sha; do
+    # Удаление ветки: local_sha из нулей. Удалять main тем более незачем.
+    branch="${remote_ref#$remote_ref_prefix}"
+    [ "$branch" = "$protected" ] || continue
+
+    echo "✗ Прямой пуш в $protected запрещён." >&2
+    echo >&2
+    echo "  Каждый коммит в $protected уезжает на прод. Заведите ветку и PR:" >&2
+    echo >&2
+    echo "      git switch -c feat/название" >&2
+    echo "      git push -u origin feat/название" >&2
+    echo "      gh pr create" >&2
+    echo >&2
+    echo "  Осознанно обойти: git push --no-verify" >&2
+
+    # local_sha упомянут, чтобы shellcheck не считал переменную лишней и
+    # чтобы было видно, что формат строки разобран целиком.
+    [ -n "$local_sha" ] || true
+    exit 1
+done
+
+exit 0
