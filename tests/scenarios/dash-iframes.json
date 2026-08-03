@@ -1,0 +1,17 @@
+{
+  "name": "рывок проносит сквозь таран Клина без потери сердца",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "place": { "player": 0, "x": 960, "y": 540 } },
+    { "spawn": { "type": "клин", "x": 1260, "y": 540 } },
+    { "tick": 12 },
+    { "expect": { "enemy": { "phase": "telegraph" } } },
+    { "input": { "player": 0, "aim": [1, 0], "buttons": ["dash"] } },
+    { "tick": 1 },
+    { "expect": { "invulnerable": true } },
+    { "clearInput": { "player": 0 } },
+    { "tick": 12 },
+    { "expect": { "hearts": { "min": 3 } } }
+  ]
+}

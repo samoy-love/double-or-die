@@ -5,64 +5,27 @@
  * выход на любой платформе. Ни `window`, ни `Date.now()`, ни `Math.random()`
  * здесь быть не может — это ловит линтер, а не совесть.
  *
- * В 0.1.0 из геймплея есть только движение игрока: версия существует ради
- * фундамента, а не ради боя. Бой приезжает в 0.2.0.
+ * Версия 0.2.0 «Тир» — это бой и ничего кроме боя: игрок, три врага, волны,
+ * фишки. Пари приезжают в 0.3.0 и лягут поверх, ничего здесь не переписывая:
+ * карта пари — это ещё одна сущность на арене, а не другой бой.
  */
 
-import { add, clamp, fromFloat, fromInt, mul, sub } from './fixed';
-import { normalize, normX, normY } from './trig';
+import { clampX, clampY, pushOutOfColumns, pushedX, pushedY } from './arena';
+import { PISTOL, PLAYER } from './config';
+import { fire, stepBullets, stepChips } from './combat';
+import { clearArena, startRoom, stepEnemies } from './enemies';
+import { add, FX_ONE, fromInt, mul, sub } from './fixed';
+import { normalize, normX, normY, within } from './trig';
 import { type InputFrame, Btn, isDown } from './input';
-import { ARENA_H, ARENA_W, EntityFlag, type SimState, TICK_HZ } from './state';
+import { EntityFlag, Meta, type SimState } from './state';
 
-/** Параметры игрока из GDD §6. Держим в тиках и Q16.16, а не в секундах. */
-export const PLAYER = {
-  radius: fromInt(18),
-  /** 320 u/с → за тик. */
-  speed: fromFloat(320 / TICK_HZ),
-  /** 2400 u/с² → за тик. */
-  accel: fromFloat(2400 / (TICK_HZ * TICK_HZ)),
-  /** Трение 12/с как доля скорости, снимаемая за тик. */
-  friction: fromFloat(12 / TICK_HZ),
-  dashDistance: fromInt(240),
-  /** 0.16 с */
-  dashTicks: Math.round(0.16 * TICK_HZ),
-  /** 1.2 с */
-  dashCooldownTicks: Math.round(1.2 * TICK_HZ),
-  /**
-   * Coyote-время рывка: неуязвимость держится столько тиков ПОСЛЕ того, как
-   * движение рывка кончилось.
-   *
-   * Ради этого хвоста рывок и ощущается спасением: игрок жмёт кнопку в
-   * последний момент, видит, что уже не успевает, — и всё равно проходит
-   * сквозь снаряд. Без хвоста рывок «впритык» карает за смелость, а это
-   * ровно та эмоция, которой в игре про ставки на себя быть не должно.
-   *
-   * Число задано здесь и складывается с длительностью рывка ниже, а не
-   * записано отдельной секундой: раньше неуязвимость была независимыми
-   * 0.22 с, и хвост получался побочным следствием двух чисел — три тика
-   * вместо задуманных четырёх. Правка любого из них молча меняла ощущение.
-   */
-  dashCoyoteTicks: 4,
-  startHearts: 3,
-} as const;
+/** Пауза перед перезапуском забега: игроку нужно увидеть, что он умер. */
+const RESTART_DELAY_TICKS = 180;
 
-/**
- * Сколько тиков держится неуязвимость рывка целиком: само движение плюс
- * coyote-хвост. Производная, а не третье независимое число — иначе хвост
- * снова начнёт получаться случайно.
- */
-export const DASH_INVUL_TICKS = PLAYER.dashTicks + PLAYER.dashCoyoteTicks;
-
-const ARENA_PAD = fromInt(60);
-const MIN_X = ARENA_PAD;
-const MIN_Y = ARENA_PAD;
-const MAX_X = sub(ARENA_W, ARENA_PAD);
-const MAX_Y = sub(ARENA_H, ARENA_PAD);
-
-/** Поставить игроков в стартовые позиции. */
+/** Поставить игроков в стартовые позиции и начать первую комнату. */
 export function spawnPlayers(s: SimState): void {
-  const cx = ARENA_W >> 1;
-  const cy = ARENA_H >> 1;
+  const cx = s.arenaW >> 1;
+  const cy = s.arenaH >> 1;
   const spread = fromInt(120);
 
   for (let i = 0; i < s.playerCount; i++) {
@@ -73,16 +36,23 @@ export function spawnPlayers(s: SimState): void {
     s.pY[i] = s.playerCount === 1 ? cy : add(cy, offY);
     s.pVX[i] = 0;
     s.pVY[i] = 0;
-    s.pAimX[i] = fromInt(1);
+    s.pAimX[i] = FX_ONE;
     s.pAimY[i] = 0;
     s.pHearts[i] = PLAYER.startHearts;
     s.pFlags[i] = EntityFlag.Alive;
     s.pInvulUntil[i] = 0;
     s.pDashReady[i] = 0;
     s.pDashUntil[i] = 0;
-    s.pLastShot[i] = -9999;
+    s.pRagdollUntil[i] = 0;
+    s.pShotAcc[i] = 0;
     s.pChips[i] = 0;
   }
+
+  s.meta[Meta.SeenTypes] = 0;
+  s.meta[Meta.Kills] = 0;
+  s.meta[Meta.RestartAt] = 0;
+  clearArena(s);
+  startRoom(s, 1);
 }
 
 /**
@@ -90,10 +60,43 @@ export function spawnPlayers(s: SimState): void {
  *
  * Порядок обработки фиксирован и важен: он часть контракта детерминизма.
  * Менять его — ломать все golden-реплеи.
+ *
+ * Сначала игроки, потом враги, потом снаряды: так выстрел, сделанный в этом
+ * тике, ещё не успевает попасть, а враг, начавший рывок, летит с того места,
+ * где игрок его видел. Обратный порядок дал бы попадания «до нажатия».
  */
 export function step(s: SimState, inputs: readonly InputFrame[]): void {
   stepPlayers(s, inputs);
+  stepEnemies(s);
+  stepBullets(s);
+  stepChips(s);
+  stepRunEnd(s);
   s.tick++;
+}
+
+/**
+ * Гибель всех игроков и перезапуск.
+ *
+ * Живёт в симуляции, а не в клиенте: реплей обязан переигрываться целиком,
+ * включая то, что было после смерти. Последняя сделка (GDD §12А.3) заменит
+ * этот перезапуск в 0.6.0 — до неё смерть означает «сначала».
+ */
+function stepRunEnd(s: SimState): void {
+  if (s.meta[Meta.RestartAt] !== 0) {
+    if (s.tick < s.meta[Meta.RestartAt]) return;
+    // tick++ произойдёт после нас, поэтому старт комнаты считается от
+    // следующего тика — иначе пауза перед первой волной короче на кадр.
+    s.tick++;
+    spawnPlayers(s);
+    s.tick--;
+    s.meta[Meta.Deaths]++;
+    return;
+  }
+
+  for (let i = 0; i < s.playerCount; i++) {
+    if ((s.pFlags[i] & EntityFlag.Alive) !== 0) return;
+  }
+  s.meta[Meta.RestartAt] = s.tick + RESTART_DELAY_TICKS;
 }
 
 function stepPlayers(s: SimState, inputs: readonly InputFrame[]): void {
@@ -102,6 +105,7 @@ function stepPlayers(s: SimState, inputs: readonly InputFrame[]): void {
 
     const inp = inputs[i];
     const dashing = s.tick < s.pDashUntil[i];
+    const ragdoll = s.tick < s.pRagdollUntil[i];
 
     if (inp.aimX !== 0 || inp.aimY !== 0) {
       normalize(inp.aimX, inp.aimY);
@@ -109,7 +113,13 @@ function stepPlayers(s: SimState, inputs: readonly InputFrame[]): void {
       s.pAimY[i] = normY;
     }
 
-    if (dashing) {
+    if (ragdoll) {
+      // Кувырок: управление отнято, скорость гасится своим трением.
+      // Унижение вместо наказания — механика Fall Guys (GDD §6).
+      s.pVX[i] = sub(s.pVX[i], mul(s.pVX[i], PLAYER.ragdollFriction));
+      s.pVY[i] = sub(s.pVY[i], mul(s.pVY[i], PLAYER.ragdollFriction));
+      applyVelocity(s, i);
+    } else if (dashing) {
       // Во время рывка направление зафиксировано — скорость уже задана.
       applyVelocity(s, i);
     } else if (tryDash(s, i, inp)) {
@@ -121,8 +131,38 @@ function stepPlayers(s: SimState, inputs: readonly InputFrame[]): void {
       applyMovement(s, i, inp);
     }
 
+    if (s.tick >= s.pRagdollUntil[i]) s.pFlags[i] &= ~EntityFlag.Ragdoll;
+    stepShooting(s, i, inp, ragdoll);
     updateInvulnerability(s, i);
   }
+
+  separatePlayers(s);
+}
+
+/**
+ * Стрельба: темп 6.5/с накапливается дробно.
+ *
+ * Заряд копится только при зажатом курке: минута ходьбы без стрельбы не
+ * должна превращаться в мгновенный залп, а «не больше 20 выстрелов» — в
+ * бессмысленное пари. Отпущенный курок обнуляет накопленное, и этого
+ * достаточно — потолка сверху не нужно.
+ *
+ * Остаток после выстрела ПЕРЕНОСИТСЯ в следующий тик, и это не мелочь.
+ * Первая версия обрезала заряд по единице перед вычитанием, теряя дробную
+ * часть: 65536 делится на такт 7101 с остатком, и за десять секунд выходило
+ * шестьдесят выстрелов вместо шестидесяти пяти. Темп стрельбы — опорное
+ * число всей модели сложности (DIFFICULTY §1), и потеря семи процентов
+ * тихо смещает время убийства каждого врага в игре.
+ */
+function stepShooting(s: SimState, i: number, inp: InputFrame, ragdoll: boolean): void {
+  if (ragdoll || !isDown(inp, Btn.Fire)) {
+    s.pShotAcc[i] = 0;
+    return;
+  }
+  s.pShotAcc[i] += PISTOL.fireRate;
+  if (s.pShotAcc[i] < FX_ONE) return;
+  s.pShotAcc[i] -= FX_ONE;
+  fire(s, i);
 }
 
 /** Возвращает true, если рывок начался в этом тике. */
@@ -148,7 +188,7 @@ function tryDash(s: SimState, i: number, inp: InputFrame): boolean {
   s.pVY[i] = mul(ny, perTick);
   s.pDashUntil[i] = s.tick + PLAYER.dashTicks;
   s.pDashReady[i] = s.tick + PLAYER.dashCooldownTicks;
-  s.pInvulUntil[i] = Math.max(s.pInvulUntil[i], s.tick + DASH_INVUL_TICKS);
+  s.pInvulUntil[i] = Math.max(s.pInvulUntil[i], s.tick + PLAYER.dashTicks + PLAYER.dashCoyoteTicks);
   s.pFlags[i] |= EntityFlag.Invulnerable;
   return true;
 }
@@ -183,8 +223,38 @@ function applyMovement(s: SimState, i: number, inp: InputFrame): void {
 }
 
 function applyVelocity(s: SimState, i: number): void {
-  s.pX[i] = clamp(add(s.pX[i], s.pVX[i]), MIN_X, MAX_X);
-  s.pY[i] = clamp(add(s.pY[i], s.pVY[i]), MIN_Y, MAX_Y);
+  pushOutOfColumns(s, add(s.pX[i], s.pVX[i]), add(s.pY[i], s.pVY[i]), PLAYER.radius);
+  s.pX[i] = pushedX;
+  s.pY[i] = pushedY;
+}
+
+/**
+ * Игроки толкаются, но не проходят друг сквозь друга (GDD §14).
+ *
+ * Толкание — не мелочь удобства: на нём стоит саботаж в коопе, и оно должно
+ * работать одинаково у всех, то есть жить в симуляции.
+ */
+function separatePlayers(s: SimState): void {
+  if (s.playerCount < 2) return;
+  const minDist = add(PLAYER.radius, PLAYER.radius);
+
+  for (let i = 0; i < s.playerCount; i++) {
+    if ((s.pFlags[i] & EntityFlag.Alive) === 0) continue;
+    for (let j = i + 1; j < s.playerCount; j++) {
+      if ((s.pFlags[j] & EntityFlag.Alive) === 0) continue;
+      const dx = sub(s.pX[i], s.pX[j]);
+      const dy = sub(s.pY[i], s.pY[j]);
+      if (!within(dx, dy, minDist)) continue;
+      normalize(dx, dy);
+      if (normX === 0 && normY === 0) continue;
+      const px = mul(normX, PLAYER.pushSpeed);
+      const py = mul(normY, PLAYER.pushSpeed);
+      s.pX[i] = clampX(s, add(s.pX[i], px), PLAYER.radius);
+      s.pY[i] = clampY(s, add(s.pY[i], py), PLAYER.radius);
+      s.pX[j] = clampX(s, sub(s.pX[j], px), PLAYER.radius);
+      s.pY[j] = clampY(s, sub(s.pY[j], py), PLAYER.radius);
+    }
+  }
 }
 
 function updateInvulnerability(s: SimState, i: number): void {

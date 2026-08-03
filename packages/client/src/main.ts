@@ -34,7 +34,10 @@ async function main(): Promise<void> {
 
   const loop = new GameLoop(canvas, { seed, players, autopause });
   const overlay = new Overlay(loop, IS_DEV || debugOverlay);
-  if (stable) document.documentElement.dataset.stable = '1';
+  if (stable) {
+    loop.feel.stable = true;
+    document.documentElement.dataset.stable = '1';
+  }
 
   /*
    * Отладочный интерфейс подключается ТОЛЬКО в dev-сборке и только

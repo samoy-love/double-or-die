@@ -8,18 +8,29 @@
 
 import {
   checkInvariants,
+  clearArena,
   createState,
+  type EnemyType,
+  fromFloat,
   hashHex,
   type InputFrame,
+  setSpawning,
   type SimState,
+  spawnEnemy,
   spawnPlayers,
   step,
   TICK_HZ,
+  toFloat,
 } from '../../sim/src/index';
 import { ReplayRecorder } from '../../sim/src/replay';
+import { Audio } from './audio';
 import { EventLog } from './events';
+import { Feedback } from './feedback';
+import { Feel } from './feel';
 import { InputSource } from './input';
 import { logInvariant } from './protocol';
+import { PALETTE } from './palette';
+import { ParticleShape, Particles } from './particles';
 import { Renderer } from './renderer';
 import { BUILD, IS_DEV } from './version';
 
@@ -37,6 +48,10 @@ export class GameLoop {
   state: SimState;
   private readonly renderer: Renderer;
   private readonly input: InputSource;
+  readonly feel = new Feel();
+  readonly particles = new Particles();
+  readonly audio = new Audio();
+  private readonly feedback: Feedback;
   private recorder: ReplayRecorder;
   readonly events = new EventLog();
   private acc = 0;
@@ -58,6 +73,11 @@ export class GameLoop {
     this.paused = opts.autopause;
     this.recorder = this.makeRecorder();
     this.events.reset(this.state);
+    this.feedback = new Feedback(this.particles, this.feel, this.audio);
+    this.feedback.reset(this.state);
+    // Звук включается по первому вводу: до жеста браузер его не разрешает,
+    // и попытка запуститься на загрузке даёт навсегда молчащую вкладку.
+    this.input.onFirstInput(() => this.audio.unlock());
   }
 
   private makeRecorder(): ReplayRecorder {
@@ -115,6 +135,7 @@ export class GameLoop {
     spawnPlayers(this.state);
     this.recorder = this.makeRecorder();
     this.events.reset(this.state);
+    this.feedback.reset(this.state);
     this.acc = 0;
     this.last = performance.now();
   }
@@ -133,17 +154,31 @@ export class GameLoop {
       this.fpsFrames = 0;
     }
 
+    /*
+     * Хитстоп останавливает ЧАСЫ, а не симуляцию.
+     *
+     * Тик остаётся ровно 1/60 секунды, их просто становится меньше — поэтому
+     * удар «залипает» на экране, а детерминизм не страдает. Замедлять сам
+     * тик нельзя: реплей, записанный с чужими хитстопами, не сойдётся
+     * (TECH §7.1А).
+     */
+    const simDt = this.feel.advance(dt / 1000);
+
     // В паузе кадр только рисует: шаги делает advance(), синхронно.
     if (!this.paused) {
-      this.acc += dt;
+      this.acc += simDt * 1000;
       while (this.acc >= MS_PER_TICK) {
         this.tickOnce();
         this.acc -= MS_PER_TICK;
       }
     }
+    // Частицы и вспышки идут по тем же часам, что и симуляция: иначе взрыв
+    // догорает, пока картинка стоит, и хитстоп теряет весь смысл.
+    this.particles.update(simDt);
+    this.feedback.frame(simDt);
 
     const alpha = this.paused ? 1 : this.acc / MS_PER_TICK;
-    this.renderer.draw(this.state, alpha);
+    this.renderer.draw(this.state, alpha, this.feel, this.particles, this.feedback);
 
     this.frameId = requestAnimationFrame(this.frame);
   };
@@ -188,6 +223,7 @@ export class GameLoop {
     this.recorder.record(inputs);
     step(this.state, inputs);
     this.events.observe(this.state);
+    this.feedback.observe(this.state);
 
     // Инвариант нарушен — это дефект ядра, а не ситуация. Цикл при этом
     // останавливается, но НЕ падает исключением наружу: упавший rAF уносит с
@@ -210,6 +246,64 @@ export class GameLoop {
 
   hash(): string {
     return hashHex(this.state);
+  }
+
+  /**
+   * Нагрузить сцену: враги и частицы разом.
+   *
+   * Ровно та проверка, которую требует план версии, — «2000 частиц и 200
+   * болванок в бюджете кадра». Мерить её на живом бою бессмысленно: худшая
+   * волна случается редко и не по команде, а бюджет обязан держаться именно
+   * в ней.
+   */
+  stress(enemies: number, particles: number): void {
+    const s = this.state;
+    setSpawning(s, false);
+    clearArena(s);
+    const w = toFloat(s.arenaW);
+    const h = toFloat(s.arenaH);
+    for (let i = 0; i < enemies; i++) {
+      const a = (i / enemies) * Math.PI * 2 * 7;
+      const r = 120 + (i / enemies) * (Math.min(w, h) / 2 - 160);
+      spawnEnemy(
+        s,
+        (i % 3) as EnemyType,
+        fromFloat(w / 2 + Math.cos(a) * r),
+        fromFloat(h / 2 + Math.sin(a) * r),
+      );
+    }
+    for (let i = 0; i < particles; i++) {
+      const a = (i / particles) * Math.PI * 2 * 13;
+      this.particles.spawn(
+        (i % 3) as ParticleShape,
+        w / 2 + Math.cos(a) * (i % 700),
+        h / 2 + Math.sin(a) * (i % 400),
+        Math.cos(a) * 60,
+        Math.sin(a) * 60,
+        8,
+        // Долгая жизнь: частицы должны дожить до замера, а не погаснуть в нём.
+        60,
+        PALETTE.chip,
+      );
+    }
+  }
+
+  /**
+   * Нарисовать кадр прямо сейчас, синхронно.
+   *
+   * Нужно и агенту, и визуальным тестам: в свёрнутой или невидимой вкладке
+   * браузер не вызывает requestAnimationFrame вовсе, и кадра просто не
+   * существует — а проверять надо именно картинку. Заодно это единственный
+   * способ снять воспроизводимый кадр: он рисуется по команде, а не когда
+   * планировщик решит.
+   */
+  renderOnce(): void {
+    this.renderer.draw(this.state, 1, this.feel, this.particles, this.feedback);
+  }
+
+  /** Сколько фигур ушло в последний кадр: главный показатель бюджета рендера. */
+  get shapeCount(): number {
+    return this.renderer.lastShapeCount;
   }
 }
 

@@ -1,0 +1,14 @@
+{
+  "name": "Кирпич держит дистанцию и простреливает её",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "place": { "player": 0, "x": 960, "y": 540 } },
+    { "spawn": { "type": "кирпич", "x": 1800, "y": 540 } },
+    { "tick": 120 },
+    { "expect": { "enemy": { "x": { "min": 1160, "max": 1560 } } } },
+    { "expect": { "bullets": { "min": 1 } } },
+    { "tick": 60 },
+    { "expect": { "hearts": { "max": 2 } } }
+  ]
+}

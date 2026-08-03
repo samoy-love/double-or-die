@@ -13,16 +13,43 @@
 import {
   Btn,
   createState,
+  EnemyPhase,
+  EnemyType,
   EntityFlag,
+  MAX_CHIPS,
+  MAX_ENEMIES,
+  MAX_BULLETS,
+  Meta,
+  clearArena,
   fromFloat,
   hashHex,
   type InputFrame,
   makeFrame,
+  setSpawning,
   type SimState,
+  spawnEnemy,
   spawnPlayers,
   step,
   toFloat,
 } from '../../sim/src/index';
+
+/** Враги по именам: номер типа в сценарии читается не лучше маски кнопок. */
+const ENEMY_TYPES: Record<string, EnemyType> = {
+  wedge: EnemyType.Wedge,
+  brick: EnemyType.Brick,
+  fuse: EnemyType.Fuse,
+  клин: EnemyType.Wedge,
+  кирпич: EnemyType.Brick,
+  фитиль: EnemyType.Fuse,
+};
+
+/** Фазы автомата по именам — сценарий читается как протокол, а не как код. */
+const PHASES: Record<string, EnemyPhase> = {
+  idle: EnemyPhase.Idle,
+  telegraph: EnemyPhase.Telegraph,
+  attack: EnemyPhase.Attack,
+  recover: EnemyPhase.Recover,
+};
 
 /** Кнопки по именам: маска в сценарии нечитаема и потому запрещена. */
 const BUTTONS: Record<string, Btn> = {
@@ -45,6 +72,23 @@ export interface Range {
 
 export interface Expectation {
   player?: number;
+  /** Сколько врагов на арене. */
+  enemies?: Range;
+  /** Сколько снарядов в воздухе. */
+  bullets?: Range;
+  /** Сколько фишек лежит на полу. */
+  chipsOnFloor?: Range;
+  /** Убито врагов за забег. */
+  kills?: Range;
+  /** Состояние конкретного врага по порядковому номеру среди живых. */
+  enemy?: {
+    index?: number;
+    hp?: Range;
+    x?: Range;
+    y?: Range;
+    /** Имя фазы автомата: idle / telegraph / attack / recover. */
+    phase?: string;
+  };
   x?: Range;
   y?: Range;
   /** Пройденное расстояние от точки появления. */
@@ -68,12 +112,27 @@ export type Step =
     }
   | { clearInput: { player?: number } }
   | { tick: number }
+  /** Поставить игрока в точку — чтобы не описывать дорогу до неё вводом. */
+  | { place: { player?: number; x: number; y: number } }
+  /** Поставить врага. Имя типа, а не номер: номер в протоколе нечитаем. */
+  | { spawn: { type: string; x: number; y: number; count?: number } }
+  /** Убрать с арены всё, кроме игроков. */
+  | { clear: true }
   | { expect: Expectation };
 
 export interface Scenario {
   name: string;
   seed?: number;
   players?: number;
+  /**
+   * Пополнять ли арену волнами. По умолчанию НЕТ.
+   *
+   * Сценарий проверяет одно названное поведение, и набежавшая волна делает его
+   * проверкой чего-то другого: «рывок покрывает втрое больше ходьбы» перестаёт
+   * быть про рывок, стоит на пути оказаться Клину. Кому нужны волны — тот
+   * просит их явно.
+   */
+  waves?: boolean;
   steps: Step[];
 }
 
@@ -106,12 +165,59 @@ function checkRange(label: string, value: number, r: Range): string | null {
 
 const round = (n: number): number => Math.round(n * 1000) / 1000;
 
+const countActive = (flags: Uint8Array, limit: number): number => {
+  let n = 0;
+  for (let i = 0; i < limit; i++) if (flags[i]) n++;
+  return n;
+};
+
+/** Индекс n-го живого врага: сценарий считает врагов, а не ячейки пула. */
+function nthEnemy(s: SimState, n: number): number {
+  let seen = 0;
+  for (let i = 0; i < MAX_ENEMIES; i++) {
+    if (!s.eActive[i]) continue;
+    if (seen === n) return i;
+    seen++;
+  }
+  return -1;
+}
+
+function checkEnemy(s: SimState, e: NonNullable<Expectation['enemy']>): string[] {
+  const out: string[] = [];
+  const n = e.index ?? 0;
+  const i = nthEnemy(s, n);
+  if (i < 0) return [`врага ${n} нет: на арене ${countActive(s.eActive, MAX_ENEMIES)}`];
+
+  if (e.hp) push(out, checkRange(`здоровье врага ${n}`, s.eHP[i], e.hp));
+  if (e.x) push(out, checkRange(`x врага ${n}`, toFloat(s.eX[i]), e.x));
+  if (e.y) push(out, checkRange(`y врага ${n}`, toFloat(s.eY[i]), e.y));
+  if (e.phase !== undefined) {
+    const want = PHASES[e.phase.toLowerCase()];
+    if (want === undefined) throw new Error(`неизвестная фаза «${e.phase}»`);
+    if (s.ePhase[i] !== want) {
+      const actual = Object.keys(PHASES).find((k) => PHASES[k] === s.ePhase[i]) ?? s.ePhase[i];
+      out.push(`фаза врага ${n} = ${String(actual)}, ожидалась ${e.phase}`);
+    }
+  }
+  return out;
+}
+
 function checkExpectation(
   s: SimState,
   e: Expectation,
   spawn: readonly { x: number; y: number }[],
 ): string[] {
   const out: string[] = [];
+
+  if (e.enemies)
+    push(out, checkRange('врагов на арене', countActive(s.eActive, MAX_ENEMIES), e.enemies));
+  if (e.bullets) push(out, checkRange('снарядов', countActive(s.bActive, MAX_BULLETS), e.bullets));
+  if (e.chipsOnFloor) {
+    push(out, checkRange('фишек на полу', countActive(s.cActive, MAX_CHIPS), e.chipsOnFloor));
+  }
+  if (e.kills) push(out, checkRange('убито врагов', s.meta[Meta.Kills], e.kills));
+  if (e.enemy) out.push(...checkEnemy(s, e.enemy));
+
   const i = e.player ?? 0;
   if (i >= s.playerCount) return [`игрока ${i} нет: в забеге ${s.playerCount}`];
 
@@ -157,6 +263,7 @@ const push = (out: string[], msg: string | null): void => {
 export function runScenario(sc: Scenario): ScenarioResult {
   const s = createState(sc.seed ?? 1, sc.players ?? 1);
   spawnPlayers(s);
+  setSpawning(s, sc.waves === true);
 
   const spawn = Array.from({ length: s.playerCount }, (_, i) => ({
     x: toFloat(s.pX[i]),
@@ -185,6 +292,20 @@ export function runScenario(sc: Scenario): ScenarioResult {
         f.moveX = f.moveY = f.aimX = f.aimY = f.buttons = 0;
       } else if ('tick' in st) {
         for (let t = 0; t < st.tick; t++) step(s, frames);
+      } else if ('place' in st) {
+        const i = st.place.player ?? 0;
+        s.pX[i] = fromFloat(st.place.x);
+        s.pY[i] = fromFloat(st.place.y);
+        s.pVX[i] = 0;
+        s.pVY[i] = 0;
+      } else if ('spawn' in st) {
+        const type = ENEMY_TYPES[st.spawn.type.toLowerCase()];
+        if (type === undefined) throw new Error(`неизвестный враг «${st.spawn.type}»`);
+        for (let n = 0; n < (st.spawn.count ?? 1); n++) {
+          spawnEnemy(s, type, fromFloat(st.spawn.x), fromFloat(st.spawn.y));
+        }
+      } else if ('clear' in st) {
+        clearArena(s);
       } else {
         for (const msg of checkExpectation(s, st.expect, spawn)) {
           failures.push(`${where} (тик ${s.tick}): ${msg}`);
