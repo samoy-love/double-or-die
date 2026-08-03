@@ -10,18 +10,10 @@
  * можно, не тронув ни одного другого числа.
  */
 
-import {
-  clampX,
-  clampY,
-  isFreeSpot,
-  maxX,
-  maxY,
-  pushOutOfColumns,
-  pushedX,
-  pushedY,
-} from './arena';
+import { isFreeSpot, maxX, maxY, pushOutOfColumns, pushedX, pushedY } from './arena';
 import {
   AI_DECISION_PERIOD,
+  AI_SEPARATION_REACH,
   AI_SEPARATION_SPEED,
   ARENA_PAD,
   AGRO_CAP_PCT,
@@ -39,7 +31,7 @@ import {
   WEDGE,
 } from './config';
 import { damagePlayer, explode, fireEnemy, killEnemy, statsOf } from './combat';
-import { add, type Fx, mul, sub } from './fixed';
+import { add, type Fx, fromInt, mul, sub } from './fixed';
 import { Stream, nextInt } from './rng';
 import { EntityFlag, MAX_ENEMIES, MAX_PLAYERS, MAX_SPAWNS, Meta, type SimState } from './state';
 import { length, normalize, normX, normY, within } from './trig';
@@ -556,18 +548,19 @@ function stepWedge(s: SimState, i: number): void {
       }
       const dx = sub(s.pX[t], s.eX[i]);
       const dy = sub(s.pY[t], s.eY[i]);
-      const speed = ENEMIES[EnemyType.Wedge].speed;
-      // Подошёл слишком близко — отходит для разгона.
-      if (within(dx, dy, WEDGE.minAimRange)) {
-        approach(s, i, t, -speed);
-        return;
+
+      // Сначала пробуем объявить таран: очередь ограничена тремя, и место в
+      // ней достаётся тому, кто уже в коридоре дистанций.
+      if (!within(dx, dy, WEDGE.minAimRange) && within(dx, dy, WEDGE.aimRange)) {
+        // Проверка идёт перед самим объявлением: она же вычисляет направление
+        // удара, которым воспользуется enterTelegraph.
+        if (telegraphAllowed(s, i, t)) {
+          enterTelegraph(s, i);
+          return;
+        }
       }
-      approach(s, i, t, speed);
-      if (!within(dx, dy, WEDGE.aimRange)) return;
-      // Проверка идёт последней: она же вычисляет направление удара,
-      // которым воспользуется enterTelegraph.
-      if (!telegraphAllowed(s, i, t)) return;
-      enterTelegraph(s, i);
+
+      orbit(s, i, dx, dy);
       return;
     }
     case EnemyPhase.Telegraph: {
@@ -650,6 +643,34 @@ function stepFuse(s: SimState, i: number): void {
   enterTelegraph(s, i);
 }
 
+/**
+ * Ожидание Клина: обход цели по своей орбите.
+ *
+ * Раньше здесь было «идти прямо на игрока, а с двухсот единиц пятиться». При
+ * очереди из трёх телеграфов это значило, что десяток Клинов ходит туда-сюда
+ * по одной и той же окружности в едином ритме: стая двигалась как один
+ * организм и выкашивалась одной очередью. Разные радиусы и разные стороны
+ * обхода превращают её обратно в набор отдельных врагов, не добавляя ни грамма
+ * непредсказуемости — каждый по-прежнему ходит по своему простому правилу.
+ */
+function orbit(s: SimState, i: number, dx: Fx, dy: Fx): void {
+  const distance = length(dx, dy);
+  normalize(dx, dy);
+  const towardX = normX;
+  const towardY = normY;
+
+  // Своя полоса и своя сторона обхода у каждого — из индекса, а не из RNG:
+  // случайность здесь ничего не добавляет, а поток сдвигает.
+  const band = (i * 7) % WEDGE.orbitBands;
+  const preferred = add(WEDGE.orbitMin, band * WEDGE.orbitStep);
+  const side = (i & 1) === 0 ? 1 : -1;
+
+  // Радиальная составляющая держит свою полосу, тангенциальная ведёт по кругу.
+  const closing = distance > preferred ? ENEMIES[EnemyType.Wedge].speed : -WEDGE.orbitSpeed;
+  s.eVX[i] = add(mul(towardX, closing), mul(-towardY * side, WEDGE.orbitSpeed));
+  s.eVY[i] = add(mul(towardY, closing), mul(towardX * side, WEDGE.orbitSpeed));
+}
+
 function approach(s: SimState, i: number, target: number, speed: Fx): void {
   if (!isAlive(s, target)) {
     brake(s, i);
@@ -703,12 +724,22 @@ function separate(s: SimState, i: number): void {
     if (j === i || !s.eActive[j]) continue;
     const dx = sub(s.eX[i], s.eX[j]);
     const dy = sub(s.eY[i], s.eY[j]);
-    const minDist = add(r, statsOf(s.eType[j]).radius);
-    if (!within(dx, dy, minDist)) continue;
+    const reach = mul(add(r, statsOf(s.eType[j]).radius), fromInt(AI_SEPARATION_REACH));
+    if (!within(dx, dy, reach)) continue;
+
+    // Сила падает с расстоянием: вплотную расталкивает сильно, на краю
+    // радиуса почти не трогает. Квадраты — в обычных числах, как везде, где
+    // счёт идёт на тысячи: в Q16.16 они не помещаются.
+    const fx = units(dx);
+    const fy = units(dy);
+    const fr = units(reach);
+    const strength = 1 - (fx * fx + fy * fy) / (fr * fr);
+
     normalize(dx, dy);
     if (normX === 0 && normY === 0) continue;
-    s.eVX[i] = add(s.eVX[i], mul(normX, AI_SEPARATION_SPEED));
-    s.eVY[i] = add(s.eVY[i], mul(normY, AI_SEPARATION_SPEED));
+    const push = Math.trunc(AI_SEPARATION_SPEED * strength) | 0;
+    s.eVX[i] = add(s.eVX[i], mul(normX, push));
+    s.eVY[i] = add(s.eVY[i], mul(normY, push));
   }
 }
 
@@ -770,19 +801,29 @@ export function stepEnemies(s: SimState): void {
     separate(s, i);
 
     const stats = statsOf(s.eType[i]);
-    const nx = add(s.eX[i], s.eVX[i]);
-    const ny = add(s.eY[i], s.eVY[i]);
-    // Клин, влетевший в колонну, теряет рывок: колонна обязана быть укрытием.
+    const fromX = s.eX[i];
+    const fromY = s.eY[i];
+    pushOutOfColumns(s, add(fromX, s.eVX[i]), add(fromY, s.eVY[i]), stats.radius);
+    s.eX[i] = pushedX;
+    s.eY[i] = pushedY;
+
+    /*
+     * Клин, упёршийся в колонну или стену, теряет рывок: укрытие обязано
+     * быть укрытием.
+     *
+     * Упёрся — значит почти не сдвинулся, а не «задел границу». Прежняя
+     * проверка сравнивала намеченную точку с обрезанной по любой из осей, и
+     * таран, идущий вдоль стены по диагонали, отменялся на первом же тике:
+     * со стороны это выглядело как враг, который начал разгон и тут же встал.
+     * Скольжение вдоль препятствия — нормальный ход тарана, остановка — нет.
+     */
     if (s.ePhase[i] === EnemyPhase.Attack && s.eType[i] === EnemyType.Wedge) {
-      if (nx !== clampX(s, nx, stats.radius) || ny !== clampY(s, ny, stats.radius)) {
+      if (blocked(fromX, fromY, s.eX[i], s.eY[i], s.eVX[i], s.eVY[i])) {
         s.ePhase[i] = EnemyPhase.Recover;
         s.ePhaseUntil[i] = s.tick + stats.recoverTicks;
         brake(s, i);
       }
     }
-    pushOutOfColumns(s, nx, ny, stats.radius);
-    s.eX[i] = pushedX;
-    s.eY[i] = pushedY;
 
     contactDamage(s, i);
   }
@@ -799,6 +840,20 @@ export function stepEnemies(s: SimState): void {
  */
 export function setSpawning(s: SimState, on: boolean): void {
   s.meta[Meta.SpawnOff] = on ? 0 : 1;
+}
+
+/** Доля намеченного пути, ниже которой движение считается упёршимся. */
+const BLOCKED_FRACTION = 0.4;
+
+/** Сдвинулось ли тело заметно меньше, чем намеревалось. */
+function blocked(fromX: Fx, fromY: Fx, toX: Fx, toY: Fx, vx: Fx, vy: Fx): boolean {
+  const wantX = units(vx);
+  const wantY = units(vy);
+  const want = wantX * wantX + wantY * wantY;
+  if (want === 0) return false;
+  const gotX = units(sub(toX, fromX));
+  const gotY = units(sub(toY, fromY));
+  return gotX * gotX + gotY * gotY < want * BLOCKED_FRACTION * BLOCKED_FRACTION;
 }
 
 /** Убрать с арены всё, кроме игроков: перезапуск забега и старт комнаты. */

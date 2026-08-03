@@ -6,11 +6,21 @@
  * честного синтезированного щелчка.
  *
  * Звук здесь несёт информацию, а не украшает: по нему игрок понимает, что
- * попал, что убил и что сейчас рванёт, не глядя на HUD (GDD §22).
+ * попал, что убил и что сейчас рванёт, не глядя на HUD (GDD §22). Отсюда три
+ * решения, из-за которых этот файл сложнее одного осциллятора на событие:
+ *
+ *   — **Голос собирается из слоёв.** Удар это щелчок плюс тело плюс шум, и
+ *     одним осциллятором он звучит как свисток. Слои дают характер, не требуя
+ *     ни одного килобайта ассетов.
+ *   — **Высота гуляет от раза к разу.** Двадцать одинаковых выстрелов подряд
+ *     ухо слышит как дефект, а не как стрельбу. Разброс в четверть тона стоит
+ *     одного умножения и убирает механичность целиком.
+ *   — **Вариант звука несёт данные.** Смерть Клина, Кирпича и Фитиля звучат
+ *     на разной высоте: игрок различает, кого убил, не глядя.
  *
  * Контекст создаётся лениво и по первому вводу: браузеры не дают запустить
- * звук до жеста пользователя, и попытка сделать это на загрузке даёт
- * навсегда молчащую вкладку.
+ * звук до жеста пользователя, и попытка сделать это на загрузке даёт навсегда
+ * молчащую вкладку.
  */
 
 export type SoundName =
@@ -25,15 +35,25 @@ export type SoundName =
   | 'wave'
   | 'death';
 
-interface Voice {
-  /** Частота в начале и в конце — падение или подъём тона. */
+/** Один слой голоса: тон или шум со своей огибающей. */
+interface Layer {
+  /** `noise` — полоса шума, остальное — форма волны осциллятора. */
+  wave: OscillatorType | 'noise';
+  /** Частота в начале и в конце: падение или подъём. */
   from: number;
   to: number;
-  type: OscillatorType;
   duration: number;
   gain: number;
-  /** Доля шума в смеси: удары и взрывы без него звучат как свисток. */
-  noise: number;
+  /** Задержка от начала звука: из неё собираются короткие мелодии. */
+  delay?: number;
+  /** Добротность полосового фильтра для шума. Выше — уже полоса. */
+  q?: number;
+}
+
+interface Voice {
+  layers: readonly Layer[];
+  /** Разброс высоты в полутонах, ±. Ноль — звук всегда одинаковый. */
+  jitter: number;
 }
 
 /**
@@ -41,38 +61,119 @@ interface Voice {
  * ощущение удара — работа человека, а не расчёта (PRODUCTION §6).
  */
 const VOICES: Record<SoundName, Voice> = {
-  shot: { from: 620, to: 180, type: 'square', duration: 0.07, gain: 0.16, noise: 0.25 },
-  hit: { from: 900, to: 420, type: 'triangle', duration: 0.05, gain: 0.13, noise: 0.5 },
-  kill: { from: 320, to: 70, type: 'sawtooth', duration: 0.22, gain: 0.22, noise: 0.55 },
-  hurt: { from: 220, to: 60, type: 'sawtooth', duration: 0.35, gain: 0.3, noise: 0.35 },
-  pickup: { from: 880, to: 1500, type: 'triangle', duration: 0.09, gain: 0.14, noise: 0 },
-  explosion: { from: 180, to: 40, type: 'sawtooth', duration: 0.45, gain: 0.32, noise: 0.8 },
-  telegraph: { from: 260, to: 340, type: 'square', duration: 0.12, gain: 0.09, noise: 0.1 },
-  spawn: { from: 140, to: 300, type: 'sine', duration: 0.16, gain: 0.1, noise: 0.15 },
-  wave: { from: 300, to: 620, type: 'square', duration: 0.3, gain: 0.14, noise: 0 },
-  death: { from: 400, to: 40, type: 'sawtooth', duration: 0.9, gain: 0.3, noise: 0.3 },
+  // Щелчок бойка, короткое тело и выхлоп. Разброс большой: стреляют часто.
+  shot: {
+    jitter: 1.5,
+    layers: [
+      { wave: 'square', from: 940, to: 260, duration: 0.05, gain: 0.09 },
+      { wave: 'noise', from: 2600, to: 700, duration: 0.05, gain: 0.05, q: 0.8 },
+      { wave: 'triangle', from: 190, to: 120, duration: 0.07, gain: 0.05 },
+    ],
+  },
+  // Попадание: сухой цок повыше. Должен читаться сквозь стрельбу.
+  hit: {
+    jitter: 2,
+    layers: [
+      { wave: 'triangle', from: 1500, to: 800, duration: 0.04, gain: 0.07 },
+      { wave: 'noise', from: 3600, to: 1600, duration: 0.035, gain: 0.05, q: 1.5 },
+    ],
+  },
+  // Убийство: удар в грудь плюс хруст. Тело низкое — его слышно в каше.
+  kill: {
+    jitter: 1,
+    layers: [
+      { wave: 'sine', from: 240, to: 48, duration: 0.24, gain: 0.16 },
+      { wave: 'sawtooth', from: 420, to: 90, duration: 0.12, gain: 0.08 },
+      { wave: 'noise', from: 1400, to: 220, duration: 0.2, gain: 0.1, q: 0.5 },
+    ],
+  },
+  // Урон игроку: намеренно неприятный — две расстроенные пилы вместе.
+  hurt: {
+    jitter: 0.5,
+    layers: [
+      { wave: 'sawtooth', from: 300, to: 70, duration: 0.4, gain: 0.2 },
+      { wave: 'sawtooth', from: 214, to: 52, duration: 0.4, gain: 0.12 },
+      { wave: 'noise', from: 900, to: 120, duration: 0.3, gain: 0.12, q: 0.4 },
+    ],
+  },
+  // Фишка: два коротких блика вверх. Явно не «монетка» и явно не удар.
+  pickup: {
+    jitter: 1,
+    layers: [
+      { wave: 'triangle', from: 1050, to: 1050, duration: 0.05, gain: 0.09 },
+      { wave: 'triangle', from: 1570, to: 1570, duration: 0.07, gain: 0.08, delay: 0.045 },
+    ],
+  },
+  // Взрыв: длинный низ и широкая полоса шума.
+  explosion: {
+    jitter: 0.8,
+    layers: [
+      { wave: 'noise', from: 1100, to: 60, duration: 0.5, gain: 0.24, q: 0.3 },
+      { wave: 'sine', from: 130, to: 34, duration: 0.45, gain: 0.22 },
+      { wave: 'sawtooth', from: 320, to: 60, duration: 0.18, gain: 0.1 },
+    ],
+  },
+  // Телеграф: короткий вопросительный подъём. Тихий — он предупреждает,
+  // а не пугает, и звучит по нескольку раз в секунду.
+  telegraph: {
+    jitter: 1.5,
+    layers: [{ wave: 'square', from: 420, to: 640, duration: 0.1, gain: 0.045 }],
+  },
+  // Метка спавна: глухой подъём из-под пола.
+  spawn: {
+    jitter: 2,
+    layers: [
+      { wave: 'sine', from: 90, to: 300, duration: 0.18, gain: 0.09 },
+      { wave: 'noise', from: 400, to: 900, duration: 0.14, gain: 0.04, q: 1 },
+    ],
+  },
+  // Волна: три ноты вверх. Единственное место, где звук почти музыка.
+  wave: {
+    jitter: 0,
+    layers: [
+      { wave: 'square', from: 392, to: 392, duration: 0.1, gain: 0.07 },
+      { wave: 'square', from: 523, to: 523, duration: 0.1, gain: 0.07, delay: 0.09 },
+      { wave: 'square', from: 659, to: 659, duration: 0.2, gain: 0.08, delay: 0.18 },
+    ],
+  },
+  // Смерть: всё падает и гаснет.
+  death: {
+    jitter: 0,
+    layers: [
+      { wave: 'sawtooth', from: 440, to: 40, duration: 0.9, gain: 0.22 },
+      { wave: 'sine', from: 220, to: 28, duration: 1.1, gain: 0.18 },
+      { wave: 'noise', from: 1200, to: 80, duration: 0.7, gain: 0.12, q: 0.4 },
+    ],
+  },
 };
 
 /**
- * Сколько одинаковых звуков в секунду пропускаем.
+ * Сколько секунд ждать между одинаковыми звуками.
  *
  * Двадцать Клинов умирают в один тик — без ограничения это двадцать
- * наложенных сэмплов, то есть треск и мгновенная потеря информативности.
+ * наложенных голосов, то есть треск и мгновенная потеря информативности.
  */
 const RATE_LIMIT: Partial<Record<SoundName, number>> = {
-  hit: 0.03,
+  hit: 0.035,
   kill: 0.05,
-  shot: 0.05,
+  shot: 0.045,
   pickup: 0.04,
-  telegraph: 0.08,
-  spawn: 0.08,
+  telegraph: 0.1,
+  spawn: 0.09,
+  explosion: 0.06,
 };
+
+/** Потолок одновременно звучащих голосов: дальше начинается каша и клиппинг. */
+const MAX_VOICES = 24;
+
+const semitones = (n: number): number => Math.pow(2, n / 12);
 
 export class Audio {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private noiseBuffer: AudioBuffer | null = null;
   private readonly lastPlayed = new Map<SoundName, number>();
+  private live = 0;
   private muted = false;
 
   /** Громкость 0..1. Раздельные ползунки приезжают в 0.12.0. */
@@ -91,13 +192,19 @@ export class Audio {
 
     const ctx = new Ctor();
     const master = ctx.createGain();
-    master.gain.value = this.volume;
-    master.connect(ctx.destination);
+    master.gain.value = this.muted ? 0 : this.volume;
+    // Мягкое ограничение вместо жёсткого клиппинга: в пиковой волне голосов
+    // много, и без компрессора они складываются в хрип.
+    const limiter = ctx.createDynamicsCompressor();
+    limiter.threshold.value = -10;
+    limiter.ratio.value = 12;
+    limiter.attack.value = 0.003;
+    limiter.release.value = 0.12;
+    master.connect(limiter).connect(ctx.destination);
 
     // Шум генерируется один раз: создавать буфер на каждый выстрел значит
     // аллоцировать сотню килобайт в кадре.
-    const seconds = 1;
-    const buffer = ctx.createBuffer(1, ctx.sampleRate * seconds, ctx.sampleRate);
+    const buffer = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
     const data = buffer.getChannelData(0);
     let seed = 0x2545f491;
     for (let i = 0; i < data.length; i++) {
@@ -121,10 +228,15 @@ export class Audio {
     return this.muted;
   }
 
-  play(name: SoundName): void {
+  /**
+   * Сыграть звук. `pitch` — множитель высоты: им звук несёт данные, а не
+   * просто звучит (смерть Клина и смерть Кирпича различаются на слух).
+   */
+  play(name: SoundName, pitch = 1): void {
     const ctx = this.ctx;
     const master = this.master;
     if (!ctx || !master || this.muted) return;
+    if (this.live >= MAX_VOICES) return;
 
     const now = ctx.currentTime;
     const limit = RATE_LIMIT[name];
@@ -134,37 +246,69 @@ export class Audio {
       this.lastPlayed.set(name, now);
     }
 
-    const v = VOICES[name];
+    const voice = VOICES[name];
+    const shift = voice.jitter === 0 ? 1 : semitones((Math.random() * 2 - 1) * voice.jitter);
+    const k = pitch * shift;
+
+    for (const layer of voice.layers) this.playLayer(ctx, master, layer, now, k);
+  }
+
+  private playLayer(
+    ctx: AudioContext,
+    master: GainNode,
+    layer: Layer,
+    now: number,
+    pitch: number,
+  ): void {
+    const start = now + (layer.delay ?? 0);
+    const end = start + layer.duration;
+    const from = Math.max(20, layer.from * pitch);
+    const to = Math.max(20, layer.to * pitch);
+
     const gain = ctx.createGain();
-    gain.gain.setValueAtTime(v.gain, now);
-    // Экспоненциальный спад: линейный слышен как щелчок в конце.
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + v.duration);
+    // Мгновенная атака щёлкает; две миллисекунды подъёма её убирают, не
+    // размазывая удар. Спад экспоненциальный: линейный слышен как обрыв.
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(layer.gain, start + 0.002);
+    gain.gain.exponentialRampToValueAtTime(0.0001, end);
     gain.connect(master);
 
-    const osc = ctx.createOscillator();
-    osc.type = v.type;
-    osc.frequency.setValueAtTime(v.from, now);
-    osc.frequency.exponentialRampToValueAtTime(Math.max(20, v.to), now + v.duration);
-    const toneGain = ctx.createGain();
-    toneGain.gain.value = 1 - v.noise;
-    osc.connect(toneGain).connect(gain);
-    osc.start(now);
-    osc.stop(now + v.duration);
+    this.live++;
+    const done = (): void => {
+      this.live--;
+      gain.disconnect();
+    };
 
-    if (v.noise > 0 && this.noiseBuffer) {
+    if (layer.wave === 'noise') {
+      if (!this.noiseBuffer) {
+        done();
+        return;
+      }
       const noise = ctx.createBufferSource();
       noise.buffer = this.noiseBuffer;
       noise.loop = true;
+      // Старт со случайного места буфера: иначе каждый выстрел шумит одним и
+      // тем же куском, и повтор слышен даже сквозь разброс высоты.
+      const offset = Math.random() * (this.noiseBuffer.duration - layer.duration - 0.01);
       const filter = ctx.createBiquadFilter();
       filter.type = 'bandpass';
-      filter.frequency.setValueAtTime(v.from, now);
-      filter.frequency.exponentialRampToValueAtTime(Math.max(20, v.to), now + v.duration);
-      filter.Q.value = 1.2;
-      const noiseGain = ctx.createGain();
-      noiseGain.gain.value = v.noise;
-      noise.connect(filter).connect(noiseGain).connect(gain);
-      noise.start(now);
-      noise.stop(now + v.duration);
+      filter.frequency.setValueAtTime(from, start);
+      filter.frequency.exponentialRampToValueAtTime(to, end);
+      filter.Q.value = layer.q ?? 1;
+      noise.connect(filter).connect(gain);
+      noise.onended = done;
+      noise.start(start, Math.max(0, offset), layer.duration);
+      noise.stop(end);
+      return;
     }
+
+    const osc = ctx.createOscillator();
+    osc.type = layer.wave;
+    osc.frequency.setValueAtTime(from, start);
+    if (to !== from) osc.frequency.exponentialRampToValueAtTime(to, end);
+    osc.connect(gain);
+    osc.onended = done;
+    osc.start(start);
+    osc.stop(end);
   }
 }
