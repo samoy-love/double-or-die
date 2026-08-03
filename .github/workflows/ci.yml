@@ -152,6 +152,35 @@ jobs:
           console.log('все платформы согласны: ' + base.data.results.length + ' сидов');
           "
 
+  # Хуки — единственная преграда перед прямым пушем в main: защита ветки и
+  # rulesets для приватного репозитория требуют GitHub Pro, а видимость менять
+  # нельзя (TECH §12А). Сломанный хук молчит ровно так же, как отсутствующий,
+  # поэтому его разбор и статический анализ — часть гейта.
+  hooks:
+    name: Хуки разбираются
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Синтаксис
+        run: |
+          fail=0
+          for f in .githooks/*; do
+            [ -f "$f" ] || continue
+            if sh -n "$f"; then
+              echo "ok   $f"
+            else
+              echo "::error file=$f::хук не разбирается"
+              fail=1
+            fi
+          done
+          exit $fail
+
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck -S warning .githooks/*
+
   # Workflow — тоже код, и ломается он ровно так же: опечатка в имени поля,
   # несуществующий вход у переиспользуемого workflow, устаревшая версия
   # runner. Разница в том, что ошибка видна только в момент запуска, а
