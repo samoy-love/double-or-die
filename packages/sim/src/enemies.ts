@@ -30,6 +30,7 @@ import {
   WAVE,
   WEDGE,
 } from './config';
+import { clearBets, dealCards, settleBets } from './bets';
 import { damagePlayer, explode, fireEnemy, killEnemy, statsOf } from './combat';
 import { add, type Fx, fromInt, mul, sub } from './fixed';
 import { Stream, nextInt } from './rng';
@@ -76,13 +77,27 @@ export function roomBudget(room: number, players: number): number {
 export const onScreenCap = (players: number): number =>
   WAVE.onScreenBase + WAVE.onScreenPerPlayer * (players - 1);
 
-/** Начать комнату с первой волны. */
+/**
+ * Начать комнату с первой волны.
+ *
+ * Здесь же — расчёт предыдущей и новая раскладка карт: пари живут внутри боя
+ * и начинаются вместе с ним, отдельного экрана ставок нет (GDD §9.1).
+ */
 export function startRoom(s: SimState, room: number): void {
+  settleBets(s);
+  clearBets(s);
+
   s.meta[Meta.Room] = room;
   s.meta[Meta.Wave] = 0;
   s.meta[Meta.WaveBudget] = 0;
   s.meta[Meta.RoomStartTick] = s.tick;
   s.meta[Meta.NextWaveAt] = s.tick + WAVE.roomGapTicks;
+
+  // Бюджет комнаты целиком — знаменатель прогресса удержаний. Считается один
+  // раз при входе: волны берут из него, а пари меряют по нему пройденный путь.
+  s.meta[Meta.RoomThreat] = roomBudget(room, s.playerCount);
+  s.meta[Meta.ThreatCleared] = 0;
+  dealCards(s);
 }
 
 function startWave(s: SimState, wave: number): void {

@@ -11,6 +11,7 @@
  */
 
 import { hitsColumn, outOfArena, pushOutOfColumns, pushedX, pushedY } from './arena';
+import { advanceBet, failBet } from './bets';
 import {
   CHIP,
   ENEMIES,
@@ -182,15 +183,23 @@ export const isProtected = (s: SimState, p: number): boolean =>
   (s.pFlags[p] & EntityFlag.Invulnerable) !== 0;
 
 /** Урон по врагу. Смерть обрабатывается сразу: полумёртвых сущностей нет. */
-export function damageEnemy(s: SimState, e: number, damage: number): void {
+export function damageEnemy(s: SimState, e: number, damage: number, byBlast = false): void {
   s.eHP[e] -= damage;
   if (s.eHP[e] > 0) return;
-  killEnemy(s, e);
+  killEnemy(s, e, byBlast);
 }
 
-export function killEnemy(s: SimState, e: number): void {
+export function killEnemy(s: SimState, e: number, byBlast = false): void {
   const x = s.eX[e];
   const y = s.eY[e];
+  // Зачищенная угроза — знаменатель прогресса удержаний: «доля пути, который
+  // уже пройден под риском» (ECONOMY §9А) меряется именно в очках угрозы.
+  s.meta[Meta.ThreatCleared] += statsOf(s.eType[e]).threat;
+  // «Подрывник»: три врага взрывами Фитилей. Засчитывается всем, у кого пари
+  // активно — в коопе подрыв общий, и делить его не за что.
+  if (byBlast) {
+    for (let p = 0; p < s.playerCount; p++) advanceBet(s, p, 'demolitionist');
+  }
   s.eActive[e] = 0;
   s.eHP[e] = 0;
   s.ePhase[e] = EnemyPhase.Idle;
@@ -211,6 +220,9 @@ export function damagePlayer(s: SimState, p: number): boolean {
   if (isProtected(s, p)) return false;
 
   s.pHearts[p]--;
+  // «Без урона» срывается здесь, а не у каждого источника: пропустить хук в
+  // одном месте из трёх — значит получить пари, которое переживает таран.
+  failBet(s, p, 'no_damage');
   s.pInvulUntil[p] = s.tick + PLAYER.hurtInvulTicks;
   s.pFlags[p] |= EntityFlag.Invulnerable;
 
@@ -234,7 +246,7 @@ export function explode(s: SimState, x: Fx, y: Fx, source: number): void {
     const dy = sub(s.eY[e], y);
     if (!within(dx, dy, add(FUSE.blastRadius, statsOf(s.eType[e]).radius))) continue;
     knockback(s.eVX, s.eVY, e, dx, dy, FUSE.knockback);
-    damageEnemy(s, e, FUSE.blastDamage);
+    damageEnemy(s, e, FUSE.blastDamage, true);
   }
 
   for (let p = 0; p < s.playerCount; p++) {
@@ -285,6 +297,9 @@ export function stepChips(s: SimState): void {
     if (!s.cActive[i]) continue;
 
     if (s.tick >= s.cDeadline[i]) {
+      // «Собери все фишки» срывается пропавшей фишкой: сама механика в том,
+      // чтобы лезть за ней под огонь, а не в том, чтобы её видеть.
+      for (let p = 0; p < s.playerCount; p++) failBet(s, p, 'all_chips');
       s.cActive[i] = 0;
       continue;
     }

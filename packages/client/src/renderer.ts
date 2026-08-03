@@ -16,6 +16,11 @@
  */
 
 import {
+  BETS,
+  BetCategory,
+  CARD,
+  MAX_CARDS,
+  RED_ZONE,
   ENEMIES,
   EnemyPhase,
   EnemyType,
@@ -150,6 +155,7 @@ export class Renderer {
 
     batch.begin();
     this.drawFloor(arenaW, arenaH, s);
+    this.drawCards(s);
     this.drawSpawnMarks(s);
     this.drawTelegraphs(s, alpha);
     this.drawChips(s);
@@ -180,6 +186,7 @@ export class Renderer {
 
   private drawFloor(w: number, h: number, s: SimState): void {
     const b = this.batch;
+    const k = arenaScale(s.playerCount) / 100;
     b.push(Shape.Box, w / 2, h / 2, w / 2, h / 2, 0, ...channels(PALETTE.floor), 1, 0, 0, 0, 0, 0);
 
     // Сетка: по ней читается масштаб и скорость собственного движения.
@@ -192,7 +199,28 @@ export class Renderer {
       b.push(Shape.Box, w / 2, y, w / 2, 1, 0, g.r, g.g, g.b, 1, 0, 0, 0, 0, 0);
     }
 
-    const k = arenaScale(s.playerCount) / 100;
+    // Красная зона: урона не наносит, но пари предлагает от неё отказаться.
+    // Штриховка тут была бы правильнее сплошной заливки (двойное кодирование
+    // UX §4), но она приезжает вместе с шейдерным проходом в 0.12.0.
+    const rz = PALETTE.redZone;
+    b.push(
+      Shape.Circle,
+      toFloat(RED_ZONE.x) * k,
+      toFloat(RED_ZONE.y) * k,
+      toFloat(RED_ZONE.radius),
+      toFloat(RED_ZONE.radius),
+      0,
+      rz.r,
+      rz.g,
+      rz.b,
+      0.28,
+      3,
+      rz.r,
+      rz.g,
+      rz.b,
+      0.7,
+    );
+
     for (const c of COLUMNS) {
       b.push(
         Shape.Box,
@@ -207,6 +235,74 @@ export class Renderer {
         ...channels(PALETTE.grid),
         1,
       );
+    }
+  }
+
+  /**
+   * Карты пари: подложка, иконка категории и вертикальный луч.
+   *
+   * Луч — не украшение. Карта и фишка обе подбираются с пола, и путать их
+   * нельзя (GDD §21): фишки мелкие, золотые, россыпью; карта крупная, с
+   * лучом, который виден сквозь толпу даже вчетвером на полной арене. За три
+   * секунды до истечения луч гаснет — предупреждение без единой надписи.
+   */
+  private drawCards(s: SimState): void {
+    const b = this.batch;
+
+    for (let i = 0; i < MAX_CARDS; i++) {
+      if (!s.kActive[i]) continue;
+      const x = toFloat(s.kX[i]);
+      const y = toFloat(s.kY[i]);
+      const spec = BETS[s.kBet[i]];
+      const colour = categoryColour(spec.category);
+      const left = s.kDeadline[i] - s.tick;
+      const fading = left < toFloat(CARD.fadeTicks) * 0 + 180;
+
+      // Луч: узкая колонна света вверх от карты. Гаснет вместе со сроком.
+      if (!fading) {
+        b.push(Shape.Box, x, y - 150, 7, 150, 0, colour.r, colour.g, colour.b, 0.22, 0, 0, 0, 0, 0);
+      }
+
+      const r = toFloat(CARD.radius);
+      // Подложка едина и кремова у всех категорий: цвет несут рамка и иконка.
+      b.push(
+        Shape.Box,
+        x,
+        y,
+        r * 0.72,
+        r,
+        0,
+        ...channels(PALETTE.card),
+        1,
+        STROKE,
+        colour.r,
+        colour.g,
+        colour.b,
+        1,
+      );
+      // Иконка категории — форма, а не цвет: двойное кодирование обязательно.
+      b.push(
+        categoryShape(spec.category),
+        x,
+        y,
+        r * 0.34,
+        r * 0.34,
+        0,
+        colour.r,
+        colour.g,
+        colour.b,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+      );
+      // Персональная карта помечена цветом своего игрока: чужую не взять.
+      if (s.kOwner[i] >= 0) {
+        const own = PALETTE.player[s.kOwner[i]] as Rgb;
+        b.push(Shape.Ring, x, y, r * 1.25, r * 1.25, 0, 0, 0, 0, 0, 3, own.r, own.g, own.b, 0.9);
+      }
     }
   }
 
@@ -689,6 +785,34 @@ export class Renderer {
      */
   }
 }
+
+/** Цвет категории пари: живёт в рамке, иконке и луче, но не в подложке. */
+const categoryColour = (c: BetCategory): Rgb =>
+  c === BetCategory.Style
+    ? PALETTE.betStyle
+    : c === BetCategory.Tempo
+      ? PALETTE.betTempo
+      : c === BetCategory.Space
+        ? PALETTE.betSpace
+        : c === BetCategory.Greed
+          ? PALETTE.betGreed
+          : c === BetCategory.Tricks
+            ? PALETTE.betTricks
+            : PALETTE.betSilly;
+
+/** Форма иконки: категория обязана читаться и без цвета (GDD §21). */
+const categoryShape = (c: BetCategory): Shape =>
+  c === BetCategory.Style
+    ? Shape.Hexagon
+    : c === BetCategory.Tempo
+      ? Shape.Triangle
+      : c === BetCategory.Space
+        ? Shape.Box
+        : c === BetCategory.Greed
+          ? Shape.Circle
+          : c === BetCategory.Tricks
+            ? Shape.Capsule
+            : Shape.Ring;
 
 const enemyColour = (type: EnemyType): Rgb =>
   type === EnemyType.Wedge

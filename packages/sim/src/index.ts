@@ -21,6 +21,7 @@ export * from './state';
 export * from './arena';
 export * from './combat';
 export * from './enemies';
+export * from './bets';
 export * from './sim';
 export * from './replay';
 export * from './invariants';

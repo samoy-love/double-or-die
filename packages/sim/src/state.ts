@@ -7,7 +7,7 @@
  * для сверки детерминизма.
  */
 
-import { arenaScale } from './config';
+import { MAX_ACTIVE_BETS, arenaScale } from './config';
 import { fromInt } from './fixed';
 import { createStreams, type RngState, STREAM_COUNT } from './rng';
 
@@ -28,6 +28,23 @@ export const arenaWidth = (players: number): number =>
   Math.trunc((ARENA_W * arenaScale(players)) / 100);
 export const arenaHeight = (players: number): number =>
   Math.trunc((ARENA_H * arenaScale(players)) / 100);
+
+/**
+ * Состояние активного пари.
+ *
+ * Разрешается оно в конце комнаты, а не в момент срыва: игрок обязан видеть
+ * near-miss («не хватило четырёх секунд»), а для этого проигранное пари должно
+ * дожить до расчёта, а не исчезнуть в тот же тик.
+ */
+export const enum BetState {
+  /** Слот пуст. */
+  None = 0,
+  Active = 1,
+  Won = 2,
+  Lost = 3,
+  /** Обналичено досрочно: кон вернулся с долей прибыли. */
+  Cashed = 4,
+}
 
 export const enum EntityFlag {
   Alive = 1 << 0,
@@ -75,6 +92,17 @@ export const enum Meta {
   RoomStartTick = 6,
   /** Сколько раз забег обрывался смертью. */
   Deaths = 7,
+  /** Общий бюджет угрозы текущей комнаты: знаменатель прогресса пари. */
+  RoomThreat = 10,
+  /** Сколько очков угрозы уже снято с арены: числитель прогресса пари. */
+  ThreatCleared = 11,
+  /** Тик, когда Туз подбросит карту. Ноль — уже подбросил или нечего. */
+  TossAt = 12,
+  /** Взято, выиграно, проиграно и обналичено пари за забег. */
+  BetsTaken = 13,
+  BetsWon = 14,
+  BetsLost = 15,
+  BetsCashed = 16,
   /**
    * Тик, на котором забег начнётся заново после гибели всех игроков.
    * Ноль — никто не ждёт перезапуска.
@@ -93,7 +121,7 @@ export const enum Meta {
    * можно поставить ровно тех врагов, ради которых всё затевалось.
    */
   SpawnOff = 9,
-  Count = 10,
+  Count = 17,
 }
 
 export interface SimState {
@@ -132,6 +160,42 @@ export interface SimState {
   /** Накопленная доля выстрела в Q16.16: темп 6.5/с не кратен тику. */
   pShotAcc: Int32Array;
   pChips: Int32Array;
+  /** Аппетит: индекс тира кона, выбранный до входа в комнату. */
+  pAppetite: Int32Array;
+  /**
+   * Маска кнопок прошлого тика.
+   *
+   * Ставочные действия дискретны: карта подбирается подтверждением, а
+   * «Забрать» от одного нажатия обязано срабатывать один раз, иначе удержание
+   * кнопки сжигает все пари подряд. Фронт нажатия считается здесь, а не в
+   * клиенте, потому что в реплее и в сети есть только эта маска.
+   */
+  pPrevButtons: Int32Array;
+
+  // --- Карты пари на арене ---
+  /** Карта — сущность симуляции: место, категория, владелец, срок. */
+  kX: Int32Array;
+  kY: Int32Array;
+  /** Индекс пари в каталоге BETS. */
+  kBet: Int32Array;
+  /** Владелец: 0..3 — персональная, −1 — общая. */
+  kOwner: Int32Array;
+  kDeadline: Int32Array;
+  kActive: Uint8Array;
+
+  // --- Активные пари: MAX_ACTIVE_BETS на игрока ---
+  /** Индекс пари в каталоге. */
+  aBet: Int32Array;
+  /** Поставленный кон. */
+  aStake: Int32Array;
+  /** Состояние, см. `BetState`. */
+  aState: Int32Array;
+  /** Счётчик для счётчиковых пари. */
+  aCounter: Int32Array;
+  /** Тик взятия: от него считается прогресс темповых. */
+  aTakenAt: Int32Array;
+  /** Снимок зачищенной угрозы на момент взятия: прогресс считается от него. */
+  aThreatAt: Int32Array;
 
   // --- Снаряды ---
   bX: Int32Array;
@@ -211,6 +275,20 @@ function collectBuffers(s: SimState): (Int32Array | Uint8Array)[] {
     s.pRagdollUntil,
     s.pShotAcc,
     s.pChips,
+    s.pAppetite,
+    s.pPrevButtons,
+    s.kX,
+    s.kY,
+    s.kBet,
+    s.kOwner,
+    s.kDeadline,
+    s.kActive,
+    s.aBet,
+    s.aStake,
+    s.aState,
+    s.aCounter,
+    s.aTakenAt,
+    s.aThreatAt,
     s.bX,
     s.bY,
     s.bVX,
@@ -253,6 +331,8 @@ export function createState(seed: number, playerCount = 1): SimState {
   const e = () => new Int32Array(MAX_ENEMIES);
   const sp = () => new Int32Array(MAX_SPAWNS);
   const c = () => new Int32Array(MAX_CHIPS);
+  const k = () => new Int32Array(MAX_CARDS);
+  const a = () => new Int32Array(MAX_PLAYERS * MAX_ACTIVE_BETS);
 
   const s: SimState = {
     tick: 0,
@@ -277,6 +357,22 @@ export function createState(seed: number, playerCount = 1): SimState {
     pRagdollUntil: p(),
     pShotAcc: p(),
     pChips: p(),
+    pAppetite: p(),
+    pPrevButtons: p(),
+
+    kX: k(),
+    kY: k(),
+    kBet: k(),
+    kOwner: k(),
+    kDeadline: k(),
+    kActive: new Uint8Array(MAX_CARDS),
+
+    aBet: a(),
+    aStake: a(),
+    aState: a(),
+    aCounter: a(),
+    aTakenAt: a(),
+    aThreatAt: a(),
 
     bX: b(),
     bY: b(),

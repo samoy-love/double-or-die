@@ -12,11 +12,12 @@
 
 import { clampX, clampY, pushOutOfColumns, pushedX, pushedY } from './arena';
 import { PISTOL, PLAYER } from './config';
+import { cashOutBest, failBet, stepBets, tryTakeCard } from './bets';
 import { fire, stepBullets, stepChips } from './combat';
 import { clearArena, startRoom, stepEnemies } from './enemies';
 import { add, FX_ONE, fromInt, mul, sub } from './fixed';
 import { normalize, normX, normY, within } from './trig';
-import { type InputFrame, Btn, isDown } from './input';
+import { type InputFrame, Btn, appetiteOf, isDown } from './input';
 import { EntityFlag, Meta, type SimState } from './state';
 
 /** Пауза перед перезапуском забега: игроку нужно увидеть, что он умер. */
@@ -72,6 +73,7 @@ export function step(s: SimState, inputs: readonly InputFrame[]): void {
   stepEnemies(s);
   stepBullets(s);
   stepChips(s);
+  stepBets(s);
   stepRunEnd(s);
   s.tick++;
 }
@@ -135,6 +137,7 @@ function stepPlayers(s: SimState, inputs: readonly InputFrame[]): void {
 
     if (s.tick >= s.pRagdollUntil[i]) s.pFlags[i] &= ~EntityFlag.Ragdoll;
     stepShooting(s, i, inp, ragdoll);
+    stepBetInput(s, i, inp);
     updateInvulnerability(s, i);
   }
 
@@ -181,6 +184,25 @@ function stepShooting(s: SimState, i: number, inp: InputFrame, ragdoll: boolean)
   fire(s, i);
 }
 
+/**
+ * Ставочные кнопки: подобрать карту, забрать, выбрать аппетит.
+ *
+ * Обе — дискретные события по фронту нажатия, а не по удержанию: карта
+ * подбирается подтверждением (UX §2), а «Забрать» не должно срабатывать
+ * дважды от одного нажатия и сжигать второе пари.
+ */
+function stepBetInput(s: SimState, i: number, inp: InputFrame): void {
+  const pressed = inp.buttons & ~s.pPrevButtons[i];
+  s.pPrevButtons[i] = inp.buttons;
+
+  // Аппетит выбирается до входа в комнату и держится всю комнату: в схватке
+  // думать о размере кона уже не нужно (GDD §9.3).
+  s.pAppetite[i] = appetiteOf(inp);
+
+  if ((pressed & Btn.Take) !== 0) tryTakeCard(s, i);
+  if ((pressed & Btn.CashOut) !== 0) cashOutBest(s, i);
+}
+
 /** Возвращает true, если рывок начался в этом тике. */
 function tryDash(s: SimState, i: number, inp: InputFrame): boolean {
   if (!isDown(inp, Btn.Dash)) return false;
@@ -204,6 +226,9 @@ function tryDash(s: SimState, i: number, inp: InputFrame): boolean {
   s.pVY[i] = mul(ny, perTick);
   s.pDashUntil[i] = s.tick + PLAYER.dashTicks;
   s.pDashReady[i] = s.tick + PLAYER.dashCooldownTicks;
+  // «Без рывка» дорого стоит именно потому, что рывок — главный инструмент
+  // выживания: отказ от него меняет то, КАК играешь (GDD §9).
+  failBet(s, i, 'no_dash');
   s.pInvulUntil[i] = Math.max(s.pInvulUntil[i], s.tick + PLAYER.dashTicks + PLAYER.dashCoyoteTicks);
   s.pFlags[i] |= EntityFlag.Invulnerable;
   return true;
