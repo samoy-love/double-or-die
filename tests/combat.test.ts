@@ -88,13 +88,28 @@ describe('стрельба', () => {
     expect(fired).toBeLessThanOrEqual(66);
   });
 
-  it('заряд не копится, пока курок отпущен', () => {
+  /**
+   * Одиночное нажатие обязано стрелять.
+   *
+   * Регрессия, найденная плейтестом: заряд копился с нуля только при зажатом
+   * курке, и клик в три тика не давал выстрела вообще — игрок жал кнопку
+   * впустую. В твин-стике это ощущается сломанным оружием.
+   */
+  it('одиночное нажатие даёт выстрел в тот же тик', () => {
     const s = arena();
-    run(s, 600, frame({ aimY: fromInt(-1) }));
-    expect(countBullets(s)).toBe(0);
-    // Первый выстрел приходит не мгновенно, а на своём такте.
     run(s, 1, frame({ aimY: fromInt(-1), buttons: Btn.Fire }));
-    expect(countBullets(s)).toBe(0);
+    expect(countBullets(s)).toBe(1);
+  });
+
+  it('впрок копится не больше одного выстрела', () => {
+    const s = arena();
+    // Минута без стрельбы не должна превращаться в залп.
+    run(s, 600, frame({ aimY: fromInt(-1) }));
+    run(s, 1, frame({ aimY: fromInt(-1), buttons: Btn.Fire }));
+    expect(countBullets(s)).toBe(1);
+    // Следующий выстрел — только на своём такте, а не тут же.
+    run(s, 1, frame({ aimY: fromInt(-1), buttons: Btn.Fire }));
+    expect(countBullets(s)).toBe(1);
   });
 
   it('пуля убивает Клина за заявленное время', () => {
