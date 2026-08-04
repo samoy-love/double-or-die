@@ -24,7 +24,11 @@ const PROD_PORT = 4331;
 /** Dev-сервер для бенча. Тоже свой: 5173 и 5175 заняты соседними проектами. */
 const DEV_PORT = 5176;
 
-const PERF = /perf\.spec\.ts$/;
+/**
+ * Бенч и визуальная регрессия идут по dev-сборке: обе опираются на
+ * `__DOD__`, которого в релизе нет и быть не должно.
+ */
+const PERF = /(perf|visual)\.spec\.ts$/;
 
 export default defineConfig({
   testDir: './e2e',

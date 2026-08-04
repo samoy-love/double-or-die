@@ -39,6 +39,16 @@ const Progress = z.enum([
 
 const Category = z.enum(['style', 'tempo', 'space', 'greed', 'tricks', 'silly']);
 
+/**
+ * Схемы ввода — вторая ось матрицы «пари × схема ввода» (GDD §9.5).
+ *
+ * Порядок значим: он же становится номером бита в маске и номером в
+ * `InputScheme`, поэтому новая схема дописывается В КОНЕЦ. Перестановка тихо
+ * переназначила бы исключения уже выпущенным пари.
+ */
+const SCHEMES = ['gamepad', 'keyboard', 'touch'] as const;
+const Scheme = z.enum(SCHEMES);
+
 const Bet = z
   .object({
     /** Совпадает с идентификатором хука детекции в коде (GDD §9.5). */
@@ -55,12 +65,29 @@ const Bet = z
     target: z.number().int().positive().optional(),
     /** Несовместимые пари: вместе в раскладку не попадают (GDD §9.5). */
     conflicts: z.array(z.string()),
+    /**
+     * Схемы ввода, на которых пари невыполнимо (GDD §9.5).
+     *
+     * Матрица «пари × схема ввода» существует затем, чтобы игрок не получал
+     * карту, которую физически не может отыграть: пари на контроль выстрелов
+     * бессмысленно на таче с автоогнём. Поле необязательное — у большинства
+     * пари исключений нет, и пустой массив в каждой записи был бы шумом.
+     */
+    excludeSchemes: z.array(Scheme).optional(),
   })
   .refine((b) => (b.progress === 'time') === (b.limitTicks !== undefined), {
     message: 'темповому пари нужен limitTicks, остальным он не нужен',
   })
   .refine((b) => (b.progress === 'counter') === (b.target !== undefined), {
     message: 'счётчиковому пари нужен target, остальным он не нужен',
+  })
+  .refine((b) => new Set(b.excludeSchemes ?? []).size === (b.excludeSchemes?.length ?? 0), {
+    message: 'схема ввода перечислена в исключениях дважды',
+  })
+  // Пари, исключённое на всех схемах разом, не выпадет никому и никогда:
+  // это не настройка, а вычёркивание пари из каталога окольным путём.
+  .refine((b) => (b.excludeSchemes?.length ?? 0) < SCHEMES.length, {
+    message: 'пари исключено на всех схемах ввода — его не получит никто',
   });
 
 const Catalog = z
@@ -94,8 +121,31 @@ type Catalog = z.infer<typeof Catalog>;
 /** Множитель в Q16.16: в ядре дробных чисел не бывает. */
 const toFixed16 = (v: number): number => Math.round(v * 65536);
 
+/** `no_red_zone` → `NoRedZone`: идентификатор данных в имя члена перечисления. */
+const pascal = (s: string): string =>
+  s
+    .split('_')
+    .map((w) => w[0].toUpperCase() + w.slice(1))
+    .join('');
+
 function generate(catalog: Catalog): string {
+  const ids = catalog.bets.map((b, i) => `  ${pascal(b.id)} = ${i},`).join('\n');
+
   const lines = catalog.bets.map((b) => {
+    // Конфликты и схемы уезжают в ядро БИТОВЫМИ МАСКАМИ, а не списками имён:
+    // проверка совместимости идёт на каждой выдаваемой карте, а сравнение
+    // строк и обход массива в горячем пути запрещены (TECH §4).
+    // Конфликт взаимен по смыслу: если «без рывка» не уживается с «без
+    // урона», то и обратное верно. Требовать, чтобы обе записи перечислили
+    // друг друга, значит однажды получить односторонний конфликт — карты
+    // легли бы вместе или порознь в зависимости от того, какая выпала
+    // первой, и ловилось бы это только глазами на редком забеге.
+    const conflictMask = catalog.bets.reduce(
+      (m, other, i) =>
+        b.conflicts.includes(other.id) || other.conflicts.includes(b.id) ? m | (1 << i) : m,
+      0,
+    );
+    const schemeMask = (b.excludeSchemes ?? []).reduce((m, s) => m | (1 << SCHEMES.indexOf(s)), 0);
     const parts = [
       `    id: '${b.id}'`,
       `    name: '${b.name}'`,
@@ -104,10 +154,13 @@ function generate(catalog: Catalog): string {
       `    progress: BetProgress.${b.progress[0].toUpperCase()}${b.progress.slice(1)}`,
       `    limitTicks: ${b.limitTicks ?? 0}`,
       `    target: ${b.target ?? 0}`,
-      `    conflicts: [${b.conflicts.map((c) => `'${c}'`).join(', ')}]`,
+      `    conflictMask: ${conflictMask}`,
+      `    schemeMask: ${schemeMask}`,
     ];
     return `  {\n${parts.join(',\n')},\n  },`;
   });
+
+  const schemes = SCHEMES.map((s, i) => `  ${pascal(s)} = ${i},`).join('\n');
 
   return `/**
  * СГЕНЕРИРОВАННЫЙ ФАЙЛ. Правьте content/bets.json и запускайте npm run content.
@@ -137,6 +190,28 @@ export const enum BetProgress {
   Threat = 2,
 }
 
+/**
+ * Схема ввода игрока — вторая ось матрицы «пари × схема ввода» (GDD §9.5).
+ *
+ * Номер значения — это номер бита в \`schemeMask\`, поэтому новая схема
+ * дописывается только в конец.
+ */
+export const enum InputScheme {
+${schemes}
+}
+
+/**
+ * Номер пари в каталоге.
+ *
+ * Хуки детекции сравнивают ЭТИ числа, а не строковые идентификаторы: хук
+ * вроде «игрок в красной зоне» проверяется каждый тик на каждом игроке, и
+ * сравнение строк там стоит дороже самой проверки. Строковый \`id\` остаётся
+ * для данных, отладки и сценариев (TECH §4).
+ */
+export const enum BetId {
+${ids}
+}
+
 export interface BetSpec {
   readonly id: string;
   readonly name: string;
@@ -148,7 +223,10 @@ export interface BetSpec {
   readonly limitTicks: number;
   /** Сколько требуется для счётчиковых. Ноль — не счётчиковое. */
   readonly target: number;
-  readonly conflicts: readonly string[];
+  /** Маска несовместимых пари: бит с номером \`BetId\`. */
+  readonly conflictMask: number;
+  /** Маска схем ввода, на которых пари невыполнимо: бит с номером \`InputScheme\`. */
+  readonly schemeMask: number;
 }
 
 export const BETS: readonly BetSpec[] = [

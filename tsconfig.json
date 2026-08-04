@@ -15,8 +15,25 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "noEmit": true,
-    "types": ["node", "vitest/globals"]
+    "allowImportingTsExtensions": true,
+    "types": ["node", "vitest/globals"],
+    "paths": {
+      "@dod/sim": ["./packages/sim/src/index.ts"],
+      "@dod/sim/*": ["./packages/sim/src/*"],
+      "@dod/shared": ["./packages/shared/src/index.ts"],
+      "@dod/shared/*": ["./packages/shared/src/*"],
+      "@dod/client/*": ["./packages/client/src/*"],
+      "@dod/tools/*": ["./packages/tools/src/*"]
+    }
   },
-  "include": ["packages/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts", "vite.config.ts"],
+  "include": [
+    "packages/**/*.ts",
+    "scripts/**/*.ts",
+    "tests/**/*.ts",
+    "e2e/**/*.ts",
+    "vite.config.ts",
+    "vitest.config.ts",
+    "playwright.config.ts"
+  ],
   "exclude": ["node_modules", "dist", "stage"]
 }
