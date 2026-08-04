@@ -15,6 +15,10 @@
  */
 
 import {
+  BetState,
+  CARD,
+  MAX_ACTIVE_BETS,
+  MAX_CARDS,
   EnemyPhase,
   EnemyType,
   EntityFlag,
@@ -69,9 +73,12 @@ export class Feedback {
   private readonly prevAlive = new Uint8Array(MAX_PLAYERS);
   private readonly prevChips = new Int32Array(MAX_PLAYERS);
 
+  private readonly prevCardActive = new Uint8Array(MAX_CARDS);
+  private readonly prevBetState = new Int32Array(MAX_PLAYERS * MAX_ACTIVE_BETS);
   private readonly prevChipActive = new Uint8Array(MAX_CHIPS);
   private readonly prevSpawnActive = new Uint8Array(MAX_SPAWNS);
   private prevWave = 0;
+  private takenThisTick = false;
   private primed = false;
 
   constructor(
@@ -110,9 +117,19 @@ export class Feedback {
       return;
     }
 
+    // Списание кона видно только сравнением с прошлым тиком, а сравнивать
+    // приходится ДО того, как прошлое перезапишется. Подбор карты — это
+    // единственное, что уменьшает кошелёк: фишки его только пополняют.
+    this.takenThisTick = false;
+    for (let p = 0; p < s.playerCount; p++) {
+      if (s.pChips[p] < this.prevChips[p]) this.takenThisTick = true;
+    }
+
     this.observeEnemies(s);
     this.observePlayers(s);
     this.observeChips(s);
+    this.observeCards(s);
+    this.observeBets(s);
     this.observeWaves(s);
     this.remember(s);
   }
@@ -296,6 +313,61 @@ export class Feedback {
     }
   }
 
+  /**
+   * Карты: появление, подбор и угасание.
+   *
+   * Исчезнувшая карта — это либо подбор, либо истёкший срок, и звучать они
+   * обязаны по-разному: одно решение игрока, другое — упущенная возможность.
+   * Различаем по кошельку: подбор списывает кон.
+   */
+  private observeCards(s: SimState): void {
+    for (let i = 0; i < MAX_CARDS; i++) {
+      const was = this.prevCardActive[i] !== 0;
+      const now = s.kActive[i] !== 0;
+
+      if (!was && now) {
+        // Новая карта посреди боя — это подброс Туза: в начале комнаты они
+        // появляются все разом, и там звучит раскладка, а не подброс.
+        if (this.primed && s.tick > s.meta[Meta.RoomStartTick] + 60) {
+          this.audio.play('cardToss');
+          this.particles.spawn(
+            ParticleShape.Ring,
+            toFloat(s.kX[i]),
+            toFloat(s.kY[i]),
+            0,
+            0,
+            10,
+            0.4,
+            PALETTE.card,
+            180,
+          );
+        }
+        continue;
+      }
+      if (was && !now && this.takenThisTick) this.audio.play('cardTake');
+      else if (was && !now) this.audio.play('cardFade');
+    }
+
+    // Предупреждение об истечении: угасающий звон за три секунды до конца.
+    for (let i = 0; i < MAX_CARDS; i++) {
+      if (!s.kActive[i]) continue;
+      if (s.kDeadline[i] - s.tick === CARD.fadeTicks) this.audio.play('cardFade');
+    }
+  }
+
+  /** Пари: взятие, обналичивание и расчёт слышны отдельно друг от друга. */
+  private observeBets(s: SimState): void {
+    for (let k = 0; k < s.playerCount * MAX_ACTIVE_BETS; k++) {
+      const was = this.prevBetState[k] as BetState;
+      const now = s.aState[k] as BetState;
+      if (was === now) continue;
+
+      if (now === BetState.Cashed) this.audio.play('cashOut');
+      else if (now === BetState.Won) this.audio.play('betWon');
+      else if (now === BetState.Lost && was === BetState.Active) this.audio.play('betLost');
+    }
+  }
+
   private observeWaves(s: SimState): void {
     for (let i = 0; i < MAX_SPAWNS; i++) {
       if (s.spActive[i] !== 0 && this.prevSpawnActive[i] === 0) this.audio.play('spawn');
@@ -316,6 +388,8 @@ export class Feedback {
     for (let i = 0; i < MAX_PLAYERS; i++) {
       this.prevAlive[i] = (s.pFlags[i] & EntityFlag.Alive) !== 0 ? 1 : 0;
     }
+    this.prevCardActive.set(s.kActive);
+    this.prevBetState.set(s.aState);
     this.prevChipActive.set(s.cActive);
     this.prevSpawnActive.set(s.spActive);
     this.prevWave = s.meta[Meta.Wave];

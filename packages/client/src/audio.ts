@@ -33,7 +33,14 @@ export type SoundName =
   | 'telegraph'
   | 'spawn'
   | 'wave'
-  | 'death';
+  | 'death'
+  | 'cardTake'
+  | 'cardToss'
+  | 'cardFade'
+  | 'cashOut'
+  | 'betWon'
+  | 'betLost'
+  | 'aceAppear';
 
 /** Один слой голоса: тон или шум со своей огибающей. */
 interface Layer {
@@ -136,6 +143,75 @@ const VOICES: Record<SoundName, Voice> = {
       { wave: 'square', from: 659, to: 659, duration: 0.2, gain: 0.08, delay: 0.18 },
     ],
   },
+  /*
+   * Ставочные звуки. Часть из них игрок обязан считывать, НЕ ГЛЯДЯ на HUD
+   * (GDD §22), поэтому каждый звучит непохоже на соседей.
+   */
+
+  // Подбор карты: шелест колоды и щелчок. Явно не «монетка» — иначе путается
+  // с фишкой, а это разные классы решений.
+  cardTake: {
+    jitter: 0.7,
+    layers: [
+      { wave: 'noise', from: 5200, to: 2600, duration: 0.08, gain: 0.09, q: 0.7 },
+      { wave: 'square', from: 300, to: 220, duration: 0.05, gain: 0.05, delay: 0.05 },
+    ],
+  },
+  // Подброс Тузом: свист и шлепок о пол. Работает телеграфом — по нему видно,
+  // что сейчас на арене станет одной картой больше.
+  cardToss: {
+    jitter: 0.5,
+    layers: [
+      { wave: 'sine', from: 700, to: 1500, duration: 0.22, gain: 0.06 },
+      { wave: 'noise', from: 1800, to: 500, duration: 0.09, gain: 0.08, q: 0.6, delay: 0.24 },
+    ],
+  },
+  // Карта вот-вот истлеет: угасающий звон за три секунды до конца.
+  cardFade: {
+    jitter: 0,
+    layers: [
+      { wave: 'triangle', from: 1400, to: 900, duration: 0.4, gain: 0.05 },
+      { wave: 'triangle', from: 2100, to: 1350, duration: 0.4, gain: 0.03, delay: 0.02 },
+    ],
+  },
+  // «Забрать»: короткий кассовый аккорд и обрыв тика прогресса.
+  cashOut: {
+    jitter: 0,
+    layers: [
+      { wave: 'square', from: 880, to: 880, duration: 0.07, gain: 0.09 },
+      { wave: 'square', from: 1320, to: 1320, duration: 0.1, gain: 0.08, delay: 0.06 },
+      { wave: 'noise', from: 3000, to: 1200, duration: 0.06, gain: 0.05, q: 1.2 },
+    ],
+  },
+  // Выигранное пари: каскад фишек вверх.
+  betWon: {
+    jitter: 0,
+    layers: [
+      { wave: 'triangle', from: 880, to: 880, duration: 0.08, gain: 0.09 },
+      { wave: 'triangle', from: 1175, to: 1175, duration: 0.08, gain: 0.09, delay: 0.07 },
+      { wave: 'triangle', from: 1568, to: 1568, duration: 0.16, gain: 0.1, delay: 0.14 },
+    ],
+  },
+  // Провал: звон разбитого стекла и падающая нота. Ни с чем не спутать —
+  // и не должно: это главный крючок «ещё разок».
+  betLost: {
+    jitter: 0.3,
+    layers: [
+      { wave: 'noise', from: 5000, to: 1800, duration: 0.25, gain: 0.12, q: 2 },
+      { wave: 'sawtooth', from: 520, to: 90, duration: 0.5, gain: 0.14 },
+    ],
+  },
+  // Появление Туза: шорох и смешок. Пространственный сигнал «сейчас будет
+  // карта», а не украшение.
+  aceAppear: {
+    jitter: 0.4,
+    layers: [
+      { wave: 'noise', from: 900, to: 2200, duration: 0.2, gain: 0.05, q: 0.8 },
+      { wave: 'triangle', from: 420, to: 620, duration: 0.09, gain: 0.05, delay: 0.16 },
+      { wave: 'triangle', from: 380, to: 540, duration: 0.09, gain: 0.04, delay: 0.27 },
+    ],
+  },
+
   // Смерть: всё падает и гаснет.
   death: {
     jitter: 0,
@@ -154,6 +230,9 @@ const VOICES: Record<SoundName, Voice> = {
  * наложенных голосов, то есть треск и мгновенная потеря информативности.
  */
 const RATE_LIMIT: Partial<Record<SoundName, number>> = {
+  cardFade: 0.5,
+  betWon: 0.12,
+  betLost: 0.12,
   hit: 0.035,
   kill: 0.05,
   shot: 0.045,

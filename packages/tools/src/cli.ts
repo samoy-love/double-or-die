@@ -146,7 +146,7 @@ Headless-раннер Double or Die
   --runs <n>            сколько забегов прогнать
   --ticks <n>           длина забега в тиках (умолчание 3600 = минута)
   --players <n>         игроков 1..4
-  --bot <имя>           idle | random
+  --bot <имя>           idle | random | greedy
   --json                машинный вывод
   --out <файл>          записать отчёт в файл вместо stdout
   --determinism-check   один сид дважды, сверка хешей

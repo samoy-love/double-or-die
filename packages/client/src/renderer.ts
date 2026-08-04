@@ -18,6 +18,11 @@
 import {
   BETS,
   BetCategory,
+  BetState,
+  MAX_ACTIVE_BETS,
+  FX_ONE,
+  cashOutValue,
+  nearMissOf,
   CARD,
   MAX_CARDS,
   RED_ZONE,
@@ -156,6 +161,7 @@ export class Renderer {
     batch.begin();
     this.drawFloor(arenaW, arenaH, s);
     this.drawCards(s);
+    this.drawAce(s);
     this.drawSpawnMarks(s);
     this.drawTelegraphs(s, alpha);
     this.drawChips(s);
@@ -303,6 +309,70 @@ export class Renderer {
         const own = PALETTE.player[s.kOwner[i]] as Rgb;
         b.push(Shape.Ring, x, y, r * 1.25, r * 1.25, 0, 0, 0, 0, 0, 3, own.r, own.g, own.b, 0.9);
       }
+    }
+  }
+
+  /**
+   * Туз на арене.
+   *
+   * Рисуется НИЖЕ боевых сущностей и полупрозрачным: он второй игрок за
+   * столом, а не препятствие, и перекрывать снаряды ему нельзя — читаемость
+   * объявлена столпом дизайна (GDD §12А.1). Своя цветовая ниша, кремовая с
+   * угольным, выводит его из спектров и врагов, и игроков.
+   *
+   * Пока он замахивается, над ним растёт кольцо: подброс телеграфируется за
+   * полсекунды, чтобы карта не падала сюрпризом.
+   */
+  private drawAce(s: SimState): void {
+    if (s.meta[Meta.AceX] === 0) return;
+    const b = this.batch;
+    const x = toFloat(s.meta[Meta.AceX]);
+    const y = toFloat(s.meta[Meta.AceY]);
+    // Покачивание: он живой и ему скучно, пока игрок воюет.
+    const bob = Math.sin(s.tick * 0.05) * 6;
+
+    // Тулья и поля цилиндра.
+    b.push(
+      Shape.Box,
+      x,
+      y + bob,
+      22,
+      26,
+      0,
+      ...channels(PALETTE.aceShadow),
+      0.85,
+      3,
+      ...channels(PALETTE.ace),
+      0.85,
+    );
+    b.push(Shape.Box, x, y + bob + 28, 34, 5, 0, ...channels(PALETTE.ace), 0.85, 0, 0, 0, 0, 0);
+    // Глаза: смотрит на игрока — за ним и пришёл.
+    const dx = toFloat(s.pX[0]) - x;
+    const dy = toFloat(s.pY[0]) - y;
+    const len = Math.hypot(dx, dy) || 1;
+    this.drawEyes(x, y + bob + 4, 9, dx / len, dy / len, 6, false);
+
+    if (s.meta[Meta.TossAt] !== 0) {
+      const left = Math.max(0, s.meta[Meta.TossAt] - s.tick);
+      const t = 1 - left / 30;
+      const c = PALETTE.card;
+      b.push(
+        Shape.Ring,
+        x,
+        y + bob - 40,
+        10 + 22 * t,
+        10 + 22 * t,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        c.r,
+        c.g,
+        c.b,
+        0.8 - 0.5 * t,
+      );
     }
   }
 
@@ -731,6 +801,7 @@ export class Renderer {
       }
       // Кошелёк рядом со своими сердцами: чьи фишки — видно без подписи.
       drawNumber(b, s.pChips[i], baseX + 150, top, HUD_DIGIT, PALETTE.chip);
+      this.drawBets(s, i, baseX, top + 46);
     }
 
     // Волна — пипсами справа: сколько всего и сколько прошло.
@@ -764,6 +835,98 @@ export class Renderer {
       const c = PALETTE.danger;
       b.push(Shape.Ring, w / 2, h / 2, 60, 60, 0, 0, 0, 0, 0, 6, c.r, c.g, c.b, 0.9);
       drawNumber(b, Math.ceil(left / 60), w / 2, h / 2, 42, PALETTE.hudText);
+    }
+  }
+
+  /**
+   * Свои пари — плашками под сердцами, с растущим кушем.
+   *
+   * Игрок обязан видеть три вещи, не отрывая глаз от боя: какие пари на нём,
+   * сколько он получит, если дожмёт, и сколько — если заберёт прямо сейчас
+   * (UX §4). Последнее и есть весь смысл кнопки: «Забрать» и «дожать» — два
+   * конца одной шкалы, и шкала должна быть видна.
+   *
+   * Плашка дышит: близкое к провалу пари дрожит, выигранное золотится.
+   * Текста здесь нет — типографика приезжает в F2, а до неё категория читается
+   * формой иконки и цветом рамки, ровно как на самой карте.
+   */
+  private drawBets(s: SimState, player: number, x: number, y: number): void {
+    const b = this.batch;
+    let n = 0;
+
+    for (let i = 0; i < MAX_ACTIVE_BETS; i++) {
+      const k = player * MAX_ACTIVE_BETS + i;
+      const state = s.aState[k] as BetState;
+      if (state === BetState.None) continue;
+
+      const spec = BETS[s.aBet[k]];
+      const colour = categoryColour(spec.category);
+      const cx = x + n * 96;
+      n++;
+
+      const won = state === BetState.Won || state === BetState.Cashed;
+      const lost = state === BetState.Lost;
+      // Дрожь достаётся только тому, что ещё можно потерять: проигранное
+      // трясти незачем, оно уже проиграно.
+      const shiver = state === BetState.Active && (s.tick >> 1) % 2 === 0 ? 1.5 : 0;
+      const alpha = lost ? 0.25 : 1;
+
+      b.push(
+        Shape.Box,
+        cx + shiver,
+        y,
+        40,
+        17,
+        0,
+        ...channels(won ? PALETTE.chip : PALETTE.card),
+        alpha * 0.9,
+        3,
+        colour.r,
+        colour.g,
+        colour.b,
+        alpha,
+      );
+      b.push(
+        categoryShape(spec.category),
+        cx - 22 + shiver,
+        y,
+        9,
+        9,
+        0,
+        colour.r,
+        colour.g,
+        colour.b,
+        alpha,
+        0,
+        0,
+        0,
+        0,
+        0,
+      );
+
+      /*
+       * На плашке живут два разных числа, и путать их нельзя.
+       *
+       * Пока пари цело — потенциальная выплата: сколько дадут, если забрать
+       * прямо сейчас. Она растёт по мере выполнения и есть видимая шкала
+       * риска, тот самый второй конец «дожать или соскочить».
+       *
+       * Когда сорвано — near-miss в процентах: насколько близко было. Именно
+       * почти-выигрыш заставляет нажать «ещё разок» (GDD §9.3), и показать
+       * его надо там, где игрок и так смотрит.
+       */
+      const число = lost
+        ? Math.round((nearMissOf(s, player, i) / FX_ONE) * 100)
+        : state === BetState.Active
+          ? cashOutValue(s, player, i)
+          : Math.trunc((s.aStake[k] * spec.multiplier) / FX_ONE);
+      drawNumber(b, число, cx + 8 + shiver, y, 10, lost ? PALETTE.danger : PALETTE.pupil);
+    }
+
+    // Глиф «Забрать» рядом с кушем: кнопка одна, и она про эти числа.
+    if (n > 0) {
+      const c = PALETTE.hudText;
+      b.push(Shape.Ring, x + n * 96 - 30, y, 11, 11, 0, 0, 0, 0, 0, 3, c.r, c.g, c.b, 0.75);
     }
   }
 

@@ -96,8 +96,16 @@ export const enum Meta {
   RoomThreat = 10,
   /** Сколько очков угрозы уже снято с арены: числитель прогресса пари. */
   ThreatCleared = 11,
-  /** Тик, когда Туз подбросит карту. Ноль — уже подбросил или нечего. */
+  /**
+   * Тик, когда Туз подбросит карту. Ноль — подбрасывать нечего.
+   *
+   * Между объявлением и подбросом проходит полсекунды телеграфа: свист и
+   * шлепок работают предупреждением, а не сюрпризом (GDD §12А.1).
+   */
   TossAt = 12,
+  /** Где Туз стоит на арене. Ноль — его на арене нет. */
+  AceX = 17,
+  AceY = 18,
   /** Взято, выиграно, проиграно и обналичено пари за забег. */
   BetsTaken = 13,
   BetsWon = 14,
@@ -121,7 +129,7 @@ export const enum Meta {
    * можно поставить ровно тех врагов, ради которых всё затевалось.
    */
   SpawnOff = 9,
-  Count = 17,
+  Count = 19,
 }
 
 export interface SimState {
@@ -196,6 +204,14 @@ export interface SimState {
   aTakenAt: Int32Array;
   /** Снимок зачищенной угрозы на момент взятия: прогресс считается от него. */
   aThreatAt: Int32Array;
+  /**
+   * Насколько близко было к победе в момент срыва, `q` в Q16.16.
+   *
+   * Near-miss обязателен (GDD §9.3): «не хватило четырёх секунд» — главный
+   * двигатель «ещё разок». Считать его на экране расчёта поздно, прогресс к
+   * тому времени уже не восстановить, поэтому он снимается в момент провала.
+   */
+  aNearMiss: Int32Array;
 
   // --- Снаряды ---
   bX: Int32Array;
@@ -289,6 +305,7 @@ function collectBuffers(s: SimState): (Int32Array | Uint8Array)[] {
     s.aCounter,
     s.aTakenAt,
     s.aThreatAt,
+    s.aNearMiss,
     s.bX,
     s.bY,
     s.bVX,
@@ -373,6 +390,7 @@ export function createState(seed: number, playerCount = 1): SimState {
     aCounter: a(),
     aTakenAt: a(),
     aThreatAt: a(),
+    aNearMiss: a(),
 
     bX: b(),
     bY: b(),

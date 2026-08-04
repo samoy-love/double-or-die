@@ -63,7 +63,46 @@ export function dealCards(s: SimState): void {
   // разовыми и превращаются в поток. Момент — по зачищенной угрозе, а не по
   // таймеру: середина боя это половина комнаты, а не полторы минуты.
   s.meta[Meta.TossAt] = 0;
+  s.meta[Meta.AceX] = 0;
+  s.meta[Meta.AceY] = 0;
 }
+
+/**
+ * Туз на арене: приходит к середине боя и бросает карту.
+ *
+ * Он не мешает бою — не коллизится, неуязвим, рисуется ниже боевых сущностей
+ * (GDD §12А.1). Злорадство даётся отзывчивостью, а не хитбоксом: перекрывать
+ * обзор в игре, где читаемость объявлена столпом, недопустимо.
+ *
+ * Точка подброса — ЧИСТАЯ ФУНКЦИЯ от состояния, а не обращение к общему RNG
+ * (TECH §2.3): «Туз кладёт карту в опасное место» обязано воспроизводиться в
+ * реплее один в один и одинаково у всех пиров.
+ */
+function stepAce(s: SimState): void {
+  // Уже объявил — ждём конца телеграфа и бросаем.
+  if (s.meta[Meta.TossAt] !== 0) {
+    if (s.tick < s.meta[Meta.TossAt]) return;
+    s.meta[Meta.TossAt] = 0;
+    placeCard(s, pickBet(s), SHARED, s.tick + CARD.lifeTicks);
+    return;
+  }
+
+  // Один подброс за комнату, ровно на середине зачищенной угрозы.
+  if (s.meta[Meta.AceX] !== 0) return;
+  const total = s.meta[Meta.RoomThreat];
+  if (total <= 0) return;
+  if (s.meta[Meta.ThreatCleared] * 100 < total * CARD.tossAtThreatPct) return;
+
+  // Встаёт у края — там, куда игрок смотрит меньше всего: у дальней от него
+  // стены по горизонтали и на его же высоте.
+  const far = s.pX[0] > s.arenaW >> 1 ? fromUnits(90) : sub(s.arenaW, fromUnits(90));
+  s.meta[Meta.AceX] = far;
+  s.meta[Meta.AceY] = s.pY[0];
+  s.meta[Meta.TossAt] = s.tick + ACE_TELEGRAPH_TICKS;
+}
+
+/** Телеграф подброса: полсекунды свиста, потом шлепок (GDD §12А.1). */
+const ACE_TELEGRAPH_TICKS = 30;
 
 /**
  * Выбрать пари для карты.
@@ -316,8 +355,21 @@ export function failBet(s: SimState, player: number, id: string): void {
     const k = slot(player, i);
     if (s.aState[k] !== BetState.Active) continue;
     if (BETS[s.aBet[k]].id !== id) continue;
-    s.aState[k] = BetState.Lost;
+    loseBet(s, player, i);
   }
+}
+
+/**
+ * Проиграть пари, запомнив, насколько близко было.
+ *
+ * Прогресс снимается ЗДЕСЬ, а не на экране расчёта: к расчёту зачищенная
+ * угроза уже другая, счётчик обнулён, и «не хватило четырёх секунд»
+ * восстановить будет неоткуда.
+ */
+function loseBet(s: SimState, player: number, n: number): void {
+  const k = slot(player, n);
+  s.aNearMiss[k] = progressOf(s, player, n);
+  s.aState[k] = BetState.Lost;
 }
 
 /** Продвинуть счётчиковое пари. Выполнение проверяется на расчёте. */
@@ -350,12 +402,13 @@ export function stepBets(s: SimState): void {
       // Темповое пари срывается само, когда время вышло: near-miss на экране
       // расчёта показывает, насколько не хватило.
       if (spec.progress === BetProgress.Time && s.tick - s.aTakenAt[k] > spec.limitTicks) {
-        s.aState[k] = BetState.Lost;
+        loseBet(s, p, i);
       }
     }
   }
 
   stepCards(s);
+  stepAce(s);
 }
 
 export const inRedZone = (s: SimState, player: number): boolean =>
@@ -375,21 +428,30 @@ function stepCards(s: SimState): void {
  * Всё, что дожило активным, засчитывается: пари проверяют, как игрок прошёл
  * комнату, а комната пройдена. Счётчиковые проверяются по цели, остальные — по
  * тому, что их никто не сорвал.
+ *
+ * **Мёртвый не выигрывает ничего.** Комнату он не прошёл, а значит и пари на
+ * то, КАК он её пройдёт, не выполнено — включая «Без урона», которое иначе
+ * засчитывалось бы игроку, погибшему от урона. Дефект нашёлся жадным ботом:
+ * доля успеха выходила 0.73 против целевых 38–55% из ECONOMY §2, то есть
+ * ставки превращались в печатный станок ровно в тех забегах, где игрок
+ * проигрывал.
  */
 export function settleBets(s: SimState): void {
   for (let p = 0; p < s.playerCount; p++) {
+    const alive = (s.pFlags[p] & EntityFlag.Alive) !== 0;
     for (let i = 0; i < MAX_ACTIVE_BETS; i++) {
       const k = slot(p, i);
       if (s.aState[k] !== BetState.Active) continue;
       const spec = BETS[s.aBet[k]];
 
-      const won = spec.progress === BetProgress.Counter ? s.aCounter[k] >= spec.target : true;
+      const won =
+        alive && (spec.progress === BetProgress.Counter ? s.aCounter[k] >= spec.target : true);
       if (won) {
         s.aState[k] = BetState.Won;
         s.pChips[p] += Math.trunc((s.aStake[k] * spec.multiplier) / FX_ONE);
         s.meta[Meta.BetsWon]++;
       } else {
-        s.aState[k] = BetState.Lost;
+        loseBet(s, p, i);
         s.meta[Meta.BetsLost]++;
       }
     }
@@ -399,9 +461,20 @@ export function settleBets(s: SimState): void {
 /** Освободить слоты: новая комната — новые пари. */
 export function clearBets(s: SimState): void {
   for (let p = 0; p < s.playerCount * MAX_ACTIVE_BETS; p++) {
-    if (s.aState[p] === BetState.Lost) s.meta[Meta.BetsLost]++;
     s.aState[p] = BetState.None;
     s.aCounter[p] = 0;
     s.aStake[p] = 0;
+    s.aNearMiss[p] = 0;
   }
+}
+
+/**
+ * Насколько близко было к победе, `q` в Q16.16.
+ *
+ * Для проигранного — снимок на момент срыва, для остальных — текущий
+ * прогресс. Экран расчёта показывает по нему «не хватило четырёх секунд».
+ */
+export function nearMissOf(s: SimState, player: number, n: number): Fx {
+  const k = slot(player, n);
+  return s.aState[k] === BetState.Lost ? s.aNearMiss[k] : progressOf(s, player, n);
 }
