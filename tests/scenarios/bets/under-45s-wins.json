@@ -1,0 +1,23 @@
+{
+  "name": "«Быстрее 45 секунд» засчитывается, если комната закрыта до срока",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "clear": true },
+    { "chips": { "amount": 100 } },
+    { "bet": { "id": "under_45s", "stake": 10 } },
+    { "tick": 1200 },
+    {
+      "expect": {
+        "bets": { "id": "under_45s", "state": "active", "progressPct": { "min": 43, "max": 46 } }
+      }
+    },
+    { "settle": true },
+    {
+      "expect": {
+        "bets": { "id": "under_45s", "state": "won" },
+        "chips": { "min": 110, "max": 110 }
+      }
+    }
+  ]
+}

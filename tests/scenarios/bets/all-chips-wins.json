@@ -1,0 +1,28 @@
+{
+  "name": "«Собери все фишки» засчитывается, когда ни одна фишка не пропала",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "clear": true },
+    { "chips": { "amount": 100 } },
+    { "bet": { "id": "all_chips", "stake": 10 } },
+    { "dropChip": { "x": 960, "y": 540 } },
+    { "tick": 5 },
+    {
+      "expect": {
+        "chipsOnFloor": { "max": 0 },
+        "chips": { "min": 91, "max": 91 },
+        "bets": { "id": "all_chips", "state": "active" }
+      }
+    },
+    { "tick": 240 },
+    { "expect": { "bets": { "id": "all_chips", "state": "active" } } },
+    { "settle": true },
+    {
+      "expect": {
+        "bets": { "id": "all_chips", "state": "won" },
+        "chips": { "min": 111, "max": 111 }
+      }
+    }
+  ]
+}

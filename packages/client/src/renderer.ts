@@ -16,8 +16,10 @@
  */
 
 import {
+  AceGesture,
   BETS,
   BetCategory,
+  BetProgress,
   BetState,
   MAX_ACTIVE_BETS,
   FX_ONE,
@@ -111,6 +113,113 @@ export class Renderer {
     window.addEventListener('resize', () => this.resize());
   }
 
+  /**
+   * Средние цвета кадра по сетке — снимок картинки для проверки регрессии.
+   *
+   * Читается СВОИМ контекстом, изнутри клиента, и это главное в этой функции.
+   * Канвас низколатентный: его буфер уходит композитору, и сторонний
+   * `getContext` снаружи получает контекст, который считает себя потерянным,
+   * а размер буфера — нулевым. Тест, читающий кадр снаружи, ловил бы не
+   * регрессию, а гонку с композитором.
+   *
+   * Сетка, а не пиксели: эталон обязан пережить смену растеризатора —
+   * SwiftShader на раннере против настоящей видеокарты на машине, — а средние
+   * по клетке переживают разницу сглаживания и не переживают пропавший слой,
+   * уехавшую камеру или сбитую палитру.
+   */
+  frameGrid(draw: () => void, cols: number, rows: number): number[][] {
+    const gl = this.gl;
+    /*
+     * Размер берётся у канваса, а не у буфера отрисовки.
+     *
+     * `drawingBufferWidth` у низколатентного канваса до первого показанного
+     * кадра равен нулю — а снимок как раз и снимают на паузе, когда кадров
+     * ещё не было. Нулевой размер давал буфер, который драйвер объявляет
+     * неподдерживаемым, и снимок падал на ровном месте. Отрисовка и так идёт
+     * в область `canvas.width × canvas.height`: тот же размер, что у окна
+     * просмотра в `resize`.
+     */
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    // Потерянный контекст — состояние браузера, а не игры: под программным
+    // растеризатором он изредка отваливается на старте страницы. Говорим об
+    // этом отдельными словами, чтобы вызывающий отличил «браузер уронил
+    // контекст» от «картинка разошлась с эталоном».
+    if (gl.isContextLost()) throw new Error('снимок кадра: контекст потерян');
+    if (w === 0 || h === 0) throw new Error('снимок кадра: у канваса нулевой размер');
+
+    /*
+     * Кадр рисуется в СВОЙ буфер, а не в экранный.
+     *
+     * Экранный после показа принадлежит композитору: канвас низколатентный и
+     * без `preserveDrawingBuffer`, поэтому его содержимое сразу после кадра
+     * не определено — прочитанный оттуда снимок выходил то верным, то пустым.
+     * Включать сохранение буфера ради снимка нельзя: оно стоит кадра в
+     * обычной игре, а снимок нужен раз в прогон теста.
+     */
+    // Прогревочный кадр в экран: первая отрисовка собирает шейдеры и
+    // заливает буферы, и без неё снимок в свой буфер выходит чёрным — на
+    // паузе настоящих кадров цикл не делает вовсе.
+    draw();
+
+    const fb = gl.createFramebuffer();
+    const rb = gl.createRenderbuffer();
+    gl.bindRenderbuffer(gl.RENDERBUFFER, rb);
+    // Вложением служит буфер рендера с РАЗМЕРНЫМ форматом: текстура RGBA без
+    // размерности даёт «буфер не поддерживается» на программном
+    // растеризаторе, а размерный RGBA8 обязателен по спецификации WebGL2.
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.RGBA8, w, h);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, rb);
+
+    const px = new Uint8Array(w * h * 4);
+    try {
+      // Буфер проверяется до отрисовки, и это не формальность: пока его
+      // полноту не спросили, драйвер вправе не разложить вложения, и рисунок
+      // уходит в никуда — снимок возвращается чёрным, а ошибки нет.
+      const статус = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+      if (статус !== gl.FRAMEBUFFER_COMPLETE) {
+        throw new Error(`снимок кадра: буфер неполон (0x${статус.toString(16)})`);
+      }
+      draw();
+      // Дожидаемся, пока команды действительно выполнятся. Под программным
+      // растеризатором отрисовка остаётся в очереди, и чтение без ожидания
+      // возвращает чистый буфер — кадр выходит чёрным, а тест винит игру.
+      gl.finish();
+      gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    } finally {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.bindRenderbuffer(gl.RENDERBUFFER, null);
+      gl.deleteFramebuffer(fb);
+      gl.deleteRenderbuffer(rb);
+    }
+
+    const out: number[][] = [];
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        const x0 = Math.floor((col * w) / cols);
+        const x1 = Math.floor(((col + 1) * w) / cols);
+        const y0 = Math.floor((row * h) / rows);
+        const y1 = Math.floor(((row + 1) * h) / rows);
+        let r = 0;
+        let g = 0;
+        let b = 0;
+        let n = 0;
+        for (let y = y0; y < y1; y += 2) {
+          for (let x = x0; x < x1; x += 2) {
+            const i = (y * w + x) * 4;
+            r += px[i];
+            g += px[i + 1];
+            b += px[i + 2];
+            n++;
+          }
+        }
+        out.push(n === 0 ? [0, 0, 0] : [r / n / 255, g / n / 255, b / n / 255]);
+      }
+    }
+    return out;
+  }
+
   private resize(): void {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const rect = this.canvas.getBoundingClientRect();
@@ -169,7 +278,7 @@ export class Renderer {
     this.drawPlayers(s, alpha, fb);
     this.drawBullets(s, alpha);
     this.drawParticles(particles);
-    this.drawHud(s, arenaW, arenaH);
+    this.drawHud(s, arenaW, arenaH, fb);
     this.drawScreenEffects(feel, arenaW, arenaH);
 
     const scale = Math.min(canvas.width / arenaW, canvas.height / arenaH);
@@ -326,10 +435,25 @@ export class Renderer {
   private drawAce(s: SimState): void {
     if (s.meta[Meta.AceX] === 0) return;
     const b = this.batch;
-    const x = toFloat(s.meta[Meta.AceX]);
+    let x = toFloat(s.meta[Meta.AceX]);
     const y = toFloat(s.meta[Meta.AceY]);
-    // Покачивание: он живой и ему скучно, пока игрок воюет.
-    const bob = Math.sin(s.tick * 0.05) * 6;
+    const g = s.meta[Meta.AceGesture] as AceGesture;
+    // Покачивание: он живой и ему скучно, пока игрок воюет. Жест этот покой
+    // и ломает — тем и читается.
+    let bob = Math.sin(s.tick * 0.05) * 6;
+    let tilt = 0;
+    let jitter = 0;
+    if (g === AceGesture.Yawn) bob = Math.sin(s.tick * 0.02) * 10 - 4;
+    if (g === AceGesture.Applaud || g === AceGesture.Ovation) {
+      // Подпрыгивает: модуль синуса — прыжок, а не качание.
+      bob = Math.abs(Math.sin(s.tick * 0.28)) * (g === AceGesture.Ovation ? 26 : 16);
+    }
+    if (g === AceGesture.TurnAway) tilt = 0.25;
+    if (g === AceGesture.Fidget) {
+      jitter = Math.sin(s.tick * 0.9) * 3;
+      tilt = Math.sin(s.tick * 0.45) * 0.12;
+    }
+    x += jitter;
 
     // Тулья и поля цилиндра.
     b.push(
@@ -338,19 +462,80 @@ export class Renderer {
       y + bob,
       22,
       26,
-      0,
+      tilt,
       ...channels(PALETTE.aceShadow),
       0.85,
       3,
       ...channels(PALETTE.ace),
       0.85,
     );
-    b.push(Shape.Box, x, y + bob + 28, 34, 5, 0, ...channels(PALETTE.ace), 0.85, 0, 0, 0, 0, 0);
-    // Глаза: смотрит на игрока — за ним и пришёл.
+    b.push(Shape.Box, x, y + bob + 28, 34, 5, tilt, ...channels(PALETTE.ace), 0.85, 0, 0, 0, 0, 0);
+
+    /*
+     * Глаза: обычно смотрит на игрока — за ним и пришёл.
+     *
+     * Отвернуться — единственный жест, который меняет именно взгляд, и это
+     * его суть: игрок в шаге от крупного выигрыша, а заведение делает вид,
+     * что занято другим. Зевок закрывает глаза совсем.
+     */
     const dx = toFloat(s.pX[0]) - x;
     const dy = toFloat(s.pY[0]) - y;
     const len = Math.hypot(dx, dy) || 1;
-    this.drawEyes(x, y + bob + 4, 9, dx / len, dy / len, 6, false);
+    const look = g === AceGesture.TurnAway ? -1 : 1;
+    if (g !== AceGesture.Yawn) {
+      this.drawEyes(x, y + bob + 4, 9, (look * dx) / len, (look * dy) / len, 6, false);
+    } else {
+      // Зевает: щёлки вместо глаз и открытый рот.
+      const e = PALETTE.pupil;
+      for (const sx of [-5, 5]) {
+        b.push(Shape.Box, x + sx, y + bob + 4, 5, 1.5, 0, e.r, e.g, e.b, 0.9, 0, 0, 0, 0, 0);
+      }
+      const m = 3 + Math.abs(Math.sin(s.tick * 0.02)) * 4;
+      b.push(Shape.Circle, x, y + bob - 6, m, m, 0, e.r, e.g, e.b, 0.9, 0, 0, 0, 0, 0);
+    }
+
+    // Перчатки: хлопают в ладоши на провале и на овации, показывают палец
+    // вниз, когда игрок соскочил в шаге от куша.
+    if (g === AceGesture.Applaud || g === AceGesture.Ovation) {
+      const spread = 10 + Math.abs(Math.cos(s.tick * 0.28)) * 10;
+      for (const sx of [-spread, spread]) {
+        b.push(
+          Shape.Circle,
+          x + sx,
+          y + bob - 14,
+          6,
+          6,
+          0,
+          ...channels(PALETTE.ace),
+          0.95,
+          0,
+          0,
+          0,
+          0,
+          0,
+        );
+      }
+    }
+    if (g === AceGesture.ThumbsDown) {
+      const c = PALETTE.danger;
+      b.push(
+        Shape.Triangle,
+        x + 22,
+        y + bob - 10,
+        9,
+        9,
+        Math.PI,
+        c.r,
+        c.g,
+        c.b,
+        0.95,
+        0,
+        0,
+        0,
+        0,
+        0,
+      );
+    }
 
     if (s.meta[Meta.TossAt] !== 0) {
       const left = Math.max(0, s.meta[Meta.TossAt] - s.tick);
@@ -772,7 +957,7 @@ export class Renderer {
    * F2 (PRODUCTION §4), а текст, вписанный до неё, придётся переделывать
    * вместе со шрифтом и словарём. Сердца, счёт и номер волны читаются формой.
    */
-  private drawHud(s: SimState, w: number, h: number): void {
+  private drawHud(s: SimState, w: number, h: number, fb: Feedback): void {
     const b = this.batch;
     const top = 34;
 
@@ -828,6 +1013,8 @@ export class Renderer {
       );
     }
     drawNumber(b, s.meta[Meta.Room], w - 40 - waves * 26 - 50, top, HUD_DIGIT, PALETTE.hudDim);
+
+    this.drawSettlement(s, w, h, fb);
 
     // Ожидание перезапуска после гибели: игрок должен видеть, что игра жива.
     if (s.meta[Meta.RestartAt] !== 0) {
@@ -927,6 +1114,211 @@ export class Renderer {
     if (n > 0) {
       const c = PALETTE.hudText;
       b.push(Shape.Ring, x + n * 96 - 30, y, 11, 11, 0, 0, 0, 0, 0, 3, c.r, c.g, c.b, 0.75);
+    }
+  }
+
+  /**
+   * Экран расчёта — пауза между комнатами (UX §6).
+   *
+   * Пять секунд, за которые игрок обязан прочитать, чем кончились его пари.
+   * Главное здесь не выигранное, а сорванное: near-miss в процентах — «не
+   * хватило чуть-чуть» — и есть то, что заставляет пойти в следующую комнату
+   * (GDD §9.3). Показывать его мельком в углу боевого HUD бессмысленно: в бою
+   * туда никто не смотрит.
+   *
+   * Экран не модальный и ничего не ждёт: пауза кончается сама. Пропуск живёт
+   * в симуляции и открывается через секунду — зажатый огонь иначе пролистал бы
+   * расчёт раньше, чем игрок успел его увидеть.
+   */
+  private drawSettlement(s: SimState, w: number, h: number, fb: Feedback): void {
+    if (s.meta[Meta.Wave] !== 0 || s.meta[Meta.NextWaveAt] === 0) return;
+
+    // Считаем, есть ли что показывать: первая комната приходит с пустыми
+    // слотами, и затемнять кадр ради пустоты — только мешать.
+    let rows = 0;
+    for (let p = 0; p < s.playerCount; p++) {
+      for (let i = 0; i < MAX_ACTIVE_BETS; i++) {
+        if (s.aState[p * MAX_ACTIVE_BETS + i] !== BetState.None) rows++;
+      }
+    }
+    if (rows === 0) return;
+
+    const b = this.batch;
+    const c = PALETTE.background;
+    b.push(Shape.Box, w / 2, h / 2, w, h, 0, c.r, c.g, c.b, 0.72, 0, 0, 0, 0, 0);
+
+    // Плашки те же, что в бою, только крупнее и по центру: игрок узнаёт их
+    // мгновенно, потому что весь бой смотрел ровно на эти формы.
+    let line = 0;
+    for (let p = 0; p < s.playerCount; p++) {
+      const colour = PALETTE.player[p] as Rgb;
+      for (let i = 0; i < MAX_ACTIVE_BETS; i++) {
+        const k = p * MAX_ACTIVE_BETS + i;
+        const state = s.aState[k] as BetState;
+        if (state === BetState.None) continue;
+
+        const spec = BETS[s.aBet[k]];
+        const cat = categoryColour(spec.category);
+        const y = h / 2 - (rows - 1) * 34 + line * 68;
+        line++;
+        const lost = state === BetState.Lost;
+        const won = state === BetState.Won || state === BetState.Cashed;
+
+        // Метка игрока слева: в кооперативе строк вчетверо больше, и чьё это
+        // пари должно читаться без счёта строк.
+        b.push(
+          Shape.Hexagon,
+          w / 2 - 190,
+          y,
+          10,
+          10,
+          0,
+          colour.r,
+          colour.g,
+          colour.b,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+        );
+        b.push(
+          Shape.Box,
+          w / 2,
+          y,
+          190,
+          26,
+          0,
+          ...channels(won ? PALETTE.chip : PALETTE.card),
+          lost ? 0.3 : 0.95,
+          3,
+          cat.r,
+          cat.g,
+          cat.b,
+          1,
+        );
+        b.push(
+          categoryShape(spec.category),
+          w / 2 - 160,
+          y,
+          14,
+          14,
+          0,
+          cat.r,
+          cat.g,
+          cat.b,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0,
+        );
+
+        /*
+         * Строка расчёта читается слева направо как расписка: кон, множитель,
+         * исход, выплата — и у сорванного отдельно, насколько не хватило.
+         *
+         * Шрифта нет до стадии F2, поэтому «выиграно / провалено / обналичено»
+         * несёт форма исхода, а не слово: заполненный шестиугольник — взял
+         * куш, кольцо — соскочил сам, перечёркнутое — сорвал. Ровно те же три
+         * формы, что игрок видел на плашке весь бой.
+         */
+        drawNumber(b, s.aStake[k], w / 2 - 120, y, 11, PALETTE.pupil);
+        drawMultiplier(b, spec.multiplier / FX_ONE, w / 2 - 82, y, 11, PALETTE.pupil);
+        this.drawOutcome(state, w / 2 - 8, y);
+        // Выплата: у обналиченного и выигранного она разная, и берётся та,
+        // что игроку действительно заплатили (снята в момент перехода).
+        drawNumber(b, fb.betPayout[k], w / 2 + 110, y, 18, lost ? PALETTE.hudDim : PALETTE.pupil);
+
+        if (!lost) continue;
+
+        /*
+         * Near-miss — главное, ради чего экран существует (GDD §9.3).
+         *
+         * У темповых пари он показывается В СЕКУНДАХ, а не в процентах, и это
+         * не украшение: их `q` — доля прошедшего времени, и в момент, когда
+         * время вышло, она равна единице. «Сто процентов» под перечёркнутым
+         * исходом — вранье; «не хватило четырёх секунд» — правда, и считается
+         * она разницей между срывом и концом комнаты.
+         *
+         * Ноль секунд означает, что темповое пари сорвалось не по времени, а
+         * вместе с игроком на самом расчёте, — там честнее проценты: время у
+         * него ещё оставалось.
+         */
+        const seconds = Math.max(
+          0,
+          Math.round((s.meta[Meta.RoomStartTick] - fb.betLostTick[k]) / 60),
+        );
+        const time = spec.progress === BetProgress.Time && seconds > 0;
+        drawNumber(
+          b,
+          time ? seconds : Math.round((nearMissOf(s, p, i) / FX_ONE) * 100),
+          w / 2 + 235,
+          y,
+          15,
+          PALETTE.danger,
+        );
+        // Метка единицы измерения: кольцо — секунды (циферблат), две точки
+        // столбиком — проценты. Без неё «4» и «40» читаются одинаково.
+        const d = PALETTE.danger;
+        if (time) {
+          b.push(Shape.Ring, w / 2 + 285, y, 9, 9, 0, 0, 0, 0, 0, 3, d.r, d.g, d.b, 0.9);
+        } else {
+          for (const dy of [-7, 7]) {
+            b.push(
+              Shape.Circle,
+              w / 2 + 285,
+              y + dy,
+              3.5,
+              3.5,
+              0,
+              d.r,
+              d.g,
+              d.b,
+              0.9,
+              0,
+              0,
+              0,
+              0,
+              0,
+            );
+          }
+        }
+      }
+    }
+
+    // Кольцо обратного отсчёта: пауза видимо кончается, а не висит.
+    const left = Math.max(0, s.meta[Meta.NextWaveAt] - s.tick);
+    const t = PALETTE.hudText;
+    b.push(Shape.Ring, w / 2, h / 2 + rows * 34 + 46, 16, 16, 0, 0, 0, 0, 0, 3, t.r, t.g, t.b, 0.7);
+    drawNumber(b, Math.ceil(left / 60), w / 2, h / 2 + rows * 34 + 46, 14, PALETTE.hudText);
+  }
+
+  /**
+   * Исход пари формой: выиграно, обналичено, провалено.
+   *
+   * Формой, а не словом, и не только из-за отсутствия шрифта: три исхода
+   * различаются мгновенно и на любом языке, а пять секунд расчёта — это не то
+   * время, за которое читают.
+   */
+  private drawOutcome(state: BetState, x: number, y: number): void {
+    const b = this.batch;
+    if (state === BetState.Won) {
+      const c = PALETTE.chip;
+      b.push(Shape.Hexagon, x, y, 11, 11, 0, c.r, c.g, c.b, 1, 2, ...channels(PALETTE.pupil), 0.6);
+      return;
+    }
+    if (state === BetState.Cashed) {
+      // Соскочил сам: кольцо, а не полная фигура — куш взят не весь.
+      const c = PALETTE.chip;
+      b.push(Shape.Ring, x, y, 11, 11, 0, 0, 0, 0, 0, 4, c.r, c.g, c.b, 1);
+      return;
+    }
+    const d = PALETTE.danger;
+    for (const angle of [Math.PI / 4, -Math.PI / 4]) {
+      b.push(Shape.Box, x, y, 12, 2.5, angle, d.r, d.g, d.b, 1, 0, 0, 0, 0, 0);
     }
   }
 
@@ -1035,6 +1427,54 @@ function drawNumber(
     if (mask & 0b0100000) vbar(b, cx + w, y + size / 2, size / 2, t, c);
     if (mask & 0b1000000) hbar(b, cx, y + size, w, t, c);
   }
+}
+
+/**
+ * Множитель: «×» и число с одной десятой.
+ *
+ * Десятая обязательна: в каталоге живут ×2.5 и ×3.5 (GDD §9.5), и округление
+ * до целого врёт про выплату ровно в тех пари, которые игрок берёт ради
+ * жирного куша. Целая часть однозначна по построению — множитель одного пари
+ * не доходит до десяти даже на боссах.
+ */
+function drawMultiplier(
+  b: ShapeBatch,
+  m: number,
+  x: number,
+  y: number,
+  size: number,
+  c: Rgb,
+): void {
+  const step = size * 1.8;
+  // Крестик «×»: два отрезка, а не буква — шрифта нет до стадии F2.
+  for (const angle of [Math.PI / 4, -Math.PI / 4]) {
+    b.push(
+      Shape.Box,
+      x,
+      y,
+      size * 0.55,
+      Math.max(2, size * 0.16),
+      angle,
+      c.r,
+      c.g,
+      c.b,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+    );
+  }
+
+  const whole = Math.trunc(m);
+  const tenth = Math.round((m - whole) * 10);
+  drawNumber(b, whole, x + step, y, size, c);
+  if (tenth === 0) return;
+
+  const t = Math.max(2, size * 0.2);
+  b.push(Shape.Box, x + step * 1.6, y + size, t, t, 0, c.r, c.g, c.b, 1, 0, 0, 0, 0, 0);
+  drawNumber(b, tenth, x + step * 2.3, y, size, c);
 }
 
 const hbar = (b: ShapeBatch, x: number, y: number, w: number, t: number, c: Rgb): void => {

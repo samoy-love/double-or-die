@@ -1,0 +1,49 @@
+{
+  "name": "Больше четырёх пари на игроке не висит, пятая карта остаётся лежать",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "clear": true },
+    { "chips": { "amount": 200 } },
+    { "place": { "x": 300, "y": 800 } },
+    { "card": { "id": "no_damage", "x": 300, "y": 800 } },
+    { "card": { "id": "no_dash", "x": 300, "y": 800 } },
+    { "card": { "id": "under_45s", "x": 300, "y": 800 } },
+    { "card": { "id": "all_chips", "x": 300, "y": 800 } },
+    { "card": { "id": "demolitionist", "x": 300, "y": 800 } },
+    { "expect": { "cards": { "total": { "min": 5, "max": 5 } } } },
+    { "input": { "buttons": ["take"] } },
+    { "tick": 1 },
+    { "clearInput": {} },
+    { "tick": 1 },
+    { "input": { "buttons": ["take"] } },
+    { "tick": 1 },
+    { "clearInput": {} },
+    { "tick": 1 },
+    { "input": { "buttons": ["take"] } },
+    { "tick": 1 },
+    { "clearInput": {} },
+    { "tick": 1 },
+    { "input": { "buttons": ["take"] } },
+    { "tick": 1 },
+    { "clearInput": {} },
+    { "tick": 1 },
+    {
+      "expect": {
+        "bets": { "active": { "min": 4, "max": 4 } },
+        "cards": { "total": { "min": 1, "max": 1 } }
+      }
+    },
+    { "input": { "buttons": ["take"] } },
+    { "tick": 1 },
+    { "clearInput": {} },
+    { "tick": 1 },
+    {
+      "expect": {
+        "bets": { "active": { "min": 4, "max": 4 }, "taken": { "min": 4, "max": 4 } },
+        "cards": { "total": { "min": 1, "max": 1 } },
+        "chips": { "min": 160, "max": 160 }
+      }
+    }
+  ]
+}

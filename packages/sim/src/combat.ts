@@ -11,7 +11,7 @@
  */
 
 import { hitsColumn, outOfArena, pushOutOfColumns, pushedX, pushedY } from './arena';
-import { advanceBet, failBet } from './bets';
+import { aceOnDeath, advanceBetId, BetId, failBetId, loseBetsOnDeath } from './bets';
 import {
   CHIP,
   ENEMIES,
@@ -21,6 +21,7 @@ import {
   ENEMY_BULLET,
   type EnemyStats,
   EnemyPhase,
+  EnemyType,
 } from './config';
 import { add, type Fx, mul, sub } from './fixed';
 import { Stream, nextInt } from './rng';
@@ -192,13 +193,14 @@ export function damageEnemy(s: SimState, e: number, damage: number, byBlast = fa
 export function killEnemy(s: SimState, e: number, byBlast = false): void {
   const x = s.eX[e];
   const y = s.eY[e];
+  const fuse = s.eType[e] === EnemyType.Fuse;
   // Зачищенная угроза — знаменатель прогресса удержаний: «доля пути, который
   // уже пройден под риском» (ECONOMY §9А) меряется именно в очках угрозы.
   s.meta[Meta.ThreatCleared] += statsOf(s.eType[e]).threat;
   // «Подрывник»: три врага взрывами Фитилей. Засчитывается всем, у кого пари
   // активно — в коопе подрыв общий, и делить его не за что.
   if (byBlast) {
-    for (let p = 0; p < s.playerCount; p++) advanceBet(s, p, 'demolitionist');
+    for (let p = 0; p < s.playerCount; p++) advanceBetId(s, p, BetId.Demolitionist);
   }
   s.eActive[e] = 0;
   s.eHP[e] = 0;
@@ -206,6 +208,46 @@ export function killEnemy(s: SimState, e: number, byBlast = false): void {
   s.meta[Meta.Kills]++;
 
   if (nextInt(s.rng, Stream.Loot, 100) < CHIP.dropChancePct) dropChip(s, x, y);
+
+  // Цепь: Фитиль, погибший от чужой волны, взрывается сам (см. explode).
+  if (byBlast && fuse) chainDetonate(s, e, x, y);
+}
+
+/**
+ * Глубина текущей цепи взрывов.
+ *
+ * Счётчик на модуле, а не поле состояния: цепь начинается и кончается внутри
+ * одного вызова `explode`, наружу не выходит и в снимок попасть не может. В
+ * состоянии он был бы значением, которое всегда ноль в любой момент, доступный
+ * наблюдателю, — то есть лишним словом в хеше.
+ */
+let chainDepth = 0;
+
+/**
+ * Цепная детонация Фитилей.
+ *
+ * GDD §7 обещает врага, который «взрывается, задевая своих», и цепь — прямое
+ * следствие этого обещания: подрыв одного Фитиля посреди тройки обязан
+ * снести тройку. Обещание при этом не бесплатное, поэтому у цепи есть два
+ * ограничителя, и оба обязательны.
+ *
+ * Первый — глубина (`FUSE.maxChainDepth`): рекурсия здесь настоящая, взрыв
+ * убивает Фитиль, который взрывается сам, и без потолка достаточно кольца из
+ * Фитилей, чтобы уронить стек. Потолок нужен и по игре: пять взрывов подряд
+ * игрок ещё связывает со своим выстрелом, сплошной ковёр по арене — уже нет.
+ *
+ * Второй — сам порядок: враг снимается с арены ДО того, как взорвётся, и
+ * потому не может ни попасть под свою же волну, ни сдетонировать дважды.
+ *
+ * Цена известна и принята: «Подрывник» (три врага взрывами) выполняется цепью
+ * легче, чем поодиночке. Это не поблажка, а награда за расстановку, и её
+ * величину ограничивает та же глубина.
+ */
+function chainDetonate(s: SimState, e: number, x: Fx, y: Fx): void {
+  if (chainDepth >= FUSE.maxChainDepth) return;
+  chainDepth++;
+  explode(s, x, y, e);
+  chainDepth--;
 }
 
 /**
@@ -222,13 +264,19 @@ export function damagePlayer(s: SimState, p: number): boolean {
   s.pHearts[p]--;
   // «Без урона» срывается здесь, а не у каждого источника: пропустить хук в
   // одном месте из трёх — значит получить пари, которое переживает таран.
-  failBet(s, p, 'no_damage');
+  failBetId(s, p, BetId.NoDamage);
   s.pInvulUntil[p] = s.tick + PLAYER.hurtInvulTicks;
   s.pFlags[p] |= EntityFlag.Invulnerable;
 
   if (s.pHearts[p] <= 0) {
     s.pHearts[p] = 0;
     s.pFlags[p] &= ~EntityFlag.Alive;
+    // Жест — первым: он читает прогресс ещё активных пари, и овация нелепой
+    // смерти возможна только до того, как они закроются.
+    aceOnDeath(s, p);
+    // Расчёт пари — по состоянию НА МОМЕНТ ГИБЕЛИ, а не на старте следующей
+    // комнаты: к тому времени перезапуск успевает вернуть флаг «жив».
+    loseBetsOnDeath(s, p);
   }
   return true;
 }
@@ -238,6 +286,8 @@ export function damagePlayer(s: SimState, p: number): boolean {
  *
  * Дружественный урон здесь единственный во всей игре и оставлен намеренно —
  * на нём стоит пари «Подрывник» (GDD §9.5) и вся тактика подрыва толпы.
+ *
+ * Фитиль, погибший от этой волны, взрывается сам: см. `chainDetonate`.
  */
 export function explode(s: SimState, x: Fx, y: Fx, source: number): void {
   for (let e = 0; e < MAX_ENEMIES; e++) {
@@ -299,7 +349,7 @@ export function stepChips(s: SimState): void {
     if (s.tick >= s.cDeadline[i]) {
       // «Собери все фишки» срывается пропавшей фишкой: сама механика в том,
       // чтобы лезть за ней под огонь, а не в том, чтобы её видеть.
-      for (let p = 0; p < s.playerCount; p++) failBet(s, p, 'all_chips');
+      for (let p = 0; p < s.playerCount; p++) failBetId(s, p, BetId.AllChips);
       s.cActive[i] = 0;
       continue;
     }

@@ -1,0 +1,46 @@
+{
+  "name": "«Быстрее 45 секунд» срывается, когда время вышло",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    {
+      "chips": {
+        "amount": 200
+      }
+    },
+    {
+      "bet": {
+        "id": "under_45s",
+        "stake": 10
+      }
+    },
+    {
+      "tick": 2650
+    },
+    {
+      "expect": {
+        "bets": {
+          "id": "under_45s",
+          "state": "active",
+          "progressPct": {
+            "min": 95
+          }
+        }
+      }
+    },
+    {
+      "tick": 60
+    },
+    {
+      "expect": {
+        "bets": {
+          "id": "under_45s",
+          "state": "lost",
+          "nearMissPct": {
+            "min": 99
+          }
+        }
+      }
+    }
+  ]
+}

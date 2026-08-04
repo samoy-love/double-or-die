@@ -1,0 +1,42 @@
+{
+  "name": "Прогресс «Быстрее 45 секунд» идёт по времени",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    {
+      "chips": {
+        "amount": 200
+      }
+    },
+    {
+      "bet": {
+        "id": "under_45s",
+        "stake": 10
+      }
+    },
+    {
+      "expect": {
+        "bets": {
+          "id": "under_45s",
+          "progressPct": {
+            "max": 1
+          }
+        }
+      }
+    },
+    {
+      "tick": 1350
+    },
+    {
+      "expect": {
+        "bets": {
+          "id": "under_45s",
+          "progressPct": {
+            "min": 49,
+            "max": 51
+          }
+        }
+      }
+    }
+  ]
+}

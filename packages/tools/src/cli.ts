@@ -6,18 +6,19 @@
  * ноль интерактивных промптов — иначе ломается и то, и другое.
  */
 
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import {
   checkInvariants,
   createState,
   deserialize,
   hashHex,
+  MAX_PLAYERS,
   ReplayPlayer,
   spawnPlayers,
   step,
 } from '../../sim/src/index';
-import { makeBot, type BotName } from './bots';
+import { BOT_NAMES, isBotName, makeBot, type BotName } from './bots';
 import {
   CONFIG_VERSION,
   type Golden,
@@ -47,6 +48,96 @@ interface Args {
   safety: boolean;
 }
 
+/**
+ * Отказ разбора аргументов.
+ *
+ * Код 2 отделён от 1 намеренно: единица — «проверка не прошла», двойка —
+ * «команду не поняли». Для CI это разные события, и путать их нельзя: первое
+ * означает найденный дефект, второе — что не проверено вообще ничего.
+ *
+ * DEVLOOP §2: команда либо печатает JSON и выходит нулём, либо падает с
+ * внятным сообщением. Молча подставить умолчание — худший из трёх исходов:
+ * прогон выглядит успешным и не проверяет того, что просили.
+ */
+function die(msg: string): never {
+  console.error(`✗ ${msg}`);
+  console.error('  --help покажет все аргументы.');
+  process.exit(2);
+}
+
+/**
+ * Целое в границах.
+ *
+ * `Number('abc')` даёт NaN, и без этой проверки NaN уезжает в `createState` и
+ * дальше в типизированные массивы, где превращается в нули: забег проходит,
+ * отчёт зелёный, сид в нём — не тот, который просили.
+ */
+function int(flag: string, raw: string | undefined, min: number, max: number): number {
+  if (raw === undefined || raw.startsWith('--')) die(`${flag}: нужно число, а значения нет`);
+  const v = Number(raw);
+  if (!Number.isFinite(v)) die(`${flag}: «${raw}» — не число`);
+  if (!Number.isInteger(v)) die(`${flag}: «${raw}» — нужно целое, дробное тик не делится`);
+  if (v < min || v > max) die(`${flag}: ${v} вне границ ${min}..${max}`);
+  return v;
+}
+
+/** Строковое значение флага: пустое и похожее на следующий флаг — ошибка. */
+function str(flag: string, raw: string | undefined): string {
+  if (raw === undefined || raw.startsWith('--')) die(`${flag}: нужно значение, а его нет`);
+  return raw;
+}
+
+/** Путь, который обязан существовать: файл или каталог. */
+function existingPath(flag: string, raw: string | undefined): string {
+  const p = str(flag, raw);
+  if (!existsSync(p)) die(`${flag}: пути «${p}» нет`);
+  return p;
+}
+
+/** Каталог, который обязан существовать и быть каталогом. */
+function existingDir(flag: string, raw: string | undefined): string {
+  const p = existingPath(flag, raw);
+  if (!statSync(p).isDirectory()) die(`${flag}: «${p}» — не каталог`);
+  return p;
+}
+
+/**
+ * Путь для записи: сам файл может не существовать, а вот каталог обязан.
+ *
+ * Иначе прогон честно считает минуты, а падает на последней строке при записи
+ * отчёта — и считать приходится заново.
+ */
+function writablePath(flag: string, raw: string | undefined): string {
+  const p = str(flag, raw);
+  const dir = dirname(p) || '.';
+  if (!existsSync(dir)) die(`${flag}: каталога «${dir}» нет, записывать некуда`);
+  return p;
+}
+
+/** Хеш состояния печатается как `0x8f3a21bc` — в этом же виде и принимается. */
+function hashArg(flag: string, raw: string | undefined): string {
+  const v = str(flag, raw);
+  if (!/^0x[0-9a-f]{8}$/.test(v)) die(`${flag}: «${v}» не похоже на хеш вида 0x8f3a21bc`);
+  return v;
+}
+
+/*
+ * Границы взяты не с потолка.
+ *
+ * Полный забег — 54 000 тиков (15 минут). Потолок в миллион оставляет запас на
+ * длинные прогоны и при этом ловит опечатку в порядке величины: `--ticks
+ * 18000000` вместо `1800000` это не «долго», это зависший CI без объяснения.
+ * Верх у `--runs` и `--seeds` из той же логики: ночной прогон — 10 000 забегов
+ * (TECH §13), и всё, что на порядок больше, набрано ошибочно.
+ */
+const LIMITS = {
+  seed: [0, 2 ** 31 - 1],
+  runs: [1, 1_000_000],
+  ticks: [1, 1_000_000],
+  players: [1, MAX_PLAYERS],
+  seeds: [1, 1_000_000],
+} as const;
+
 function parseArgs(argv: string[]): Args {
   const a: Args = {
     seed: 1,
@@ -71,51 +162,57 @@ function parseArgs(argv: string[]): Args {
     const v = argv[i + 1];
     switch (k) {
       case '--seed':
-        a.seed = Number(v);
+        a.seed = int(k, v, ...LIMITS.seed);
         i++;
         break;
       case '--runs':
-        a.runs = Number(v);
+        a.runs = int(k, v, ...LIMITS.runs);
         i++;
         break;
       case '--ticks':
-        a.ticks = Number(v);
+        a.ticks = int(k, v, ...LIMITS.ticks);
         i++;
         break;
       case '--players':
-        a.players = Number(v);
+        a.players = int(k, v, ...LIMITS.players);
         i++;
         break;
-      case '--bot':
-        a.bot = v as BotName;
+      case '--bot': {
+        const name = str(k, v);
+        if (!isBotName(name)) die(`--bot: «${name}» не из списка ${BOT_NAMES.join(' | ')}`);
+        a.bot = name;
         i++;
         break;
+      }
       case '--seeds':
-        a.seeds = Number(v);
+        a.seeds = int(k, v, ...LIMITS.seeds);
         i++;
         break;
       case '--out':
-        a.out = v;
+        a.out = writablePath(k, v);
         i++;
         break;
       case '--scenario':
-        a.scenario = v;
+        a.scenario = existingPath(k, v);
         i++;
         break;
       case '--golden':
-        a.golden = v;
+        a.golden = existingPath(k, v);
         i++;
         break;
       case '--replay':
-        a.replay = v;
+        a.replay = existingPath(k, v);
         i++;
         break;
       case '--assert-hash':
-        a.assertHash = v;
+        a.assertHash = hashArg(k, v);
         i++;
         break;
+      // Каталог эталонов проверяется здесь, а не в момент записи: перезапись
+      // идёт забегом за забегом, и упасть на седьмом из двадцати значит
+      // оставить эталоны наполовину старыми, наполовину новыми.
       case '--record-golden':
-        a.recordGolden = v;
+        a.recordGolden = existingDir(k, v);
         i++;
         break;
       case '--rebaseline':
@@ -133,6 +230,12 @@ function parseArgs(argv: string[]): Args {
       case '--help':
         printHelp();
         process.exit(0);
+        break;
+      default:
+        // Неизвестный флаг обязан валить запуск. Молча пропущенный, он даёт
+        // прогон с умолчаниями вместо запрошенного: `--bots greedy` вместо
+        // `--bot greedy` — это пятьсот забегов бездельника и зелёный отчёт.
+        die(`неизвестный аргумент: ${k}`);
     }
   }
   return a;
@@ -145,8 +248,8 @@ Headless-раннер Double or Die
   --seed <n>            сид забега (умолчание 1)
   --runs <n>            сколько забегов прогнать
   --ticks <n>           длина забега в тиках (умолчание 3600 = минута)
-  --players <n>         игроков 1..4
-  --bot <имя>           idle | random | greedy
+  --players <n>         игроков 1..${MAX_PLAYERS}
+  --bot <имя>           ${BOT_NAMES.join(' | ')}
   --json                машинный вывод
   --out <файл>          записать отчёт в файл вместо stdout
   --determinism-check   один сид дважды, сверка хешей
@@ -214,14 +317,22 @@ function emit(a: Args, data: unknown): void {
   }
 }
 
-/** Файлы .json по пути: принимаем и один файл, и каталог. */
+/**
+ * Файлы .json по пути: принимаем и один файл, и каталог с подкаталогами.
+ *
+ * Обход рекурсивный, потому что сценарии разложены по темам («bets», дальше
+ * «arena», «coop»): плоский список молча пропустил бы целую папку, а гейт,
+ * который чего-то не видит, хуже отсутствующего — он ещё и успокаивает.
+ */
 function jsonFiles(path: string): string[] {
-  return statSync(path).isDirectory()
-    ? readdirSync(path)
-        .filter((f) => f.endsWith('.json'))
-        .sort()
-        .map((f) => join(path, f))
-    : [path];
+  if (!statSync(path).isDirectory()) return [path];
+  const out: string[] = [];
+  for (const e of readdirSync(path).sort()) {
+    const full = join(path, e);
+    if (statSync(full).isDirectory()) out.push(...jsonFiles(full));
+    else if (e.endsWith('.json')) out.push(full);
+  }
+  return out;
 }
 
 function doScenarios(a: Args, path: string): never {

@@ -26,6 +26,35 @@ export const enum BetProgress {
   Threat = 2,
 }
 
+/**
+ * Схема ввода игрока — вторая ось матрицы «пари × схема ввода» (GDD §9.5).
+ *
+ * Номер значения — это номер бита в `schemeMask`, поэтому новая схема
+ * дописывается только в конец.
+ */
+export const enum InputScheme {
+  Gamepad = 0,
+  Keyboard = 1,
+  Touch = 2,
+}
+
+/**
+ * Номер пари в каталоге.
+ *
+ * Хуки детекции сравнивают ЭТИ числа, а не строковые идентификаторы: хук
+ * вроде «игрок в красной зоне» проверяется каждый тик на каждом игроке, и
+ * сравнение строк там стоит дороже самой проверки. Строковый `id` остаётся
+ * для данных, отладки и сценариев (TECH §4).
+ */
+export const enum BetId {
+  NoDamage = 0,
+  NoDash = 1,
+  Under45s = 2,
+  NoRedZone = 3,
+  AllChips = 4,
+  Demolitionist = 5,
+}
+
 export interface BetSpec {
   readonly id: string;
   readonly name: string;
@@ -37,7 +66,10 @@ export interface BetSpec {
   readonly limitTicks: number;
   /** Сколько требуется для счётчиковых. Ноль — не счётчиковое. */
   readonly target: number;
-  readonly conflicts: readonly string[];
+  /** Маска несовместимых пари: бит с номером `BetId`. */
+  readonly conflictMask: number;
+  /** Маска схем ввода, на которых пари невыполнимо: бит с номером `InputScheme`. */
+  readonly schemeMask: number;
 }
 
 export const BETS: readonly BetSpec[] = [
@@ -49,7 +81,8 @@ export const BETS: readonly BetSpec[] = [
     progress: BetProgress.Threat,
     limitTicks: 0,
     target: 0,
-    conflicts: [],
+    conflictMask: 0,
+    schemeMask: 0,
   },
   {
     id: 'no_dash',
@@ -59,7 +92,8 @@ export const BETS: readonly BetSpec[] = [
     progress: BetProgress.Threat,
     limitTicks: 0,
     target: 0,
-    conflicts: [],
+    conflictMask: 0,
+    schemeMask: 0,
   },
   {
     id: 'under_45s',
@@ -69,7 +103,8 @@ export const BETS: readonly BetSpec[] = [
     progress: BetProgress.Time,
     limitTicks: 2700,
     target: 0,
-    conflicts: [],
+    conflictMask: 0,
+    schemeMask: 0,
   },
   {
     id: 'no_red_zone',
@@ -79,7 +114,8 @@ export const BETS: readonly BetSpec[] = [
     progress: BetProgress.Threat,
     limitTicks: 0,
     target: 0,
-    conflicts: [],
+    conflictMask: 0,
+    schemeMask: 0,
   },
   {
     id: 'all_chips',
@@ -89,7 +125,8 @@ export const BETS: readonly BetSpec[] = [
     progress: BetProgress.Threat,
     limitTicks: 0,
     target: 0,
-    conflicts: [],
+    conflictMask: 0,
+    schemeMask: 0,
   },
   {
     id: 'demolitionist',
@@ -99,7 +136,8 @@ export const BETS: readonly BetSpec[] = [
     progress: BetProgress.Counter,
     limitTicks: 0,
     target: 3,
-    conflicts: [],
+    conflictMask: 0,
+    schemeMask: 0,
   },
 ];
 

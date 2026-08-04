@@ -8,7 +8,7 @@
  * один раз и записанными как константы шага.
  */
 
-import { type Fx, FX_ONE, fromFloat, mul, sub, add, div, abs } from './fixed';
+import { type Fx, FX_MAX, FX_ONE, fromFloat, mul, sub, add, div, abs } from './fixed';
 
 /** Полный оборот в наших единицах угла. Степень двойки — маска вместо деления. */
 export const ANGLE_FULL = 4096;
@@ -126,9 +126,6 @@ export function length(x: Fx, y: Fx): Fx {
   const scaled = Math.round(r * FX_ONE);
   return scaled > FX_MAX ? FX_MAX : scaled | 0;
 }
-
-/** Наибольшее значение, представимое в Q16.16. */
-const FX_MAX = 0x7fffffff;
 
 /**
  * Нормализовать вектор к единичной длине. Результат — в `normX`/`normY`.

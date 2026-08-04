@@ -10,24 +10,21 @@
  * карта пари — это ещё одна сущность на арене, а не другой бой.
  */
 
-import { clampX, clampY, pushOutOfColumns, pushedX, pushedY } from './arena';
-import { PISTOL, PLAYER } from './config';
-import { cashOutBest, failBet, stepBets, tryTakeCard } from './bets';
+import { pushOutOfColumns, pushedX, pushedY } from './arena';
+import { PISTOL, PLAYER, RESTART_DELAY_TICKS, START_SPREAD, WAVE } from './config';
+import { BetId, cashOutBest, failBetId, stepBets, tryTakeCard } from './bets';
 import { fire, stepBullets, stepChips } from './combat';
 import { clearArena, startRoom, stepEnemies } from './enemies';
-import { add, FX_ONE, fromInt, mul, sub } from './fixed';
+import { add, FX_ONE, mul, sub } from './fixed';
 import { normalize, normX, normY, within } from './trig';
-import { type InputFrame, Btn, appetiteOf, isDown } from './input';
+import { type InputFrame, Btn, appetiteOf, isDown, schemeOf } from './input';
 import { EntityFlag, Meta, type SimState } from './state';
-
-/** Пауза перед перезапуском забега: игроку нужно увидеть, что он умер. */
-const RESTART_DELAY_TICKS = 180;
 
 /** Поставить игроков в стартовые позиции и начать первую комнату. */
 export function spawnPlayers(s: SimState): void {
   const cx = s.arenaW >> 1;
   const cy = s.arenaH >> 1;
-  const spread = fromInt(120);
+  const spread = START_SPREAD;
 
   for (let i = 0; i < s.playerCount; i++) {
     // Раскладка по кругу, детерминированная: без обращения к RNG.
@@ -195,12 +192,44 @@ function stepBetInput(s: SimState, i: number, inp: InputFrame): void {
   const pressed = inp.buttons & ~s.pPrevButtons[i];
   s.pPrevButtons[i] = inp.buttons;
 
-  // Аппетит выбирается до входа в комнату и держится всю комнату: в схватке
-  // думать о размере кона уже не нужно (GDD §9.3).
-  s.pAppetite[i] = appetiteOf(inp);
+  /*
+   * Аппетит ЗАЩЁЛКИВАЕТСЯ: меняется он только явным нажатием и держится до
+   * следующего (GDD §9.3, UX §2).
+   *
+   * Чтение битов маски каждый тик выглядит тем же самым, но означает другое:
+   * маска описывает нажатое ПРЯМО СЕЙЧАС, и стоило игроку отпустить
+   * крестовину, как аппетит молча падал обратно в «Скромно» — то есть выбор,
+   * объявленный решением на весь бой, жил ровно столько, сколько держали
+   * кнопку. Своего экрана двери в 0.3.0 ещё нет, и защёлка здесь — он и есть:
+   * сбрасывает выбор только начало комнаты (`startRoom`).
+   */
+  if ((inp.buttons & (Btn.AppetiteLo | Btn.AppetiteHi)) !== 0) {
+    s.pAppetite[i] = appetiteOf(inp);
+  }
+  // Схема ввода — свойство кадра, а не настройка клиента: игрок берётся за
+  // геймпад посреди забега, и раскладка обязана это учесть уже в следующей
+  // комнате. Матрица «пари × схема» (GDD §9.5) решает, что ему предлагать.
+  s.pScheme[i] = schemeOf(inp);
 
   if ((pressed & Btn.Take) !== 0) tryTakeCard(s, i);
   if ((pressed & Btn.CashOut) !== 0) cashOutBest(s, i);
+  if ((pressed & Btn.Accept) !== 0) skipSettlement(s);
+}
+
+/**
+ * Пропустить экран расчёта.
+ *
+ * Не раньше секунды после его появления, и это не придирка: RT на геймпаде
+ * держат зажатым ради автоогня, и мгновенный пропуск проскакивал бы near-miss
+ * — тот самый показ «не хватило четырёх секунд», ради которого экран и
+ * существует (UX §6).
+ */
+function skipSettlement(s: SimState): void {
+  const at = s.meta[Meta.NextWaveAt];
+  if (at === 0 || s.meta[Meta.Wave] !== 0) return;
+  const shown = WAVE.roomGapTicks - (at - s.tick);
+  if (shown < WAVE.settleSkipAfterTicks) return;
+  s.meta[Meta.NextWaveAt] = s.tick + 1;
 }
 
 /** Возвращает true, если рывок начался в этом тике. */
@@ -228,7 +257,7 @@ function tryDash(s: SimState, i: number, inp: InputFrame): boolean {
   s.pDashReady[i] = s.tick + PLAYER.dashCooldownTicks;
   // «Без рывка» дорого стоит именно потому, что рывок — главный инструмент
   // выживания: отказ от него меняет то, КАК играешь (GDD §9).
-  failBet(s, i, 'no_dash');
+  failBetId(s, i, BetId.NoDash);
   s.pInvulUntil[i] = Math.max(s.pInvulUntil[i], s.tick + PLAYER.dashTicks + PLAYER.dashCoyoteTicks);
   s.pFlags[i] |= EntityFlag.Invulnerable;
   return true;
@@ -274,6 +303,13 @@ function applyVelocity(s: SimState, i: number): void {
  *
  * Толкание — не мелочь удобства: на нём стоит саботаж в коопе, и оно должно
  * работать одинаково у всех, то есть жить в симуляции.
+ *
+ * Толчок проходит через `pushOutOfColumns`, а не через одно обрезание по
+ * границам арены. Обрезание держит игрока внутри стен и ничего не знает про
+ * колонны — а значит напарник мог втолкнуть его ВНУТРЬ колонны, объявленной
+ * укрытием: снаряды там гаснут, враги туда не идут, и сидящий в камне игрок
+ * неуязвим. Саботаж в коопе задуман как толчок под таран, а не как способ
+ * спрятать напарника в стене.
  */
 function separatePlayers(s: SimState): void {
   if (s.playerCount < 2) return;
@@ -290,10 +326,12 @@ function separatePlayers(s: SimState): void {
       if (normX === 0 && normY === 0) continue;
       const px = mul(normX, PLAYER.pushSpeed);
       const py = mul(normY, PLAYER.pushSpeed);
-      s.pX[i] = clampX(s, add(s.pX[i], px), PLAYER.radius);
-      s.pY[i] = clampY(s, add(s.pY[i], py), PLAYER.radius);
-      s.pX[j] = clampX(s, sub(s.pX[j], px), PLAYER.radius);
-      s.pY[j] = clampY(s, sub(s.pY[j], py), PLAYER.radius);
+      pushOutOfColumns(s, add(s.pX[i], px), add(s.pY[i], py), PLAYER.radius);
+      s.pX[i] = pushedX;
+      s.pY[i] = pushedY;
+      pushOutOfColumns(s, sub(s.pX[j], px), sub(s.pY[j], py), PLAYER.radius);
+      s.pX[j] = pushedX;
+      s.pY[j] = pushedY;
     }
   }
 }

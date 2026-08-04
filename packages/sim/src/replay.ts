@@ -117,26 +117,69 @@ export function serialize(r: Replay): string {
   });
 }
 
+/**
+ * Потолок длины лога: 25 минут при 60 Гц.
+ *
+ * Забег идёт 12–18 минут, и запас взят с четвертью. Потолок нужен не ради
+ * аккуратности: `ticks` из чужого файла — это длина массива, который мы
+ * собираемся выделить, и число вроде 2^31 роняет процесс раньше, чем доходит
+ * до проверки содержимого.
+ */
+const MAX_REPLAY_TICKS = 60 * 60 * 25;
+
+/**
+ * Разобрать лог. Бросает при любом расхождении с форматом.
+ *
+ * Строгость здесь не педантизм. Тот же разбор станет серверной проверкой
+ * рекордов переигрыванием (SECURITY §3.2, версия 0.11.0), а значит на вход
+ * ему придёт файл, который писал не наш рекордер, а тот, кто хочет попасть в
+ * таблицу. Крафтовый лог обязан отвергаться с внятной причиной — не вешать
+ * разбор бесконечным циклом, не выделять гигабайт по одному числу и не
+ * оставлять после себя массив, наполовину заполненный мусором.
+ */
 export function deserialize(json: string): Replay {
   const o = JSON.parse(json) as ReplayMeta & { runs: number[] };
   if (o.format !== REPLAY_FORMAT) {
     throw new Error(`формат реплея ${o.format}, ожидался ${REPLAY_FORMAT}`);
   }
+  // Сид уходит в RNG: дробное или нечисло даёт состояние, из которого забег
+  // не воспроизводится, а расходится молча.
+  if (!Number.isInteger(o.seed)) throw new Error(`сид реплея ${o.seed}, ожидалось целое`);
+  if (!Number.isInteger(o.playerCount) || o.playerCount < 1 || o.playerCount > 4) {
+    throw new Error(`игроков в реплее ${o.playerCount}, ожидалось 1..4`);
+  }
+  if (!Number.isInteger(o.ticks) || o.ticks < 0 || o.ticks > MAX_REPLAY_TICKS) {
+    throw new Error(`тиков в реплее ${o.ticks}, ожидалось 0..${MAX_REPLAY_TICKS}`);
+  }
+  if (!Array.isArray(o.runs)) throw new Error('в реплее нет прогонов');
 
   const stride = o.playerCount * WORDS_PER_FRAME;
+  // Каждый прогон — это длина плюс кадр целиком. Длина, не кратная шагу,
+  // означает обрезанный или подделанный лог, а не «последний прогон короче».
+  if (o.runs.length % (stride + 1) !== 0) {
+    throw new Error(`прогонов ${o.runs.length} слов, не кратно ${stride + 1}`);
+  }
+  for (let i = 0; i < o.runs.length; i++) {
+    if (!Number.isInteger(o.runs[i])) throw new Error(`прогон ${i}: слово не целое`);
+  }
+
   const frames = new Int32Array(o.ticks * stride);
 
   let src = 0;
   let t = 0;
   while (src < o.runs.length) {
     const run = o.runs[src++];
-    const words = o.runs.slice(src, src + stride);
-    src += stride;
+    // Неположительный прогон — это вечный цикл: курсор по тикам не двигается,
+    // а слова кончаются, только если повезёт.
+    if (run <= 0) throw new Error(`длина прогона ${run}, ожидалось положительное`);
+    if (t + run > o.ticks) throw new Error(`прогоны длиннее заявленных ${o.ticks} тиков`);
     for (let k = 0; k < run; k++) {
-      frames.set(words, (t + k) * stride);
+      for (let w = 0; w < stride; w++) frames[(t + k) * stride + w] = o.runs[src + w];
     }
+    src += stride;
     t += run;
   }
+  if (t !== o.ticks) throw new Error(`прогоны дают ${t} тиков, заявлено ${o.ticks}`);
 
   return { ...o, frames };
 }

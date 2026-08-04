@@ -1,0 +1,20 @@
+{
+  "name": "«Без рывка» засчитывается, если игрок дошёл комнату ногами",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "clear": true },
+    { "chips": { "amount": 100 } },
+    { "bet": { "id": "no_dash", "stake": 10 } },
+    { "input": { "move": [1, 0] } },
+    { "tick": 180 },
+    { "expect": { "bets": { "id": "no_dash", "state": "active" } } },
+    { "settle": true },
+    {
+      "expect": {
+        "bets": { "id": "no_dash", "state": "won" },
+        "chips": { "min": 110, "max": 110 }
+      }
+    }
+  ]
+}

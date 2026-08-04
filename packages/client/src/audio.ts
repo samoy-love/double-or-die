@@ -37,10 +37,12 @@ export type SoundName =
   | 'cardTake'
   | 'cardToss'
   | 'cardFade'
+  | 'cardExpire'
   | 'cashOut'
   | 'betWon'
   | 'betLost'
-  | 'aceAppear';
+  | 'aceAppear'
+  | 'aceGesture';
 
 /** Один слой голоса: тон или шум со своей огибающей. */
 interface Layer {
@@ -166,12 +168,31 @@ const VOICES: Record<SoundName, Voice> = {
       { wave: 'noise', from: 1800, to: 500, duration: 0.09, gain: 0.08, q: 0.6, delay: 0.24 },
     ],
   },
-  // Карта вот-вот истлеет: угасающий звон за три секунды до конца.
+  /*
+   * Истечение карты — это ДВА разных события, и звучать одинаково они не
+   * имеют права.
+   *
+   * Первое — предупреждение за три секунды: «беги, если хочешь успеть».
+   * Второе — сама карта истлела: «уже нет». Одним звуком на оба игрок учится
+   * не различать шанс и его потерю, а весь смысл таймера карты в том, что
+   * шанс кончается заметно.
+   */
+
+  // Предупреждение: угасающий звон, высокий и открытый (GDD §22).
   cardFade: {
     jitter: 0,
     layers: [
       { wave: 'triangle', from: 1400, to: 900, duration: 0.4, gain: 0.05 },
       { wave: 'triangle', from: 2100, to: 1350, duration: 0.4, gain: 0.03, delay: 0.02 },
+    ],
+  },
+  // Истекла: глухой стук осевшей колоды. Ниже, короче и без звона — то же
+  // событие в отрицательном смысле, а не его повтор.
+  cardExpire: {
+    jitter: 0.3,
+    layers: [
+      { wave: 'sine', from: 300, to: 120, duration: 0.18, gain: 0.07 },
+      { wave: 'noise', from: 700, to: 240, duration: 0.12, gain: 0.05, q: 0.6 },
     ],
   },
   // «Забрать»: короткий кассовый аккорд и обрыв тика прогресса.
@@ -211,6 +232,16 @@ const VOICES: Record<SoundName, Voice> = {
       { wave: 'triangle', from: 380, to: 540, duration: 0.09, gain: 0.04, delay: 0.27 },
     ],
   },
+  // Жест Туза: короткий росчерк, чтобы кривляние на краю арены заметили и
+  // не глядя. Тише всего остального намеренно — он комментирует бой, а не
+  // участвует в нём, и перебивать телеграф ему нечем.
+  aceGesture: {
+    jitter: 0.5,
+    layers: [
+      { wave: 'triangle', from: 300, to: 480, duration: 0.12, gain: 0.045 },
+      { wave: 'noise', from: 1600, to: 700, duration: 0.14, gain: 0.03, q: 1.2 },
+    ],
+  },
 
   // Смерть: всё падает и гаснет.
   death: {
@@ -230,7 +261,9 @@ const VOICES: Record<SoundName, Voice> = {
  * наложенных голосов, то есть треск и мгновенная потеря информативности.
  */
 const RATE_LIMIT: Partial<Record<SoundName, number>> = {
+  aceGesture: 0.6,
   cardFade: 0.5,
+  cardExpire: 0.25,
   betWon: 0.12,
   betLost: 0.12,
   hit: 0.035,

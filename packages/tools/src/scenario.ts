@@ -8,11 +8,37 @@
  * Формат намеренно скучный JSON без выражений и условий: сценарий обязан
  * читаться как протокол, а не исполняться как программа. Всё, чего нельзя
  * выразить парой «подать ввод — прошагать — проверить», пишется юнит-тестом.
+ *
+ * Структура сценария проверяется СТРОГО, до запуска (см. «Схема» ниже).
+ * Опечатка в имени поля ожидания — худший дефект тестовой оснастки из
+ * возможных: `"heart"` вместо `"hearts"` не проверяет ничего и при этом
+ * зеленеет, то есть выдаёт отсутствие проверки за пройденную. Поэтому
+ * неизвестный ключ шага, неизвестное поле ожидания, неизвестное имя врага или
+ * пари и неверный тип значения — это отказ разбора с указанием файла, номера
+ * шага, самого имени и ближайшего известного.
  */
 
 import {
+  BETS,
+  BetState,
   Btn,
+  CARD,
+  FX_ONE,
+  MAX_ACTIVE_BETS,
+  MAX_CARDS,
+  MAX_PLAYERS,
+  SHARED,
+  cashOut,
+  cashOutValue,
   createState,
+  dealCards,
+  dropChip,
+  explode,
+  nearMissOf,
+  putCard,
+  progressOf,
+  settleBets,
+  takeBet,
   EnemyPhase,
   EnemyType,
   EntityFlag,
@@ -64,10 +90,101 @@ const BUTTONS: Record<string, Btn> = {
   ping: Btn.Ping,
 };
 
+/** Состояния пари по именам: число в протоколе не читается. */
+const BET_STATES: Record<string, BetState> = {
+  none: BetState.None,
+  active: BetState.Active,
+  won: BetState.Won,
+  lost: BetState.Lost,
+  cashed: BetState.Cashed,
+};
+
+/**
+ * Тиры аппетита по именам (ECONOMY §7).
+ *
+ * «2» в протоколе не значит ничего, а «по-крупному» значит ровно то, что
+ * написано, — и меняется вместе с таблицей конов, не требуя правки сценария.
+ */
+const APPETITE_TIERS: Record<string, number> = {
+  скромно: 0,
+  нормально: 1,
+  'по-крупному': 2,
+  modest: 0,
+  normal: 1,
+  big: 2,
+};
+
+/** Владелец карты: общая или именная. Номер игрока прячется за именем. */
+const CARD_OWNERS: Record<string, number> = {
+  shared: SHARED,
+  общая: SHARED,
+  player0: 0,
+  player1: 1,
+  player2: 2,
+  player3: 3,
+};
+
 /** Границы величины. Обе стороны необязательны: часто важна только одна. */
 export interface Range {
   min?: number;
   max?: number;
+}
+
+/** Состояние конкретного врага по порядковому номеру среди живых. */
+export interface EnemyExpectation {
+  index?: number;
+  hp?: Range;
+  x?: Range;
+  y?: Range;
+  /** Имя фазы автомата: idle / telegraph / attack / recover. */
+  phase?: string;
+}
+
+/**
+ * Карты, лежащие на арене.
+ *
+ * Раскладка — несущее правило (GDD §9.1), и проверять её надо именно так:
+ * сколько всего, сколько общих и сколько именных приходится КАЖДОМУ. Проверка
+ * «карт три» пропустила бы стол, где все три достались одному.
+ */
+export interface CardsExpectation {
+  /** Сколько карт лежит на арене всего. */
+  total?: Range;
+  /** Сколько из них общих. */
+  shared?: Range;
+  /** Сколько персональных у каждого игрока: проверяется по всем сразу. */
+  perPlayer?: Range;
+  /** Идентификатор пари, о карте которого идёт речь. */
+  id?: string;
+  /** Владелец названной карты: «shared» или «player0»…«player3». */
+  owner?: string;
+}
+
+/**
+ * Пари: сколько активных, что с конкретным и как далеко зашёл прогресс.
+ *
+ * Прогресс в процентах, а не в Q16.16: сценарий читается человеком, и
+ * «65536» в нём не значит ничего.
+ */
+export interface BetsExpectation {
+  active?: Range;
+  cardsOnArena?: Range;
+  /** Идентификатор пари из content/bets.json: «no_damage» и прочие. */
+  id?: string;
+  /** Состояние названного пари: none / active / won / lost / cashed. */
+  state?: string;
+  progressPct?: Range;
+  /** Насколько не хватило сорванному, в процентах. */
+  nearMissPct?: Range;
+  /** Счётчик счётчикового пари: сколько уже сделано. */
+  counter?: Range;
+  /** Сколько заплатит «Забрать» прямо сейчас — не нажимая кнопки. */
+  cashOut?: Range;
+  /** Счётчики забега: взято, выиграно, проиграно, обналичено. */
+  taken?: Range;
+  won?: Range;
+  lost?: Range;
+  cashed?: Range;
 }
 
 export interface Expectation {
@@ -80,15 +197,8 @@ export interface Expectation {
   chipsOnFloor?: Range;
   /** Убито врагов за забег. */
   kills?: Range;
-  /** Состояние конкретного врага по порядковому номеру среди живых. */
-  enemy?: {
-    index?: number;
-    hp?: Range;
-    x?: Range;
-    y?: Range;
-    /** Имя фазы автомата: idle / telegraph / attack / recover. */
-    phase?: string;
-  };
+  enemy?: EnemyExpectation;
+  cards?: CardsExpectation;
   x?: Range;
   y?: Range;
   /** Пройденное расстояние от точки появления. */
@@ -99,6 +209,7 @@ export interface Expectation {
   invulnerable?: boolean;
   /** Хеш состояния целиком: точная привязка к моменту. */
   hash?: string;
+  bets?: BetsExpectation;
 }
 
 export type Step =
@@ -116,6 +227,30 @@ export type Step =
   | { place: { player?: number; x: number; y: number } }
   /** Поставить врага. Имя типа, а не номер: номер в протоколе нечитаем. */
   | { spawn: { type: string; x: number; y: number; count?: number } }
+  /** Положить карту пари на арену. Владелец по умолчанию — общая. */
+  | { card: { id: string; x: number; y: number; player?: number } }
+  /**
+   * Взять пари напрямую, минуя карту.
+   *
+   * Не дубль подбора, а другой предмет проверки: подбор — это про кнопку и
+   * дистанцию, а условия пари надо проверять, не тратя половину сценария на
+   * дорогу до карты.
+   */
+  | { bet: { id: string; player?: number; stake?: number } }
+  /** Выдать фишек: без кона пари не взять, а зарабатывать его — не предмет. */
+  | { chips: { player?: number; amount: number } }
+  /** Аппетит именем тира: он задаёт кон при подборе карты. */
+  | { appetite: { player?: number; tier: string } }
+  /** Уронить фишку в точке: «Собери все фишки» проверяется именно фишкой. */
+  | { dropChip: { x: number; y: number } }
+  /** Взорвать в точке — ударная волна Фитиля для «Подрывника». */
+  | { explode: { x: number; y: number } }
+  /** Забрать пари сейчас: «Забрать» проверяется формулой, а не кнопкой. */
+  | { cashOut: { id: string; player?: number } }
+  /** Разложить карты так же, как это делает начало комнаты. */
+  | { deal: true }
+  /** Провести расчёт комнаты: выигранное платит, оставшееся проваливается. */
+  | { settle: true }
   /** Убрать с арены всё, кроме игроков. */
   | { clear: true }
   | { expect: Expectation };
@@ -142,6 +277,283 @@ export interface ScenarioResult {
   ticks: number;
   hash: string;
   failures: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Схема: структура сценария проверяется до запуска
+// ---------------------------------------------------------------------------
+
+/**
+ * Узел схемы.
+ *
+ * Схема нарочно маленькая и без зависимостей: она описывает JSON, который сама
+ * же и разбирает, и вся её ценность в том, что список полей ОДИН. Ниже она
+ * прибита к типам `Step` и `Expectation` аннотациями `Record<keyof …>` — новое
+ * поле в типе без записи в схеме не соберётся, лишнее в схеме тоже.
+ */
+type Node =
+  | { t: 'number' }
+  | { t: 'int'; min?: number | undefined; max?: number | undefined }
+  | { t: 'string' }
+  | { t: 'bool' }
+  | { t: 'true' }
+  | { t: 'vec2' }
+  | { t: 'enum'; values: readonly string[] }
+  | { t: 'enumList'; values: readonly string[] }
+  | { t: 'obj'; fields: Record<string, Node>; need?: readonly string[] | undefined };
+
+const num = (): Node => ({ t: 'number' });
+const int = (min?: number, max?: number): Node => ({ t: 'int', min, max });
+const str = (): Node => ({ t: 'string' });
+const bool = (): Node => ({ t: 'bool' });
+const TRUE: Node = { t: 'true' };
+const vec2 = (): Node => ({ t: 'vec2' });
+const oneOf = (values: Record<string, unknown>): Node => ({
+  t: 'enum',
+  values: Object.keys(values),
+});
+const listOf = (values: Record<string, unknown>): Node => ({
+  t: 'enumList',
+  values: Object.keys(values),
+});
+const obj = (fields: Record<string, Node>, need?: readonly string[]): Node => ({
+  t: 'obj',
+  fields,
+  need,
+});
+
+/** Границы величины: те же две стороны, что и в `Range`. */
+const RANGE: Node = obj({ min: num(), max: num() });
+
+/** Номер игрока: состав больше четырёх не бывает, и опечатка в нём — ошибка. */
+const PLAYER_IDX = (): Node => int(0, MAX_PLAYERS - 1);
+
+/** Пари называются идентификаторами из каталога: опечатка обязана валить разбор. */
+const BET_IDS: readonly string[] = BETS.map((b) => b.id);
+const BET_ID: Node = { t: 'enum', values: BET_IDS };
+
+const ENEMY_FIELDS: Record<keyof EnemyExpectation, Node> = {
+  index: int(0, MAX_ENEMIES - 1),
+  hp: RANGE,
+  x: RANGE,
+  y: RANGE,
+  phase: oneOf(PHASES),
+};
+
+const CARDS_FIELDS: Record<keyof CardsExpectation, Node> = {
+  total: RANGE,
+  shared: RANGE,
+  perPlayer: RANGE,
+  id: BET_ID,
+  owner: oneOf(CARD_OWNERS),
+};
+
+const BETS_FIELDS: Record<keyof BetsExpectation, Node> = {
+  active: RANGE,
+  cardsOnArena: RANGE,
+  id: BET_ID,
+  state: oneOf(BET_STATES),
+  progressPct: RANGE,
+  nearMissPct: RANGE,
+  counter: RANGE,
+  cashOut: RANGE,
+  taken: RANGE,
+  won: RANGE,
+  lost: RANGE,
+  cashed: RANGE,
+};
+
+const EXPECT_FIELDS: Record<keyof Expectation, Node> = {
+  player: PLAYER_IDX(),
+  enemies: RANGE,
+  bullets: RANGE,
+  chipsOnFloor: RANGE,
+  kills: RANGE,
+  enemy: obj(ENEMY_FIELDS),
+  cards: obj(CARDS_FIELDS),
+  x: RANGE,
+  y: RANGE,
+  travelled: RANGE,
+  hearts: RANGE,
+  chips: RANGE,
+  alive: bool(),
+  invulnerable: bool(),
+  hash: str(),
+  bets: obj(BETS_FIELDS),
+};
+
+/** Ключи всех вариантов шага: по одному на вариант объединения. */
+type KeysOf<T> = T extends unknown ? keyof T : never;
+type StepKey = KeysOf<Step>;
+
+const STEP_SCHEMA: Record<StepKey, Node> = {
+  input: obj({
+    player: PLAYER_IDX(),
+    move: vec2(),
+    aim: vec2(),
+    buttons: listOf(BUTTONS),
+  }),
+  clearInput: obj({ player: PLAYER_IDX() }),
+  tick: int(0, 1_000_000),
+  place: obj({ player: PLAYER_IDX(), x: num(), y: num() }, ['x', 'y']),
+  spawn: obj({ type: oneOf(ENEMY_TYPES), x: num(), y: num(), count: int(1, MAX_ENEMIES) }, [
+    'type',
+    'x',
+    'y',
+  ]),
+  card: obj({ id: BET_ID, x: num(), y: num(), player: PLAYER_IDX() }, ['id', 'x', 'y']),
+  bet: obj({ id: BET_ID, player: PLAYER_IDX(), stake: int(0) }, ['id']),
+  chips: obj({ player: PLAYER_IDX(), amount: int(0) }, ['amount']),
+  appetite: obj({ player: PLAYER_IDX(), tier: oneOf(APPETITE_TIERS) }, ['tier']),
+  dropChip: obj({ x: num(), y: num() }, ['x', 'y']),
+  explode: obj({ x: num(), y: num() }, ['x', 'y']),
+  cashOut: obj({ id: BET_ID, player: PLAYER_IDX() }, ['id']),
+  deal: TRUE,
+  settle: TRUE,
+  clear: TRUE,
+  expect: obj(EXPECT_FIELDS),
+};
+
+const SCENARIO_FIELDS: Record<keyof Scenario, Node> = {
+  name: str(),
+  seed: int(0, 2 ** 31 - 1),
+  players: int(1, MAX_PLAYERS),
+  waves: bool(),
+  // Шаги разбираются отдельно: в сообщении обязан стоять их номер, а общий
+  // обход про номера ничего не знает.
+  steps: obj({}),
+};
+
+function typeName(v: unknown): string {
+  if (v === null) return 'null';
+  if (Array.isArray(v)) return 'список';
+  if (typeof v === 'number') return 'число';
+  if (typeof v === 'string') return 'строка';
+  if (typeof v === 'boolean') return 'логическое';
+  return typeof v;
+}
+
+/** Расстояние Левенштейна: словарь маленький, простого алгоритма достаточно. */
+function distance(a: string, b: string): number {
+  const prev = new Array<number>(b.length + 1);
+  const cur = new Array<number>(b.length + 1);
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    cur[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+    }
+    for (let j = 0; j <= b.length; j++) prev[j] = cur[j];
+  }
+  return prev[b.length];
+}
+
+/**
+ * Подсказка по ближайшему известному имени.
+ *
+ * Ради неё строгая проверка и затевалась: «неизвестное поле heart» экономит
+ * минуту, «возможно, hearts» — экономит поход в исходники.
+ */
+function hint(word: string, known: readonly string[]): string {
+  let best = '';
+  let bestD = 3;
+  for (const k of known) {
+    const d = distance(word.toLowerCase(), k.toLowerCase());
+    if (d < bestD) {
+      bestD = d;
+      best = k;
+    }
+  }
+  if (best) return ` — возможно, «${best}»`;
+  return known.length <= 12 ? ` (известны: ${known.join(', ')})` : '';
+}
+
+function fail(where: string, msg: string): never {
+  throw new Error(`${where}: ${msg}`);
+}
+
+function checkNode(v: unknown, n: Node, path: string, where: string): void {
+  switch (n.t) {
+    case 'number':
+      if (typeof v !== 'number' || !Number.isFinite(v)) {
+        fail(where, `${path}: нужно число, а не ${typeName(v)}`);
+      }
+      return;
+    case 'int':
+      if (typeof v !== 'number' || !Number.isInteger(v)) {
+        fail(where, `${path}: нужно целое, а не ${typeName(v)}`);
+      }
+      if (n.min !== undefined && v < n.min) fail(where, `${path}: ${v} меньше ${n.min}`);
+      if (n.max !== undefined && v > n.max) fail(where, `${path}: ${v} больше ${n.max}`);
+      return;
+    case 'string':
+      if (typeof v !== 'string' || v === '') {
+        fail(where, `${path}: нужна непустая строка, а не ${typeName(v)}`);
+      }
+      return;
+    case 'bool':
+      if (typeof v !== 'boolean') fail(where, `${path}: нужно true или false, а не ${typeName(v)}`);
+      return;
+    case 'true':
+      if (v !== true) fail(where, `${path}: значение обязано быть true`);
+      return;
+    case 'vec2':
+      if (
+        !Array.isArray(v) ||
+        v.length !== 2 ||
+        v.some((c) => typeof c !== 'number' || !Number.isFinite(c))
+      ) {
+        fail(where, `${path}: нужна пара чисел [x, y]`);
+      }
+      return;
+    case 'enum':
+      if (typeof v !== 'string') fail(where, `${path}: нужно имя, а не ${typeName(v)}`);
+      if (!n.values.includes(v.toLowerCase())) {
+        fail(where, `${path}: неизвестное имя «${v}»${hint(v, n.values)}`);
+      }
+      return;
+    case 'enumList':
+      if (!Array.isArray(v)) fail(where, `${path}: нужен список имён, а не ${typeName(v)}`);
+      v.forEach((c, i) => checkNode(c, { t: 'enum', values: n.values }, `${path}[${i}]`, where));
+      return;
+    default: {
+      if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+        fail(where, `${path}: нужен объект, а не ${typeName(v)}`);
+      }
+      const o = v as Record<string, unknown>;
+      const known = Object.keys(n.fields);
+      for (const k of Object.keys(o)) {
+        const f = n.fields[k];
+        if (f === undefined) fail(where, `${path}: неизвестное поле «${k}»${hint(k, known)}`);
+        checkNode(o[k], f, `${path}.${k}`, where);
+      }
+      for (const k of n.need ?? []) {
+        if (o[k] === undefined) fail(where, `${path}: нет обязательного поля «${k}»`);
+      }
+    }
+  }
+}
+
+/** Шаг обязан быть объектом ровно с одним известным ключом. */
+function checkStep(st: unknown, n: number, source: string): void {
+  const where = `${source}: шаг ${n + 1}`;
+  if (typeof st !== 'object' || st === null || Array.isArray(st)) {
+    fail(where, `шаг обязан быть объектом, а не ${typeName(st)}`);
+  }
+  const keys = Object.keys(st as Record<string, unknown>);
+  const known = Object.keys(STEP_SCHEMA);
+  if (keys.length === 0) fail(where, `пустой шаг: нужен ровно один ключ из ${known.join(', ')}`);
+  for (const k of keys) {
+    if (!(k in STEP_SCHEMA)) fail(where, `неизвестный ключ шага «${k}»${hint(k, known)}`);
+  }
+  if (keys.length > 1) {
+    // Два действия в одном шаге неоднозначны по порядку, а протокол обязан
+    // читаться сверху вниз ровно так, как исполняется.
+    fail(where, `сразу несколько действий (${keys.join(', ')}): нужен ровно один ключ`);
+  }
+  const key = keys[0] as StepKey;
+  checkNode((st as Record<string, unknown>)[key], STEP_SCHEMA[key], key, where);
 }
 
 function buttonMask(names: readonly string[]): number {
@@ -182,7 +594,7 @@ function nthEnemy(s: SimState, n: number): number {
   return -1;
 }
 
-function checkEnemy(s: SimState, e: NonNullable<Expectation['enemy']>): string[] {
+function checkEnemy(s: SimState, e: EnemyExpectation): string[] {
   const out: string[] = [];
   const n = e.index ?? 0;
   const i = nthEnemy(s, n);
@@ -202,6 +614,127 @@ function checkEnemy(s: SimState, e: NonNullable<Expectation['enemy']>): string[]
   return out;
 }
 
+/** Номер пари по идентификатору: сценарий называет пари, а не индекс слота. */
+function betIndex(id: string): number {
+  const n = BETS.findIndex((b) => b.id === id);
+  if (n < 0) throw new Error(`неизвестное пари «${id}»`);
+  return n;
+}
+
+/** Слот, в котором у игрока лежит названное пари, или −1. */
+function betSlot(s: SimState, player: number, id: string): number {
+  const want = betIndex(id);
+  for (let i = 0; i < MAX_ACTIVE_BETS; i++) {
+    const k = player * MAX_ACTIVE_BETS + i;
+    if (s.aState[k] !== BetState.None && s.aBet[k] === want) return i;
+  }
+  return -1;
+}
+
+/**
+ * Раскладка на арене.
+ *
+ * «Каждому хватает хотя бы на одну» проверяется по МИНИМУМУ и МАКСИМУМУ среди
+ * игроков: средняя персональная карта на игрока — это ровно то число, которое
+ * остаётся верным на столе, где всё досталось одному.
+ */
+function checkCards(s: SimState, e: CardsExpectation): string[] {
+  const out: string[] = [];
+
+  if (e.total) push(out, checkRange('карт на арене', countActive(s.kActive, MAX_CARDS), e.total));
+  if (e.shared) {
+    let n = 0;
+    for (let i = 0; i < MAX_CARDS; i++) if (s.kActive[i] && s.kOwner[i] === SHARED) n++;
+    push(out, checkRange('общих карт', n, e.shared));
+  }
+  if (e.perPlayer) {
+    for (let p = 0; p < s.playerCount; p++) {
+      let n = 0;
+      for (let i = 0; i < MAX_CARDS; i++) if (s.kActive[i] && s.kOwner[i] === p) n++;
+      push(out, checkRange(`персональных карт игрока ${p}`, n, e.perPlayer));
+    }
+  }
+  if (e.owner !== undefined) {
+    if (e.id === undefined)
+      return [...out, 'владелец задан без «id»: непонятно, о какой карте речь'];
+    const bet = betIndex(e.id);
+    const want = CARD_OWNERS[e.owner.toLowerCase()];
+    let found = -2;
+    for (let i = 0; i < MAX_CARDS; i++) {
+      if (s.kActive[i] && s.kBet[i] === bet) {
+        found = s.kOwner[i];
+        break;
+      }
+    }
+    if (found === -2) out.push(`карты «${e.id}» на арене нет`);
+    else if (found !== want) {
+      const actual = Object.keys(CARD_OWNERS).find((k) => CARD_OWNERS[k] === found) ?? found;
+      out.push(`владелец карты «${e.id}» = ${String(actual)}, ожидался ${e.owner}`);
+    }
+  } else if (e.id !== undefined) {
+    const bet = betIndex(e.id);
+    let on = false;
+    for (let i = 0; i < MAX_CARDS; i++) if (s.kActive[i] && s.kBet[i] === bet) on = true;
+    if (!on) out.push(`карты «${e.id}» на арене нет`);
+  }
+  return out;
+}
+
+function checkBets(s: SimState, e: BetsExpectation, player: number): string[] {
+  const out: string[] = [];
+
+  if (e.active) {
+    let n = 0;
+    for (let i = 0; i < MAX_ACTIVE_BETS; i++) {
+      if (s.aState[player * MAX_ACTIVE_BETS + i] === BetState.Active) n++;
+    }
+    push(out, checkRange(`активных пари у игрока ${player}`, n, e.active));
+  }
+  if (e.cardsOnArena) {
+    push(out, checkRange('карт на арене', countActive(s.kActive, MAX_CARDS), e.cardsOnArena));
+  }
+  // Счётчики забега — не про конкретное пари, поэтому проверяются до поиска
+  // слота: «взято три, выиграно одно» осмысленно и тогда, когда слоты пусты.
+  if (e.taken) push(out, checkRange('пари взято', s.meta[Meta.BetsTaken], e.taken));
+  if (e.won) push(out, checkRange('пари выиграно', s.meta[Meta.BetsWon], e.won));
+  if (e.lost) push(out, checkRange('пари проиграно', s.meta[Meta.BetsLost], e.lost));
+  if (e.cashed) push(out, checkRange('пари обналичено', s.meta[Meta.BetsCashed], e.cashed));
+
+  if (e.id === undefined) return out;
+
+  const n = betSlot(s, player, e.id);
+  if (n < 0) {
+    // Слота нет — это провал только там, где сценарий ждал состояния. Ждать
+    // «none» от несуществующего пари законно: его и правда нет.
+    const wantNone = e.state !== undefined && BET_STATES[e.state.toLowerCase()] === BetState.None;
+    if (!wantNone) out.push(`пари «${e.id}» у игрока ${player} нет`);
+    return out;
+  }
+  const k = player * MAX_ACTIVE_BETS + n;
+
+  if (e.state !== undefined) {
+    const want = BET_STATES[e.state.toLowerCase()];
+    if (want === undefined) throw new Error(`неизвестное состояние пари «${e.state}»`);
+    if (s.aState[k] !== want) {
+      const actual = Object.keys(BET_STATES).find((key) => BET_STATES[key] === s.aState[k]);
+      out.push(`пари «${e.id}»: ${String(actual)}, ожидалось ${e.state}`);
+    }
+  }
+  if (e.progressPct) {
+    const q = (progressOf(s, player, n) * 100) / FX_ONE;
+    push(out, checkRange(`прогресс пари «${e.id}», %`, q, e.progressPct));
+  }
+  if (e.nearMissPct) {
+    const q = (nearMissOf(s, player, n) * 100) / FX_ONE;
+    push(out, checkRange(`near-miss пари «${e.id}», %`, q, e.nearMissPct));
+  }
+  if (e.counter) push(out, checkRange(`счётчик пари «${e.id}»`, s.aCounter[k], e.counter));
+  if (e.cashOut) {
+    push(out, checkRange(`выплата за «Забрать» «${e.id}»`, cashOutValue(s, player, n), e.cashOut));
+  }
+  return out;
+}
+
 function checkExpectation(
   s: SimState,
   e: Expectation,
@@ -217,6 +750,8 @@ function checkExpectation(
   }
   if (e.kills) push(out, checkRange('убито врагов', s.meta[Meta.Kills], e.kills));
   if (e.enemy) out.push(...checkEnemy(s, e.enemy));
+  if (e.cards) out.push(...checkCards(s, e.cards));
+  if (e.bets) out.push(...checkBets(s, e.bets, e.player ?? 0));
 
   const i = e.player ?? 0;
   if (i >= s.playerCount) return [`игрока ${i} нет: в забеге ${s.playerCount}`];
@@ -304,6 +839,48 @@ export function runScenario(sc: Scenario): ScenarioResult {
         for (let n = 0; n < (st.spawn.count ?? 1); n++) {
           spawnEnemy(s, type, fromFloat(st.spawn.x), fromFloat(st.spawn.y));
         }
+      } else if ('card' in st) {
+        putCard(
+          s,
+          betIndex(st.card.id),
+          st.card.player ?? SHARED,
+          s.tick + CARD.lifeTicks,
+          fromFloat(st.card.x),
+          fromFloat(st.card.y),
+        );
+      } else if ('bet' in st) {
+        const p = st.bet.player ?? 0;
+        const stake = st.bet.stake ?? 10;
+        // Кон никогда не превышает кошелёк — Туз в кредит не принимает
+        // (GDD §11). Сценарий, ставящий больше, чем есть, проверял бы
+        // экономику, которой не бывает, поэтому это ошибка сценария.
+        if (stake > s.pChips[p]) {
+          throw new Error(`кон ${stake} больше кошелька игрока ${p} (${s.pChips[p]})`);
+        }
+        if (!takeBet(s, p, betIndex(st.bet.id), stake)) {
+          throw new Error(`пари «${st.bet.id}» не взялось: лимит активных пари`);
+        }
+        // Кон списывается и здесь: в игре его снимает подбор карты, и
+        // сценарий, обошедший карту, не должен получать пари даром — иначе
+        // он проверяет экономику, которой не бывает.
+        s.pChips[p] -= stake;
+      } else if ('chips' in st) {
+        s.pChips[st.chips.player ?? 0] = st.chips.amount;
+      } else if ('appetite' in st) {
+        s.pAppetite[st.appetite.player ?? 0] = APPETITE_TIERS[st.appetite.tier.toLowerCase()];
+      } else if ('dropChip' in st) {
+        dropChip(s, fromFloat(st.dropChip.x), fromFloat(st.dropChip.y));
+      } else if ('explode' in st) {
+        explode(s, fromFloat(st.explode.x), fromFloat(st.explode.y), -1);
+      } else if ('cashOut' in st) {
+        const p = st.cashOut.player ?? 0;
+        const n = betSlot(s, p, st.cashOut.id);
+        if (n < 0) throw new Error(`пари «${st.cashOut.id}» у игрока ${p} нет`);
+        cashOut(s, p, n);
+      } else if ('deal' in st) {
+        dealCards(s);
+      } else if ('settle' in st) {
+        settleBets(s);
       } else if ('clear' in st) {
         clearArena(s);
       } else {
@@ -320,7 +897,14 @@ export function runScenario(sc: Scenario): ScenarioResult {
   return { name: sc.name, ok: failures.length === 0, ticks: s.tick, hash: hashHex(s), failures };
 }
 
-/** Разбор с внятной ошибкой: сценарии правят руками, и опечатки неизбежны. */
+/**
+ * Разбор со строгой проверкой структуры.
+ *
+ * Сценарии правят руками, и опечатки неизбежны — но опечатка обязана валить
+ * разбор, а не пропускаться молча. Молча пропущенное поле ожидания превращает
+ * сценарий в зелёный прогон, не проверяющий ничего: это хуже отсутствия
+ * сценария, потому что выглядит покрытием (DEVLOOP §5, §6А).
+ */
 export function parseScenario(json: string, source: string): Scenario {
   let o: unknown;
   try {
@@ -331,8 +915,21 @@ export function parseScenario(json: string, source: string): Scenario {
     // глазами.
     throw new Error(`${source}: не разбирается как JSON — ${String(e)}`, { cause: e });
   }
-  const sc = o as Partial<Scenario>;
-  if (typeof sc.name !== 'string' || !sc.name) throw new Error(`${source}: нет поля name`);
-  if (!Array.isArray(sc.steps)) throw new Error(`${source}: нет массива steps`);
-  return sc as Scenario;
+  if (typeof o !== 'object' || o === null || Array.isArray(o)) {
+    fail(source, `сценарий обязан быть объектом, а не ${typeName(o)}`);
+  }
+
+  const raw = o as Record<string, unknown>;
+  const known = Object.keys(SCENARIO_FIELDS);
+  for (const k of Object.keys(raw)) {
+    if (!(k in SCENARIO_FIELDS)) fail(source, `неизвестное поле сценария «${k}»${hint(k, known)}`);
+  }
+  if (typeof raw.name !== 'string' || !raw.name) throw new Error(`${source}: нет поля name`);
+  if (!Array.isArray(raw.steps)) throw new Error(`${source}: нет массива steps`);
+  for (const k of ['seed', 'players', 'waves'] as const) {
+    if (raw[k] !== undefined) checkNode(raw[k], SCENARIO_FIELDS[k], k, source);
+  }
+  raw.steps.forEach((st, i) => checkStep(st, i, source));
+
+  return raw as unknown as Scenario;
 }

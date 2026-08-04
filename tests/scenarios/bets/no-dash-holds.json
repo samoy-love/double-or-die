@@ -1,0 +1,34 @@
+{
+  "name": "«Без рывка» держится, пока рывка не было",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    {
+      "chips": {
+        "amount": 200
+      }
+    },
+    {
+      "bet": {
+        "id": "no_dash",
+        "stake": 10
+      }
+    },
+    {
+      "input": {
+        "move": [1, 0]
+      }
+    },
+    {
+      "tick": 180
+    },
+    {
+      "expect": {
+        "bets": {
+          "id": "no_dash",
+          "state": "active"
+        }
+      }
+    }
+  ]
+}

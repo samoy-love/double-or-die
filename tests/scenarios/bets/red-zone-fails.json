@@ -1,0 +1,35 @@
+{
+  "name": "«Не заходи в красную зону» срывается при заходе в неё",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    {
+      "chips": {
+        "amount": 200
+      }
+    },
+    {
+      "bet": {
+        "id": "no_red_zone",
+        "stake": 10
+      }
+    },
+    {
+      "place": {
+        "x": 960,
+        "y": 540
+      }
+    },
+    {
+      "tick": 2
+    },
+    {
+      "expect": {
+        "bets": {
+          "id": "no_red_zone",
+          "state": "lost"
+        }
+      }
+    }
+  ]
+}

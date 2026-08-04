@@ -1,0 +1,20 @@
+{
+  "name": "«Не заходи в красную зону» засчитывается, если игрок в неё не заходил",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "clear": true },
+    { "chips": { "amount": 100 } },
+    { "bet": { "id": "no_red_zone", "stake": 10 } },
+    { "place": { "x": 200, "y": 200 } },
+    { "tick": 180 },
+    { "expect": { "bets": { "id": "no_red_zone", "state": "active" } } },
+    { "settle": true },
+    {
+      "expect": {
+        "bets": { "id": "no_red_zone", "state": "won" },
+        "chips": { "min": 110, "max": 110 }
+      }
+    }
+  ]
+}

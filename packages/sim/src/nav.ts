@@ -49,18 +49,12 @@
  */
 
 import { hitsColumn } from './arena';
-import { ARENA_PAD } from './config';
+import { ARENA_PAD, NAV } from './config';
 import { type Fx, fromInt, sub } from './fixed';
 import { MAX_PLAYERS, type SimState, EntityFlag } from './state';
 
-/**
- * Сторона клетки сетки в условных единицах.
- *
- * Шестьдесят — компромисс, купленный размерами: игрок радиусом 18 проходит в
- * щель между колоннами, а сетка мельче удвоила бы её стоимость, ничего не
- * добавив: колонны в шаблонах кратны шестидесяти.
- */
-export const CELL = 60;
+/** Сторона клетки сетки. Число живёт в конфиге: оно влияет на движение. */
+const CELL = NAV.cell;
 
 /** Потолок сетки: арена растёт с составом, 4 игрока дают 2380×1338. */
 const MAX_COLS = 48;
@@ -112,14 +106,8 @@ let gridKey = -1;
  */
 let owner: SimState | null = null;
 
-/**
- * Как часто пересчитывать поле.
- *
- * За десять тиков игрок проходит 53 единицы — меньше клетки, то есть поток
- * успевает устареть ровно на ту величину, которой не видно. Совпадает с
- * частотой решений ИИ (6 Гц) не случайно: чаще некому пользоваться.
- */
-const REBUILD_EVERY = 10;
+/** Как часто пересчитывать поле. Обоснование числа — в конфиге. */
+const REBUILD_EVERY = NAV.rebuildEvery;
 
 /** Тик прошлого вызова: по нему видно перемотку времени назад. */
 let lastTick = -1;
@@ -150,7 +138,7 @@ function buildGrid(s: SimState): void {
   cols = Math.min(MAX_COLS, Math.ceil((s.arenaW >> 16) / CELL));
   rows = Math.min(MAX_ROWS, Math.ceil((s.arenaH >> 16) / CELL));
 
-  const body = fromInt(24);
+  const body = NAV.bodyRadius;
   const pad = ARENA_PAD;
 
   for (let cy = 0; cy < rows; cy++) {
