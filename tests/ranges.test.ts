@@ -17,16 +17,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import {
-  ARENA_H,
-  ARENA_W,
-  fromInt,
-  FX_ONE,
-  length,
-  mul,
-  PLAYER,
-  toFloat,
-} from '../packages/sim/src/index';
+import { ARENA_H, ARENA_W, fromInt, FX_ONE, length, mul, PLAYER, toFloat } from '@dod/sim';
 
 /** Потолок целой части Q16.16. */
 const FX_MAX_INT = 32767;

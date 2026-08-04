@@ -12,7 +12,7 @@
  * тест лучше не привязывать.
  */
 
-import { EntityFlag, type SimState } from '../../sim/src/index';
+import { EntityFlag, type SimState } from '@dod/sim';
 
 export interface SimEvent {
   tick: number;

@@ -7,8 +7,7 @@
  */
 
 import {
-  APPETITE_MASK,
-  APPETITE_SHIFT,
+  withAppetite,
   checkInvariants,
   clearArena,
   createState,
@@ -25,9 +24,9 @@ import {
   step,
   TICK_HZ,
   toFloat,
-} from '../../sim/src/index';
-import { ReplayRecorder } from '../../sim/src/replay';
-import { CONFIG_VERSION } from '../../shared/src/index';
+} from '@dod/sim';
+import { ReplayRecorder } from '@dod/sim/replay';
+import { CONFIG_VERSION } from '@dod/shared';
 import { Audio } from './audio';
 import { EventLog } from './events';
 import { Feedback } from './feedback';
@@ -85,6 +84,9 @@ export class GameLoop {
     // Звук включается по первому вводу: до жеста браузер его не разрешает,
     // и попытка запуститься на загрузке даёт навсегда молчащую вкладку.
     this.input.onFirstInput(() => this.audio.unlock());
+    // Пауза «везде и всегда» (UX §2). Живёт в клиенте, а не в кадре ввода:
+    // она останавливает часы, а не симуляцию, и в реплей ей ехать нечем.
+    this.input.onPause(() => (this.paused ? this.play() : this.pause()));
   }
 
   private makeRecorder(): ReplayRecorder {
@@ -125,6 +127,13 @@ export class GameLoop {
 
   get isPaused(): boolean {
     return this.paused;
+  }
+
+  /** Кого позвать, когда инвариант остановил симуляцию. */
+  private halted: ((message: string, seed: number, tick: number) => void) | null = null;
+
+  onHalt(fn: (message: string, seed: number, tick: number) => void): void {
+    this.halted = fn;
   }
 
   /**
@@ -242,9 +251,17 @@ export class GameLoop {
     out.moveY = frame.moveY;
     out.aimX = frame.aimX;
     out.aimY = frame.aimY;
-    out.buttons =
-      (frame.buttons & ~(APPETITE_MASK << APPETITE_SHIFT)) |
-      ((tier & APPETITE_MASK) << APPETITE_SHIFT);
+    /*
+     * Укладываем тир той же функцией, что и живой ввод.
+     *
+     * Своя арифметика по битам здесь уже стоила дефекта: кодировка сдвинута на
+     * единицу (ноль в битах — «игрок молчит», иначе «Скромно» неотличимо от
+     * отпущенной кнопки), а этот путь остался на прямой записи номера — и
+     * отладочный `setAppetite(0, 2)` давал тир 1. Тесты этого не поймали:
+     * они ходят через маску, а не через подмену. Одна функция на оба пути —
+     * единственная защита от повторения.
+     */
+    out.buttons = withAppetite(frame.buttons, tier);
     return out;
   }
 
@@ -271,7 +288,14 @@ export class GameLoop {
       const frame =
         override ??
         (i === 0
-          ? this.input.poll(toArenaFloat(this.state.pX[0]), toArenaFloat(this.state.pY[0]))
+          ? this.input.poll(
+              toArenaFloat(this.state.pX[0]),
+              toArenaFloat(this.state.pY[0]),
+              // Текущий тир кона — из состояния: защёлка живёт там, и
+              // относительный выбор (крестовина, колесо, `Z`) обязан считаться
+              // от значения, которое действительно в силе.
+              this.state.pAppetite[0],
+            )
           : EMPTY);
       inputs[i] = this.withAppetite(i, frame);
     }
@@ -310,6 +334,17 @@ export class GameLoop {
       } catch (e) {
         logInvariant(String(e), this.state.seed, this.state.tick);
         this.pause();
+        /*
+         * И говорим об этом НА ЭКРАНЕ, а не только в консоли.
+         *
+         * Запись в консоли писалась для агента, а останавливается игра у
+         * человека — и человек в devtools не пойдёт. Со стороны остановка
+         * выглядит как замерший кадр без причины: на экране расчёта её
+         * прочитали как «экран, который невозможно пропустить», и вечер ушёл
+         * на поиски несуществующей кнопки. Слушатель, а не прямой вызов
+         * оверлея: цикл не знает про интерфейс и знать не должен.
+         */
+        this.halted?.(String(e), this.state.seed, this.state.tick);
       }
     }
   }
@@ -389,6 +424,11 @@ export class GameLoop {
   /** Снимок кадра сеткой средних цветов: см. `Renderer.frameGrid`. */
   frameGrid(cols: number, rows: number): number[][] {
     return this.renderer.frameGrid(() => this.renderOnce(), cols, rows);
+  }
+
+  /** Сколько фигур не влезло в батч: потолок кадра обязан быть виден. */
+  get droppedShapes(): number {
+    return this.renderer.lastDropped;
   }
 
   get shapeCount(): number {

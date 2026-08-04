@@ -3,11 +3,40 @@
   "seed": 1,
   "players": 1,
   "steps": [
-    { "place": { "player": 0, "x": 300, "y": 300 } },
-    { "spawn": { "type": "клин", "x": 1400, "y": 800 } },
-    { "tick": 1 },
-    { "expect": { "chips": { "max": 0 } } },
-    { "tick": 400 },
-    { "expect": { "chipsOnFloor": { "max": 0 } } }
+    {
+      "place": {
+        "player": 0,
+        "x": 300,
+        "y": 300
+      }
+    },
+    {
+      "spawn": {
+        "type": "клин",
+        "x": 1400,
+        "y": 800
+      }
+    },
+    {
+      "tick": 1
+    },
+    {
+      "expect": {
+        "chips": {
+          "min": 30,
+          "max": 30
+        }
+      }
+    },
+    {
+      "tick": 400
+    },
+    {
+      "expect": {
+        "chipsOnFloor": {
+          "max": 0
+        }
+      }
+    }
   ]
 }

@@ -12,11 +12,11 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { pickBark, severityOf } from '../packages/client/src/barks';
+import { pickBark, severityOf } from '@dod/client/barks';
 import {
   AceGesture,
   APPETITE,
-  APPETITE_SHIFT,
+  withAppetite,
   BETS,
   BetProgress,
   BetState,
@@ -37,6 +37,7 @@ import {
   WAVE,
   cashOut,
   cashOutValue,
+  checkInvariants,
   createState,
   damagePlayer,
   dealCards,
@@ -59,7 +60,7 @@ import {
   toFloat,
   type InputFrame,
   type SimState,
-} from '../packages/sim/src/index';
+} from '@dod/sim';
 
 const CX = 960;
 const CY = 540;
@@ -461,10 +462,23 @@ describe('расчёт комнаты', () => {
       const card = placeCard(s, betIndex('no_dash'), SHARED, s.tick + CARD.lifeTicks);
       s.pX[0] = s.kX[card];
       s.pY[0] = s.kY[card];
-      // Тир едет двумя битами маски: 0 — скромно, 1 — нормально, 2 — по-крупному.
-      run(s, 1, frame({ buttons: Btn.Take | (tier << APPETITE_SHIFT) }));
+      // Тир едет двумя битами маски СО СДВИГОМ НА ЕДИНИЦУ: ноль означает
+      // «игрок молчит», иначе защёлка не отличила бы явно выбранное «Скромно»
+      // от отпущенной крестовины — и самый нужный в начале забега тир стал бы
+      // невыбираемым. Укладывает `withAppetite`, читает `appetiteOf`.
+      run(s, 1, frame({ buttons: withAppetite(Btn.Take, tier) }));
       expect(s.aStake[0], `тир ${tier}`).toBe(APPETITE[tier]);
     }
+  });
+
+  it('«Скромно» выбирается ЯВНО, а не только молчанием', () => {
+    const s = arena(1, 500);
+    // Уходим на верхний тир, потом возвращаемся на нижний — именно этот путь
+    // и был закрыт: запрошенный ноль ядро принимало за «ничего не нажато».
+    run(s, 1, frame({ buttons: withAppetite(0, 2) }));
+    expect(s.pAppetite[0]).toBe(2);
+    run(s, 1, frame({ buttons: withAppetite(0, 0) }));
+    expect(s.pAppetite[0], 'спуск на «Скромно» проигнорирован').toBe(0);
   });
 });
 
@@ -510,10 +524,50 @@ describe('жесты Туза', () => {
     expect(s.meta[Meta.AceGesture]).toBe(AceGesture.Applaud);
   });
 
-  it('без тела на арене жеста нет', () => {
+  /**
+   * Событие, достойное реакции, ПРИВОДИТ Туза — он не комментирует из-за кадра.
+   *
+   * Пока `gesture()` просто выходил при пустой арене, четыре жеста из шести не
+   * срабатывали ни разу: замер на пяти минутах игры двумя ботами давал Туза на
+   * арене 7% времени и ровно два вида жестов. «Комедия из правил» (GDD §17А)
+   * молчала почти весь бой, притом что весь словарь барков был написан.
+   */
+  it('провал при пустой арене выводит Туза, а не пропадает', () => {
+    const s = arena();
+    bet(s, 'no_damage');
+    expect(s.meta[Meta.AceX], 'Туз уже на арене — проверка ни о чём').toBe(0);
+
+    failBet(s, 0, 'no_damage');
+    expect(s.meta[Meta.AceX], 'событие не вывело Туза').not.toBe(0);
+    expect(s.meta[Meta.AceGesture]).toBe(AceGesture.Applaud);
+
+    // Тело приезжает с тем же телеграфом, что у подброса: реакция с
+    // опозданием на полсекунды честнее реакции из ниоткуда.
+    expect(s.meta[Meta.AceGestureUntil]).toBeGreaterThan(s.tick + CARD.gestureTicks);
+  });
+
+  it('выход «на настроение» тратится один раз за комнату', () => {
     const s = arena();
     bet(s, 'no_damage');
     failBet(s, 0, 'no_damage');
+    const first = s.meta[Meta.AceX];
+    expect(first).not.toBe(0);
+
+    // Дожидаемся ухода и пробуем снова: бюджет выходов исчерпан.
+    run(s, CARD.aceTelegraphTicks + CARD.aceStayTicks + CARD.aceCameoGapTicks + 2);
+    expect(s.meta[Meta.AceX], 'не ушёл').toBe(0);
+    bet(s, 'no_dash');
+    failBet(s, 0, 'no_dash');
+    expect(s.meta[Meta.AceX], 'вышел второй раз за ту же комнату').toBe(0);
+  });
+
+  it('пассивные жесты не зовут Туза: выход берегут для события', () => {
+    const s = arena();
+    // Скука верна всё время, пока верна: дай ей звать — и единственный выход
+    // уйдёт на фон, а аплодисменты провалу не случатся уже никогда.
+    s.meta[Meta.LastBetRoom] = s.meta[Meta.Room] - CARD.boredomRooms;
+    run(s, 5);
+    expect(s.meta[Meta.AceX]).toBe(0);
     expect(s.meta[Meta.AceGesture]).toBe(AceGesture.None);
   });
 
@@ -531,6 +585,61 @@ describe('жесты Туза', () => {
     s.meta[Meta.DeathStreak] = 5;
     startRoom(s, 2);
     expect(s.meta[Meta.DeathStreak]).toBe(0);
+  });
+
+  /*
+   * Расчёт комнаты не имеет права оставить жест без тела.
+   *
+   * `startRoom` сначала считает прошлую комнату, а потом раздаёт карты. Расчёт
+   * срывает недожатые пари, каждый срыв зовёт жест, и жест выводит Туза на
+   * арену — а раздача двумя строками ниже убирает присутствие. Пока она не
+   * убирала заодно и жест, состояние выходило запрещённым: тела нет, жест
+   * играется. В dev-сборке инвариант останавливал цикл прямо на экране
+   * расчёта, и игрок оставался с кадром, который нечем пропустить; ботом это
+   * ловилось в каждом пятом забеге.
+   *
+   * Проверяется инвариантом, а не сравнением поля: правило записано именно
+   * там, и тест обязан падать от того же, от чего падает игра.
+   */
+  it('Туз выходит принимать расчёт и хлопает провалу', () => {
+    const s = arena();
+    // «Подрывник» считает до трёх и к расчёту провален — значит будут
+    // аплодисменты, и хлопать обязано ТЕЛО: жест без тела запрещён.
+    bet(s, 'demolitionist');
+    startRoom(s, 2);
+    expect(s.meta[Meta.AceX], 'не вышел к расчёту').not.toBe(0);
+    expect(s.meta[Meta.AceGesture]).toBe(AceGesture.Applaud);
+    expect(() => checkInvariants(s)).not.toThrow();
+
+    // И уходит сам, унося жест: расчёт длиннее его выхода, поэтому уход виден.
+    run(s, CARD.aceTelegraphTicks + CARD.aceStayTicks + 2);
+    expect(s.meta[Meta.AceX], 'остался стоять до конца паузы').toBe(0);
+    expect(s.meta[Meta.AceGesture]).toBe(AceGesture.None);
+    expect(() => checkInvariants(s)).not.toThrow();
+  });
+
+  it('к пустому расчёту Туз не выходит', () => {
+    const s = arena();
+    // Первая комната забега: считать нечего, панель расчёта не рисуется. Туз,
+    // пришедший к пустому столу, — та самая декорация вместо события.
+    startRoom(s, 2);
+    expect(s.meta[Meta.AceX]).toBe(0);
+    expect(s.meta[Meta.AceGesture]).toBe(AceGesture.None);
+  });
+
+  it('расчёт не съедает выход на реакцию в бою', () => {
+    const s = arena();
+    bet(s, 'demolitionist');
+    startRoom(s, 2);
+    // Расчёт занял один выход, подброс займёт второй — на реакцию боя обязан
+    // остаться третий, иначе событийные жесты снова становятся мёртвым кодом.
+    run(s, CARD.aceTelegraphTicks + CARD.aceStayTicks + CARD.aceCameoGapTicks + 2);
+    expect(s.meta[Meta.AceX], 'не ушёл после расчёта').toBe(0);
+    bet(s, 'no_dash');
+    failBet(s, 0, 'no_dash');
+    expect(s.meta[Meta.AceX], 'не пришёл на событие боя').not.toBe(0);
+    expect(s.meta[Meta.AceGesture]).toBe(AceGesture.Applaud);
+    expect(() => checkInvariants(s)).not.toThrow();
   });
 
   it('на пороге крупного выигрыша отворачивается', () => {
@@ -576,22 +685,22 @@ describe('жесты Туза', () => {
  */
 describe('барки', () => {
   it('чем хуже игроку, тем мягче реплика', () => {
-    const мягкая = pickBark(AceGesture.Applaud, 0, 1);
+    const soft = pickBark(AceGesture.Applaud, 0, 1);
     for (let occasion = 0; occasion < 10; occasion++) {
-      expect(pickBark(AceGesture.Applaud, occasion, 1)).toBe(мягкая);
+      expect(pickBark(AceGesture.Applaud, occasion, 1)).toBe(soft);
     }
     // Без беды в ход идут и дерзкие: иначе Туз одинаков весь забег.
-    const все = new Set<string>();
+    const seen = new Set<string>();
     for (let occasion = 0; occasion < 10; occasion++) {
-      все.add(pickBark(AceGesture.Applaud, occasion, 0));
+      seen.add(pickBark(AceGesture.Applaud, occasion, 0));
     }
-    expect(все.size).toBeGreaterThan(1);
+    expect(seen.size).toBeGreaterThan(1);
   });
 
   it('реплики идут по кругу, а не наугад', () => {
-    const первая = pickBark(AceGesture.Yawn, 0);
-    expect(pickBark(AceGesture.Yawn, 1)).not.toBe(первая);
-    expect(pickBark(AceGesture.Yawn, 3)).toBe(первая);
+    const first = pickBark(AceGesture.Yawn, 0);
+    expect(pickBark(AceGesture.Yawn, 1)).not.toBe(first);
+    expect(pickBark(AceGesture.Yawn, 3)).toBe(first);
   });
 
   it('у каждого жеста есть что сказать', () => {
@@ -637,7 +746,7 @@ describe('пари и схема ввода', () => {
     // исключений не содержит, а правило обязано работать до того, как первое
     // такое пари появится, — иначе его отсутствие заметят по жалобе.
     const spec = BETS[betIndex('no_dash')] as { schemeMask: number };
-    const было = spec.schemeMask;
+    const saved = spec.schemeMask;
     spec.schemeMask = 1 << InputScheme.Touch;
     try {
       for (let seed = 1; seed <= 20; seed++) {
@@ -652,29 +761,29 @@ describe('пари и схема ввода', () => {
         }
       }
     } finally {
-      spec.schemeMask = было;
+      spec.schemeMask = saved;
     }
   });
 
   it('на своей схеме то же пари выпадает', () => {
     const spec = BETS[betIndex('no_dash')] as { schemeMask: number };
-    const было = spec.schemeMask;
+    const saved = spec.schemeMask;
     spec.schemeMask = 1 << InputScheme.Touch;
     try {
-      let встретилось = false;
-      for (let seed = 1; seed <= 20 && !встретилось; seed++) {
+      let met = false;
+      for (let seed = 1; seed <= 20 && !met; seed++) {
         const s = createState(seed, 1);
         spawnPlayers(s);
         setSpawning(s, false);
         s.pScheme[0] = InputScheme.Gamepad;
         dealCards(s);
         for (let i = 0; i < MAX_CARDS; i++) {
-          if (s.kActive[i] && BETS[s.kBet[i]].id === 'no_dash') встретилось = true;
+          if (s.kActive[i] && BETS[s.kBet[i]].id === 'no_dash') met = true;
         }
       }
-      expect(встретилось).toBe(true);
+      expect(met).toBe(true);
     } finally {
-      spec.schemeMask = было;
+      spec.schemeMask = saved;
     }
   });
 
@@ -682,29 +791,29 @@ describe('пари и схема ввода', () => {
     // Обе стороны: конфликт взаимен, и генератор каталога делает маски
     // симметричными сам. Патчить одну сторону значило бы проверять не то
     // правило, которое работает в игре.
-    const рывок = BETS[betIndex('no_dash')] as { conflictMask: number };
-    const урон = BETS[betIndex('no_damage')] as { conflictMask: number };
-    const было = [рывок.conflictMask, урон.conflictMask];
-    рывок.conflictMask = 1 << betIndex('no_damage');
-    урон.conflictMask = 1 << betIndex('no_dash');
+    const dashBet = BETS[betIndex('no_dash')] as { conflictMask: number };
+    const damageBet = BETS[betIndex('no_damage')] as { conflictMask: number };
+    const saved = [dashBet.conflictMask, damageBet.conflictMask];
+    dashBet.conflictMask = 1 << betIndex('no_damage');
+    damageBet.conflictMask = 1 << betIndex('no_dash');
     try {
       for (let seed = 1; seed <= 20; seed++) {
         const s = createState(seed, 2);
         spawnPlayers(s);
         setSpawning(s, false);
         dealCards(s);
-        let естьРывок = false;
-        let естьУрон = false;
+        let hasDash = false;
+        let hasDamage = false;
         for (let i = 0; i < MAX_CARDS; i++) {
           if (!s.kActive[i]) continue;
-          if (BETS[s.kBet[i]].id === 'no_dash') естьРывок = true;
-          if (BETS[s.kBet[i]].id === 'no_damage') естьУрон = true;
+          if (BETS[s.kBet[i]].id === 'no_dash') hasDash = true;
+          if (BETS[s.kBet[i]].id === 'no_damage') hasDamage = true;
         }
-        expect(естьРывок && естьУрон).toBe(false);
+        expect(hasDash && hasDamage).toBe(false);
       }
     } finally {
-      рывок.conflictMask = было[0];
-      урон.conflictMask = было[1];
+      dashBet.conflictMask = saved[0];
+      damageBet.conflictMask = saved[1];
     }
   });
 });
@@ -717,21 +826,21 @@ describe('пари и схема ввода', () => {
  */
 describe('виды прогресса', () => {
   it('каждый вид прогресса представлен в каталоге и растёт от нуля', () => {
-    const виды = new Set(BETS.map((b) => b.progress));
-    expect(виды.has(BetProgress.Time)).toBe(true);
-    expect(виды.has(BetProgress.Counter)).toBe(true);
-    expect(виды.has(BetProgress.Threat)).toBe(true);
+    const kinds = new Set(BETS.map((b) => b.progress));
+    expect(kinds.has(BetProgress.Time)).toBe(true);
+    expect(kinds.has(BetProgress.Counter)).toBe(true);
+    expect(kinds.has(BetProgress.Threat)).toBe(true);
   });
 
   it('мёртвый игрок не выигрывает ничего', () => {
     const s = arena();
     const n = bet(s, 'no_damage');
     expect(n).toBeGreaterThanOrEqual(0);
-    const было = s.pChips[0];
+    const before = s.pChips[0];
     s.pFlags[0] &= ~EntityFlag.Alive;
     settleBets(s);
     expect(stateOf(s, n)).toBe(BetState.Lost);
-    expect(s.pChips[0]).toBe(было);
+    expect(s.pChips[0]).toBe(before);
   });
 });
 
@@ -745,15 +854,15 @@ describe('near-miss', () => {
     bet(s, 'no_damage');
     // Слот ищем по самому пари: помощник выше отдаёт первый активный, а их
     // тут уже два.
-    const урон = slotOf(s, 'no_damage');
+    const damageSlot = slotOf(s, 'no_damage');
     // Неуязвимость после появления снимается руками: предмет проверки —
     // near-miss, а не то, сколько кадров игрок бессмертен на старте.
     s.pInvulUntil[0] = 0;
     s.pFlags[0] &= ~EntityFlag.Invulnerable;
     damagePlayer(s, 0);
 
-    expect(stateOf(s, урон)).toBe(BetState.Lost);
-    const q = (nearMissOf(s, 0, урон) * 100) / FX_ONE;
+    expect(stateOf(s, damageSlot)).toBe(BetState.Lost);
+    const q = (nearMissOf(s, 0, damageSlot) * 100) / FX_ONE;
     // «Без урона» меряется зачищенной угрозой, а её на пустой арене нет:
     // near-miss честно нулевой, и это тоже число, а не отсутствие числа.
     expect(q).toBeGreaterThanOrEqual(0);
@@ -1064,14 +1173,14 @@ describe('формулы выплат', () => {
  */
 describe('экран расчёта', () => {
   /** Арена с волнами: расчёт кончается началом боя, а бой должен начаться. */
-  function бой(chips = 200): SimState {
+  function waveArena(chips = 200): SimState {
     const s = arena(1, chips);
     setSpawning(s, true);
     return s;
   }
 
   it('итоги живут всю паузу и уходят с первой волной', () => {
-    const s = бой();
+    const s = waveArena();
     const n = bet(s, 'no_damage');
     expect(n).toBeGreaterThanOrEqual(0);
 
@@ -1086,7 +1195,7 @@ describe('экран расчёта', () => {
   });
 
   it('пари, взятое во время расчёта, переживает начало боя', () => {
-    const s = бой();
+    const s = waveArena();
     startRoom(s, 2);
     const n = bet(s, 'no_dash');
     run(s, WAVE.roomGapTicks + 2);
@@ -1095,18 +1204,18 @@ describe('экран расчёта', () => {
   });
 
   it('расчёт пропускается кнопкой, но не раньше секунды', () => {
-    const s = бой();
+    const s = waveArena();
     startRoom(s, 2);
-    const принять = frame({ buttons: Btn.Accept });
+    const accept = frame({ buttons: Btn.Accept });
     // Раньше секунды кнопка молчит: зажатый ради автоогня триггер иначе
     // пролистывал бы near-miss, ради которого экран и существует.
-    run(s, 2, принять);
+    run(s, 2, accept);
     run(s, 2, frame());
-    run(s, 2, принять);
+    run(s, 2, accept);
     expect(s.meta[Meta.Wave]).toBe(0);
 
     run(s, WAVE.settleSkipAfterTicks, frame());
-    run(s, 2, принять);
+    run(s, 2, accept);
     expect(s.meta[Meta.Wave]).toBe(1);
   });
 });

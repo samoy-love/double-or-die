@@ -37,8 +37,8 @@ import {
   saveSnapshot,
   spawnPlayers,
   step,
-} from '../packages/sim/src/index';
-import { makeBot } from '../packages/tools/src/bots';
+} from '@dod/sim';
+import { makeBot } from '@dod/tools/bots';
 
 /**
  * Длина окна замера.

@@ -19,6 +19,7 @@ import {
   AceGesture,
   BETS,
   BetCategory,
+  BetId,
   BetProgress,
   BetState,
   MAX_ACTIVE_BETS,
@@ -32,6 +33,8 @@ import {
   EnemyPhase,
   EnemyType,
   EntityFlag,
+  FAIRNESS,
+  InputScheme,
   COLUMNS,
   FUSE,
   MAX_BULLETS,
@@ -43,10 +46,11 @@ import {
   PLAYER,
   WEDGE,
   arenaScale,
+  stakeFor,
   type SimState,
   toFloat,
-} from '../../sim/src/index';
-import type { Feedback } from './feedback';
+} from '@dod/sim';
+import { DEAL_LIFE, type Feedback } from './feedback';
 import type { Feel } from './feel';
 import { Shape, ShapeBatch } from './gl/batch';
 import { PALETTE, type Rgb } from './palette';
@@ -65,7 +69,46 @@ const STROKE = 4;
  */
 const HUD_DIGIT = 13;
 
+/** Тиров кона три: Скромно / Нормально / По-крупному (GDD §9.3). */
+const APPETITE_TIERS = 3;
+
+/**
+ * Плашка активного пари: полуширина подробной и сжатой, полувысота, зазор.
+ *
+ * Подробная плашка показывает сделку целиком — пари, множитель, кон и растущий
+ * куш, — но вчетвером их четыре штуки в колонке шириной 240 единиц, и подробных
+ * туда влезает одна. Остальные сжимаются до иконки с множителем: ровно то, что
+ * UX §4 и предписывает («не больше восьми видимых элементов, детали — по
+ * удержанию»). В соло и вдвоём места хватает всем, и сжимать нечего.
+ */
+const PLAQUE_WIDE = 44;
+const PLAQUE_TIGHT = 20;
+const PLAQUE_HALF_H = 25;
+const PLAQUE_GAP = 6;
+
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
+const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+/**
+ * Сколько строк покажет экран расчёта. Ноль — экрана нет.
+ *
+ * Одна функция на два места намеренно: по этому же признаку решается, рисовать
+ * Туза в общем слое или поверх затемнения. Две копии условия разъехались бы на
+ * первой же правке, и он оказался бы либо нарисован дважды, либо не нарисован
+ * вовсе — причём заметить это можно только глазами.
+ */
+function settlementRows(s: SimState): number {
+  if (s.meta[Meta.Wave] !== 0 || s.meta[Meta.NextWaveAt] === 0) return 0;
+  // Первая комната приходит с пустыми слотами, и затемнять кадр ради пустоты —
+  // только мешать.
+  let rows = 0;
+  for (let p = 0; p < s.playerCount; p++) {
+    for (let i = 0; i < MAX_ACTIVE_BETS; i++) {
+      if (s.aState[p * MAX_ACTIVE_BETS + i] !== BetState.None) rows++;
+    }
+  }
+  return rows;
+}
 
 export class Renderer {
   private readonly gl: WebGL2RenderingContext;
@@ -92,6 +135,16 @@ export class Renderer {
 
   /** Фигур в последнем кадре: по нему видно, во что упирается рендер. */
   lastShapeCount = 0;
+  /**
+   * Сколько фигур не поместилось в батч в последнем кадре.
+   *
+   * Батчер считал их с первого дня, но НАРУЖУ не отдавал — то есть счётчик,
+   * заведённый со словами «молчаливая потеря хуже честного счётчика», сам был
+   * молчаливым. Кадр за потолком в 8192 фигуры терял их без единого следа: ни
+   * в отладочном интерфейсе, ни в оверлее, ни в бенче. Обрезка, о которой
+   * никто не узнаёт, читается как «всё поместилось».
+   */
+  lastDropped = 0;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     const gl = canvas.getContext('webgl2', {
@@ -177,9 +230,9 @@ export class Renderer {
       // Буфер проверяется до отрисовки, и это не формальность: пока его
       // полноту не спросили, драйвер вправе не разложить вложения, и рисунок
       // уходит в никуда — снимок возвращается чёрным, а ошибки нет.
-      const статус = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
-      if (статус !== gl.FRAMEBUFFER_COMPLETE) {
-        throw new Error(`снимок кадра: буфер неполон (0x${статус.toString(16)})`);
+      const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+      if (status !== gl.FRAMEBUFFER_COMPLETE) {
+        throw new Error(`снимок кадра: буфер неполон (0x${status.toString(16)})`);
       }
       draw();
       // Дожидаемся, пока команды действительно выполнятся. Под программным
@@ -270,12 +323,15 @@ export class Renderer {
     batch.begin();
     this.drawFloor(arenaW, arenaH, s);
     this.drawCards(s);
-    this.drawAce(s);
+    // На расчёте Туз рисуется не здесь, а поверх затемнения (`drawSettlement`):
+    // под ним от него остаётся четверть непрозрачности и ничего больше.
+    if (settlementRows(s) === 0) this.drawAce(s);
     this.drawSpawnMarks(s);
     this.drawTelegraphs(s, alpha);
     this.drawChips(s);
     this.drawEnemies(s, alpha, fb);
     this.drawPlayers(s, alpha, fb);
+    this.drawDeals(s, fb);
     this.drawBullets(s, alpha);
     this.drawParticles(particles);
     this.drawHud(s, arenaW, arenaH, fb);
@@ -287,6 +343,7 @@ export class Renderer {
     const sx = (2 * scale) / canvas.width;
     const sy = (-2 * scale) / canvas.height;
     this.lastShapeCount = batch.size;
+    this.lastDropped = batch.dropped;
     batch.flush(
       sx,
       sy,
@@ -314,27 +371,7 @@ export class Renderer {
       b.push(Shape.Box, w / 2, y, w / 2, 1, 0, g.r, g.g, g.b, 1, 0, 0, 0, 0, 0);
     }
 
-    // Красная зона: урона не наносит, но пари предлагает от неё отказаться.
-    // Штриховка тут была бы правильнее сплошной заливки (двойное кодирование
-    // UX §4), но она приезжает вместе с шейдерным проходом в 0.12.0.
-    const rz = PALETTE.redZone;
-    b.push(
-      Shape.Circle,
-      toFloat(RED_ZONE.x) * k,
-      toFloat(RED_ZONE.y) * k,
-      toFloat(RED_ZONE.radius),
-      toFloat(RED_ZONE.radius),
-      0,
-      rz.r,
-      rz.g,
-      rz.b,
-      0.28,
-      3,
-      rz.r,
-      rz.g,
-      rz.b,
-      0.7,
-    );
+    this.drawRedZone(s);
 
     for (const c of COLUMNS) {
       b.push(
@@ -354,15 +391,55 @@ export class Renderer {
   }
 
   /**
-   * Карты пари: подложка, иконка категории и вертикальный луч.
+   * Красная зона — разметка пари, а не опасность, и рисуется только по делу.
+   *
+   * Два дефекта было сразу, и оба владелец увидел на первом же плейтесте.
+   *
+   * Первый: круг висел на полу ВСЕГДА, даже когда ни у кого не было пари «Не
+   * заходи в красную зону», — то есть игра размечала запрет, которого нет.
+   * Отсюда и вопрос «зачем он?»: правильный ответ на него — не подпись, а
+   * отсутствие круга. Зона выводится из состояния: она нужна, пока пари лежит
+   * картой на арене (решение принимают ДО нажатия X, значит и границу надо
+   * видеть до него) или уже активно у кого-то из игроков.
+   *
+   * Второй: заливка шла алым по яркости телеграфа, а алый в этой игре занят
+   * объявленной атакой (`PALETTE.danger`). Зона урона не наносит — она стоит
+   * фишек, а не сердец, — и читаться как угроза не имеет права: столп №5,
+   * читаемость превыше красоты. Поэтому глухой винный `PALETTE.redZone`,
+   * заливка вполсилы прежней и ровный контур без пульсации: пульсация здесь —
+   * язык «сейчас ударит», и занимать его нечем.
+   *
+   * Координаты НЕ масштабируются составом, в отличие от колонн: `inRedZone`
+   * в ядре сравнивает позицию с абсолютными `RED_ZONE.x/y`, и нарисованный со
+   * множителем круг вчетвером лежал бы не там, где срывается пари.
+   */
+  private drawRedZone(s: SimState): void {
+    if (!redZoneInPlay(s)) return;
+    const c = PALETTE.redZone;
+    const x = toFloat(RED_ZONE.x);
+    const y = toFloat(RED_ZONE.y);
+    const r = toFloat(RED_ZONE.radius);
+    this.batch.push(Shape.Circle, x, y, r, r, 0, c.r, c.g, c.b, 0.14, 3, c.r, c.g, c.b, 0.55);
+  }
+
+  /**
+   * Карты пари: подложка, иконка категории, вертикальный луч и подсветка.
    *
    * Луч — не украшение. Карта и фишка обе подбираются с пола, и путать их
    * нельзя (GDD §21): фишки мелкие, золотые, россыпью; карта крупная, с
-   * лучом, который виден сквозь толпу даже вчетвером на полной арене. За три
-   * секунды до истечения луч гаснет — предупреждение без единой надписи.
+   * лучом, который виден сквозь толпу даже вчетвером на полной арене.
+   *
+   * Подсветка — не украшение тем более. Карта не подбирается наездом: наезд
+   * подсвечивает, берут кнопкой (UX §2, правило ввода №2). Пока подсветки не
+   * было, второй половины этого правила не существовало вовсе — карта
+   * выглядела одинаково издали и под ногами, и на живом плейтесте её приняли
+   * за декорацию, «через которую можно пройти, и она ничего не делает».
+   * Текста в интерфейсе до стадии F2 нет намеренно, поэтому вся нагрузка
+   * ложится на форму и движение: масштаб, дыхание, кольцо и глиф кнопки.
    */
   private drawCards(s: SimState): void {
     const b = this.batch;
+    const pickup = toFloat(CARD.pickupRadius);
 
     for (let i = 0; i < MAX_CARDS; i++) {
       if (!s.kActive[i]) continue;
@@ -371,53 +448,191 @@ export class Renderer {
       const spec = BETS[s.kBet[i]];
       const colour = categoryColour(spec.category);
       const left = s.kDeadline[i] - s.tick;
-      const fading = left < toFloat(CARD.fadeTicks) * 0 + 180;
 
-      // Луч: узкая колонна света вверх от карты. Гаснет вместе со сроком.
-      if (!fading) {
-        b.push(Shape.Box, x, y - 150, 7, 150, 0, colour.r, colour.g, colour.b, 0.22, 0, 0, 0, 0, 0);
+      /*
+       * Последние три секунды карты читаются двумя признаками сразу.
+       *
+       * Луч и раньше «гас» — но исчезал разом, целиком, без предупреждения о
+       * предупреждении: только что стоял столб света, и вот его нет. Владелец
+       * на плейтесте не понял ни что это было, ни что оно значило. Теперь луч
+       * ОСЕДАЕТ: высота падает вместе с остатком срока, то есть сам столб и
+       * есть шкала времени, — и вдобавок мигает вместе с рамкой карты.
+       * Двойное кодирование здесь обязательно ровно потому, что надписи
+       * запрещены (UX §4).
+       *
+       * Мигание — 2 Гц, вдвое ниже потолка фотосенситивной безопасности в
+       * 3 Гц (UX §5), и это не полноэкранная вспышка, а предмет на полу.
+       */
+      const dying = left <= CARD.fadeTicks;
+      const share = dying ? Math.max(0, left / CARD.fadeTicks) : 1;
+      const blink = dying && (s.tick % 30) - 15 < 0;
+      const beamH = 150 * share;
+      if (beamH > 1) {
+        const beamA = dying ? (blink ? 0.5 : 0.1) : 0.22;
+        b.push(
+          Shape.Box,
+          x,
+          y - beamH,
+          7,
+          beamH,
+          0,
+          colour.r,
+          colour.g,
+          colour.b,
+          beamA,
+          0,
+          0,
+          0,
+          0,
+          0,
+        );
       }
 
-      const r = toFloat(CARD.radius);
+      /*
+       * Взять карту может не всякий, кто на ней стоит: персональная карта
+       * чужому не даётся (`kOwner`). Подсвечивать её тому, кто её не получит,
+       * значит врать кнопкой — а обещание кнопки и есть единственный текст,
+       * который в этой версии игроку показан.
+       */
+      let taker = -1;
+      for (let p = 0; p < s.playerCount; p++) {
+        if ((s.pFlags[p] & EntityFlag.Alive) === 0) continue;
+        if (s.kOwner[i] >= 0 && s.kOwner[i] !== p) continue;
+        const dx = toFloat(s.pX[p]) - x;
+        const dy = toFloat(s.pY[p]) - y;
+        if (dx * dx + dy * dy <= pickup * pickup) {
+          taker = p;
+          break;
+        }
+      }
+
+      // Дыхание подсвеченной карты: живое движение читается боковым зрением
+      // там, где не читается ни цвет, ни размер.
+      const breath = taker >= 0 ? 1.12 + Math.sin(s.tick * 0.14) * 0.05 : 1;
+      const r = toFloat(CARD.radius) * breath;
+      const edgeA = dying && !blink ? 0.4 : 1;
+      // Лицо карты чуть шире прежнего: на нём теперь стоит множитель, а
+      // множитель — обещание карты, и печатать его мельче цифр в HUD значит
+      // печатать его нечитаемым.
+      const fw = r * 0.86;
+      const fh = r * 1.04;
+
       // Подложка едина и кремова у всех категорий: цвет несут рамка и иконка.
       b.push(
         Shape.Box,
         x,
         y,
-        r * 0.72,
-        r,
+        fw,
+        fh,
         0,
         ...channels(PALETTE.card),
-        1,
+        edgeA,
         STROKE,
         colour.r,
         colour.g,
         colour.b,
-        1,
+        edgeA,
       );
-      // Иконка категории — форма, а не цвет: двойное кодирование обязательно.
-      b.push(
-        categoryShape(spec.category),
-        x,
-        y,
-        r * 0.34,
-        r * 0.34,
-        0,
-        colour.r,
-        colour.g,
-        colour.b,
-        1,
-        0,
-        0,
-        0,
-        0,
-        0,
+      // Пиктограмма ПАРИ, а не категории: «Без урона» и «Без рывка» обе из
+      // Стиля и с иконкой категории были неразличимы (см. `drawBetIcon`).
+      drawBetIcon(b, s.kBet[i], x, y - fh * 0.34, fh * 0.34, colour, PALETTE.card, edgeA);
+
+      /*
+       * Сделка сообщается ДО подбора, и на карте живёт ровно два числа.
+       *
+       * «Карта — это место на арене» (GDD §9.1): решение бежать за ней или нет
+       * и есть центральное решение игры, а принималось оно вслепую — на карте
+       * не было ни кона, ни множителя. Показываем то, без чего сделку не
+       * оценить: МНОЖИТЕЛЬ на лице карты (это её обещание, и место ему там же,
+       * где значение на игральной карте) и ЦЕНУ под картой, на полу, золотом —
+       * цена про кошелёк игрока, а не про карту, и путать эти две вещи нельзя.
+       *
+       * Больше не помещается ничего, и это не теснота, а иерархия яркости
+       * (GDD §21): карты стоят НИЖЕ снарядов и телеграфов, и третье число на
+       * полу начало бы спорить с боем за внимание. Возможная выплата
+       * сознательно не показана — она равна кону, умноженному на множитель, то
+       * есть уже сказана этими двумя числами.
+       */
+      drawMultiplier(
+        b,
+        spec.multiplier / FX_ONE,
+        x - fw * 0.66,
+        y + fh * 0.5,
+        fh * 0.26,
+        PALETTE.pupil,
+        edgeA,
       );
+
+      /*
+       * Цена — та, что спишется у того, кому карта достанется.
+       *
+       * `stakeFor` зависит от кошелька и аппетита, то есть у четверых она
+       * четыре разных числа. Персональная карта отвечает на вопрос сама,
+       * общая — только когда ответ однозначен: игрок на ней стоит или он за
+       * столом один. Иначе цены нет вовсе: «стоит 10» для чужого кошелька
+       * было бы ровно тем враньём, из-за которого игрок и не понимает сделку.
+       */
+      const payer =
+        s.kOwner[i] >= 0 ? s.kOwner[i] : taker >= 0 ? taker : s.playerCount === 1 ? 0 : -1;
+      if (payer >= 0) {
+        const ps = fh * 0.28;
+        const py = y + fh + ps * 1.9;
+        const ch = PALETTE.chip;
+        b.push(
+          Shape.Circle,
+          x - ps * 2.2,
+          py,
+          ps * 0.6,
+          ps * 0.6,
+          0,
+          ch.r,
+          ch.g,
+          ch.b,
+          edgeA * 0.9,
+          0,
+          0,
+          0,
+          0,
+          0,
+        );
+        drawNumber(b, stakeFor(s, payer), x + ps * 0.5, py, ps, ch, edgeA * 0.9);
+      }
       // Персональная карта помечена цветом своего игрока: чужую не взять.
       if (s.kOwner[i] >= 0) {
         const own = PALETTE.player[s.kOwner[i]] as Rgb;
         b.push(Shape.Ring, x, y, r * 1.25, r * 1.25, 0, 0, 0, 0, 0, 3, own.r, own.g, own.b, 0.9);
       }
+
+      if (taker >= 0) {
+        // Кольцо-ореол цветом взявшего: в коопе видно не только ЧТО можно
+        // взять, но и КОМУ. Остаётся ниже игроков и снарядов по яркости
+        // (GDD §21) — подсветка не имеет права спорить с боем.
+        const own = PALETTE.player[taker] as Rgb;
+        const halo = r * 1.55 + Math.sin(s.tick * 0.14) * 3;
+        b.push(Shape.Ring, x, y, halo, halo, 0, 0, 0, 0, 0, 3, own.r, own.g, own.b, 0.55);
+        this.drawTakeGlyph(x, y - r * 2.2, s.pScheme[taker]);
+      }
+    }
+  }
+
+  /**
+   * Глиф «чем берут»: буква X в оправе устройства.
+   *
+   * Оправа и есть весь язык: круг — кнопка геймпада, квадрат — клавиша, голое
+   * кольцо — тап по таче, где буквы нет вовсе. Схема берётся из состояния
+   * (`pScheme`), а туда её кладёт кадр ввода, — поэтому игрок, взявшийся за
+   * геймпад посреди боя, видит смену глифа сразу, а не после перезапуска.
+   */
+  private drawTakeGlyph(x: number, y: number, scheme: number): void {
+    const b = this.batch;
+    const c = PALETTE.hudText;
+    const frame = scheme === InputScheme.Gamepad ? Shape.Circle : Shape.Box;
+    b.push(frame, x, y, 15, 15, 0, 0, 0, 0, 0, 3, c.r, c.g, c.b, 0.95);
+    if (scheme === InputScheme.Touch) return;
+    // Буква X двумя перекрещенными планками: шрифта в игре нет до стадии F2,
+    // а знать, чем берут, надо уже сейчас.
+    for (const a of [Math.PI / 4, -Math.PI / 4]) {
+      b.push(Shape.Box, x, y, 8, 1.6, a, c.r, c.g, c.b, 0.95, 0, 0, 0, 0, 0);
     }
   }
 
@@ -455,7 +670,14 @@ export class Renderer {
     }
     x += jitter;
 
-    // Тулья и поля цилиндра.
+    /*
+     * Тулья и поля цилиндра.
+     *
+     * Контур той же толщины, что у всего остального в игре (STROKE, 4 u из
+     * арт-дирекшна GDD §21), а не тоньше. Тулья тёмная, и на тёмном полу
+     * силуэт несёт именно контур: на трёх единицах он выходил в два пикселя
+     * реального экрана, и Туза не было видно вовсе.
+     */
     b.push(
       Shape.Box,
       x,
@@ -465,7 +687,7 @@ export class Renderer {
       tilt,
       ...channels(PALETTE.aceShadow),
       0.85,
-      3,
+      STROKE,
       ...channels(PALETTE.ace),
       0.85,
     );
@@ -474,12 +696,26 @@ export class Renderer {
     /*
      * Глаза: обычно смотрит на игрока — за ним и пришёл.
      *
-     * Отвернуться — единственный жест, который меняет именно взгляд, и это
-     * его суть: игрок в шаге от крупного выигрыша, а заведение делает вид,
-     * что занято другим. Зевок закрывает глаза совсем.
+     * На БЛИЖАЙШЕГО живого, а не на первого по номеру. Взгляд — половина
+     * характера Туза (GDD §17А), и вчетвером «всегда на P1» читается не как
+     * внимание, а как поломка: заведение пялится в одну точку, пока рядом
+     * умирает кто-то другой. Мёртвые из счёта выбывают: смотреть на тело —
+     * это уже другой жест, и он не заказан.
      */
-    const dx = toFloat(s.pX[0]) - x;
-    const dy = toFloat(s.pY[0]) - y;
+    let dx = 0;
+    let dy = 0;
+    let near = -1;
+    for (let p = 0; p < s.playerCount; p++) {
+      if ((s.pFlags[p] & EntityFlag.Alive) === 0) continue;
+      const px = toFloat(s.pX[p]) - x;
+      const py = toFloat(s.pY[p]) - y;
+      const d = px * px + py * py;
+      if (near < 0 || d < near) {
+        near = d;
+        dx = px;
+        dy = py;
+      }
+    }
     const len = Math.hypot(dx, dy) || 1;
     const look = g === AceGesture.TurnAway ? -1 : 1;
     if (g !== AceGesture.Yawn) {
@@ -539,7 +775,10 @@ export class Renderer {
 
     if (s.meta[Meta.TossAt] !== 0) {
       const left = Math.max(0, s.meta[Meta.TossAt] - s.tick);
-      const t = 1 - left / 30;
+      // Длительность берётся у того, кто её назначил. Зашитая тридцатка
+      // совпадала с ней случайно, и правка телеграфа в конфиге молча
+      // разъехалась бы с кольцом, которое этот телеграф и показывает.
+      const t = clamp01(1 - left / CARD.aceTelegraphTicks);
       const c = PALETTE.card;
       b.push(
         Shape.Ring,
@@ -572,7 +811,17 @@ export class Renderer {
     for (let i = 0; i < MAX_SPAWNS; i++) {
       if (!s.spActive[i]) continue;
       const left = Math.max(0, s.spAt[i] - s.tick);
-      const t = 1 - left / 30;
+      /*
+       * Доля дожидания — от настоящей длительности предупреждения, и зажатая
+       * в 0..1.
+       *
+       * Метки ставятся не в один тик (`WAVE.spawnStaggerTicks`): последняя в
+       * пачке ждёт своего срока на четверть секунды дольше первой. Зашитая
+       * тридцатка знала только про `spawnMarkTicks`, поэтому у отложенных
+       * меток доля уходила в минус, и кольцо раздувалось вдвое против
+       * задуманного — предупреждение врало о том, сколько осталось.
+       */
+      const t = clamp01(1 - left / FAIRNESS.spawnMarkTicks);
       const c = PALETTE.spawnMark;
       this.batch.push(
         Shape.Ring,
@@ -612,8 +861,24 @@ export class Renderer {
       const y = lerp(this.prevEY[i], toFloat(s.eY[i]), a);
       const stats = ENEMIES[s.eType[i]];
       const left = Math.max(0, s.ePhaseUntil[i] - s.tick);
-      // Пульсация — не украшение: по ней читается, сколько осталось.
-      const urgency = 1 - left / Math.max(1, stats.telegraphTicks);
+      /*
+       * Пульсация — не украшение: по ней читается, сколько осталось.
+       *
+       * Знаменатель — НАСТОЯЩАЯ длительность этого телеграфа, а не базовая из
+       * каталога. У новичка она в полтора раза длиннее (`noviceTelegraphPct`),
+       * и на базовой доля уходила в минус: первую половину своего телеграфа
+       * новичок светился с нулевой прозрачностью, то есть был невидим.
+       *
+       * Ирония в том, что растянутый телеграф — это и есть весь туториал по
+       * врагам (DIFFICULTY §7): игрок один раз видит Фитиль в упор и понимает,
+       * что круг с фитилём взрывается. Единственное появление, ради которого
+       * правило заведено, показывалось хуже всех остальных.
+       */
+      const novice = (s.eFlags[i] & EntityFlag.Novice) !== 0;
+      const full = novice
+        ? Math.trunc((stats.telegraphTicks * FAIRNESS.noviceTelegraphPct) / 100)
+        : stats.telegraphTicks;
+      const urgency = clamp01(1 - left / Math.max(1, full));
       const dx = toFloat(s.eDirX[i]);
       const dy = toFloat(s.eDirY[i]);
 
@@ -883,6 +1148,78 @@ export class Renderer {
     }
   }
 
+  /**
+   * Заключённая сделка: всплывает над головой того, кто взял карту.
+   *
+   * Подбор был молчаливым: кон списывался без единого признака, и игрок не
+   * видел ни того, что потерял, ни того, что ему обещали. Здесь показаны обе
+   * стороны разом — «минус кон» и «плюс куш, если дожмёшь», — и показаны той же
+   * плашкой, что стоит в HUD: игрок обязан узнать взятое пари, а не разгадывать
+   * его заново.
+   *
+   * Рисуется НИЖЕ снарядов и выше игроков: это сообщение о решении, а не
+   * участник боя, и перекрывать снаряды ему нельзя (GDD §21).
+   */
+  private drawDeals(s: SimState, fb: Feedback): void {
+    const b = this.batch;
+
+    for (let p = 0; p < s.playerCount; p++) {
+      const life = fb.dealLife[p];
+      if (life <= 0) continue;
+      // Плашка всплывает и в конце гаснет: движение вверх читается как «ушло в
+      // HUD», где пари и живёт весь остальной бой.
+      const t = clamp01(1 - life / DEAL_LIFE);
+      const a = Math.min(1, life / 0.3) * 0.95;
+      const x = toFloat(s.pX[p]);
+      const y = toFloat(s.pY[p]) - 62 - 26 * t;
+      const bet = fb.dealBet[p];
+      const colour = categoryColour(BETS[bet].category);
+
+      b.push(
+        Shape.Box,
+        x,
+        y,
+        52,
+        24,
+        0,
+        ...channels(PALETTE.card),
+        a,
+        3,
+        colour.r,
+        colour.g,
+        colour.b,
+        a,
+      );
+      drawBetIcon(b, bet, x - 36, y - 11, 9, colour, PALETTE.card, a);
+      drawMultiplier(b, BETS[bet].multiplier / FX_ONE, x - 22, y - 11, 7, PALETTE.pupil, a);
+
+      // Кон ушёл — треугольник вниз мутным; куш придёт — треугольник вверх
+      // золотом. Знака «минус» в игре без шрифта нет, а направление есть.
+      const dim = PALETTE.hudDim;
+      b.push(
+        Shape.Triangle,
+        x - 44,
+        y + 11,
+        4.5,
+        4.5,
+        Math.PI / 2,
+        dim.r,
+        dim.g,
+        dim.b,
+        a,
+        0,
+        0,
+        0,
+        0,
+        0,
+      );
+      drawNumber(b, fb.dealStake[p], x - 28, y + 11, 8, PALETTE.pupil, a);
+      const ch = PALETTE.chip;
+      b.push(Shape.Triangle, x - 2, y + 11, 5, 5, -Math.PI / 2, ch.r, ch.g, ch.b, a, 0, 0, 0, 0, 0);
+      drawNumber(b, fb.dealPayout[p], x + 26, y + 11, 9, PALETTE.pupil, a);
+    }
+  }
+
   private drawBullets(s: SimState, alpha: number): void {
     const c = PALETTE.bullet;
     const e = PALETTE.danger;
@@ -986,6 +1323,36 @@ export class Renderer {
       }
       // Кошелёк рядом со своими сердцами: чьи фишки — видно без подписи.
       drawNumber(b, s.pChips[i], baseX + 150, top, HUD_DIGIT, PALETTE.chip);
+
+      /*
+       * Аппетит — тремя пипсами рядом с кошельком.
+       *
+       * Кон объявлен настоящим решением (ECONOMY §7), а решение, которого не
+       * видно, решением не является: игрок нажимал крестовину и не мог
+       * убедиться, что попал. Пипсы стоят вплотную к кошельку намеренно —
+       * тир и есть то, что из кошелька уйдёт за следующую карту.
+       */
+      for (let t = 0; t < APPETITE_TIERS; t++) {
+        const on = t <= s.pAppetite[i];
+        const c = PALETTE.chip;
+        b.push(
+          Shape.Box,
+          baseX + 196 + t * 13,
+          top + 4,
+          4,
+          4 + t * 3,
+          0,
+          c.r,
+          c.g,
+          c.b,
+          on ? 1 : 0.15,
+          2,
+          c.r,
+          c.g,
+          c.b,
+          on ? 1 : 0.45,
+        );
+      }
       this.drawBets(s, i, baseX, top + 46);
     }
 
@@ -1026,19 +1393,29 @@ export class Renderer {
   }
 
   /**
-   * Свои пари — плашками под сердцами, с растущим кушем.
+   * Свои пари — плашками под сердцами: вся сделка целиком.
    *
-   * Игрок обязан видеть три вещи, не отрывая глаз от боя: какие пари на нём,
-   * сколько он получит, если дожмёт, и сколько — если заберёт прямо сейчас
-   * (UX §4). Последнее и есть весь смысл кнопки: «Забрать» и «дожать» — два
-   * конца одной шкалы, и шкала должна быть видна.
+   * Плашка обязана отвечать на четыре вопроса сразу, не отрывая игрока от боя:
+   * ЧТО он взял (пиктограмма пари), под КАКОЙ коэффициент (`×M`), СКОЛЬКО
+   * поставил (кон) и сколько дадут ПРЯМО СЕЙЧАС за «Забрать» (растущий куш).
+   * Раньше из четырёх было видно одно — растущий куш, — то есть «сколько
+   * получу» показывалось, а «сколько поставил» и «во сколько раз» нет, и
+   * оценить сделку было нечем.
+   *
+   * Пятого числа здесь нет намеренно. Полная выплата за дожатое пари — это кон,
+   * умноженный на множитель, то есть она уже сказана двумя показанными числами;
+   * а вот шкала «дожать или соскочить» словами не говорится, и её несёт полоса
+   * прогресса по нижней кромке плашки. Убран отсюда и одинокий глиф «Забрать»,
+   * который стоял ПОСЛЕ последней плашки и не относился ни к одному числу:
+   * кольцо переехало к тому кушу, про который кнопка и говорит.
    *
    * Плашка дышит: близкое к провалу пари дрожит, выигранное золотится.
-   * Текста здесь нет — типографика приезжает в F2, а до неё категория читается
-   * формой иконки и цветом рамки, ровно как на самой карте.
+   * Текста здесь нет — типографика приезжает в F2, а до неё пари читается
+   * пиктограммой и цветом рамки, ровно как на самой карте.
    */
   private drawBets(s: SimState, player: number, x: number, y: number): void {
     const b = this.batch;
+    let cursor = x;
     let n = 0;
 
     for (let i = 0; i < MAX_ACTIVE_BETS; i++) {
@@ -1048,7 +1425,13 @@ export class Renderer {
 
       const spec = BETS[s.aBet[k]];
       const colour = categoryColour(spec.category);
-      const cx = x + n * 96;
+      // Вчетвером колонка игрока — 240 единиц, а стак — до четырёх пари:
+      // подробных плашек туда влезает ОДНА. Остальные сжимаются до иконки с
+      // множителем (UX §4: «чужие — сжатыми иконками», детали по удержанию).
+      const compact = s.playerCount > 2 && n > 0;
+      const hw = compact ? PLAQUE_TIGHT : PLAQUE_WIDE;
+      const cx = cursor + hw;
+      cursor += hw * 2 + PLAQUE_GAP;
       n++;
 
       const won = state === BetState.Won || state === BetState.Cashed;
@@ -1057,15 +1440,17 @@ export class Renderer {
       // трясти незачем, оно уже проиграно.
       const shiver = state === BetState.Active && (s.tick >> 1) % 2 === 0 ? 1.5 : 0;
       const alpha = lost ? 0.25 : 1;
+      const cxs = cx + shiver;
+      const back = won ? PALETTE.chip : PALETTE.card;
 
       b.push(
         Shape.Box,
-        cx + shiver,
+        cxs,
         y,
-        40,
-        17,
+        hw,
+        PLAQUE_HALF_H,
         0,
-        ...channels(won ? PALETTE.chip : PALETTE.card),
+        ...channels(back),
         alpha * 0.9,
         3,
         colour.r,
@@ -1073,47 +1458,120 @@ export class Renderer {
         colour.b,
         alpha,
       );
+
+      // Полоса прогресса по нижней кромке: та же `q`, по которой считается
+      // выплата за «Забрать» (ECONOMY §9А). Она и есть шкала «сначала терпи,
+      // потом решай» — без неё растущее число не с чем сравнить.
+      const q = clamp01(nearMissOf(s, player, i) / FX_ONE);
+      const barW = hw - 6;
+      const barY = y + PLAQUE_HALF_H - 5;
       b.push(
-        categoryShape(spec.category),
-        cx - 22 + shiver,
-        y,
-        9,
-        9,
+        Shape.Box,
+        cxs,
+        barY,
+        barW,
+        2.5,
         0,
         colour.r,
         colour.g,
         colour.b,
-        alpha,
+        alpha * 0.2,
         0,
         0,
         0,
         0,
         0,
       );
+      if (q > 0.01) {
+        b.push(
+          Shape.Box,
+          cxs - barW + barW * q,
+          barY,
+          barW * q,
+          2.5,
+          0,
+          colour.r,
+          colour.g,
+          colour.b,
+          alpha * 0.9,
+          0,
+          0,
+          0,
+          0,
+          0,
+        );
+      }
+
+      if (compact) {
+        // Сжатая: что взято и под какой коэффициент. Числа сделки уезжают в
+        // подробную плашку — врать теснотой хуже, чем недоговорить.
+        drawBetIcon(b, s.aBet[k], cxs, y - 9, 9, colour, back, alpha);
+        drawMultiplier(b, spec.multiplier / FX_ONE, cxs - 14, y + 11, 6, PALETTE.pupil, alpha);
+        continue;
+      }
+
+      // Верхняя строка: пари, его коэффициент и кон. Всё, что уже решено.
+      drawBetIcon(b, s.aBet[k], cxs - 32, y - 11, 9, colour, back, alpha);
+      drawMultiplier(b, spec.multiplier / FX_ONE, cxs - 17, y - 11, 7.5, PALETTE.pupil, alpha);
+      drawNumber(b, s.aStake[k], cxs + 32, y - 11, 7, PALETTE.pupil, alpha * 0.85);
 
       /*
-       * На плашке живут два разных числа, и путать их нельзя.
+       * На нижней строке живут два разных числа, и путать их нельзя.
        *
        * Пока пари цело — потенциальная выплата: сколько дадут, если забрать
        * прямо сейчас. Она растёт по мере выполнения и есть видимая шкала
-       * риска, тот самый второй конец «дожать или соскочить».
+       * риска, тот самый второй конец «дожать или соскочить»; кольцо слева от
+       * неё — глиф «Забрать», и стоит он именно у этого числа.
        *
        * Когда сорвано — near-miss в процентах: насколько близко было. Именно
        * почти-выигрыш заставляет нажать «ещё разок» (GDD §9.3), и показать
        * его надо там, где игрок и так смотрит.
        */
-      const число = lost
+      if (state === BetState.Active) {
+        // Кольцо ЦВЕТОМ ЧЕРНИЛ, а не `hudText`: кремовый текст HUD отличается
+        // от кремовой подложки плашки на считанные единицы ΔE, и глиф на ней
+        // пропадал начисто. Пока он стоял снаружи, на тёмном полу, это сходило
+        // с рук — но снаружи он и не показывал, к какому числу относится.
+        const c = PALETTE.pupil;
+        b.push(Shape.Ring, cxs - 32, y + 11, 7, 7, 0, 0, 0, 0, 0, 3, c.r, c.g, c.b, alpha * 0.8);
+      }
+      const value = lost
         ? Math.round((nearMissOf(s, player, i) / FX_ONE) * 100)
         : state === BetState.Active
           ? cashOutValue(s, player, i)
           : Math.trunc((s.aStake[k] * spec.multiplier) / FX_ONE);
-      drawNumber(b, число, cx + 8 + shiver, y, 10, lost ? PALETTE.danger : PALETTE.pupil);
-    }
+      drawNumber(b, value, cxs + 2, y + 11, 10, lost ? PALETTE.danger : PALETTE.pupil, alpha);
 
-    // Глиф «Забрать» рядом с кушем: кнопка одна, и она про эти числа.
-    if (n > 0) {
-      const c = PALETTE.hudText;
-      b.push(Shape.Ring, x + n * 96 - 30, y, 11, 11, 0, 0, 0, 0, 0, 3, c.r, c.g, c.b, 0.75);
+      /*
+       * Счётчиковое пари показывает счёт ЧИСЛАМИ: «сколько из трёх».
+       *
+       * Требование UX §4 — «прогресс пари виден численно там, где это
+       * счётчик». Полоса прогресса у «Подрывника» и есть тот же счёт, но два
+       * взрыва из трёх на глаз от одного не отличить, а решение «дожимать или
+       * забрать» на этой разнице и стоит.
+       */
+      if (spec.progress === BetProgress.Counter) {
+        const dim = PALETTE.hudDim;
+        drawNumber(b, s.aCounter[k], cxs + 26, y + 11, 6, dim, alpha);
+        b.push(
+          Shape.Box,
+          cxs + 33,
+          y + 11,
+          5,
+          1.4,
+          -Math.PI / 3,
+          dim.r,
+          dim.g,
+          dim.b,
+          alpha,
+          0,
+          0,
+          0,
+          0,
+          0,
+        );
+        drawNumber(b, spec.target, cxs + 40, y + 11, 6, dim, alpha);
+      }
     }
   }
 
@@ -1131,21 +1589,26 @@ export class Renderer {
    * расчёт раньше, чем игрок успел его увидеть.
    */
   private drawSettlement(s: SimState, w: number, h: number, fb: Feedback): void {
-    if (s.meta[Meta.Wave] !== 0 || s.meta[Meta.NextWaveAt] === 0) return;
-
-    // Считаем, есть ли что показывать: первая комната приходит с пустыми
-    // слотами, и затемнять кадр ради пустоты — только мешать.
-    let rows = 0;
-    for (let p = 0; p < s.playerCount; p++) {
-      for (let i = 0; i < MAX_ACTIVE_BETS; i++) {
-        if (s.aState[p * MAX_ACTIVE_BETS + i] !== BetState.None) rows++;
-      }
-    }
+    const rows = settlementRows(s);
     if (rows === 0) return;
 
     const b = this.batch;
     const c = PALETTE.background;
     b.push(Shape.Box, w / 2, h / 2, w, h, 0, c.r, c.g, c.b, 0.72, 0, 0, 0, 0, 0);
+
+    /*
+     * Туз — ПОВЕРХ затемнения, а не под ним.
+     *
+     * Он выходит принимать расчёт (`aceAtSettlement` в ядре), то есть в этот
+     * момент он и есть событие на экране. Затемнение в 0.72 съедало бы его
+     * почти целиком: 0.85 собственной непрозрачности превращаются под ним в
+     * четверть, и заведение, пришедшее похлопать провалу, снова стало бы
+     * невидимым — ровно тем, из-за чего эта фигура и переделывалась.
+     *
+     * Дешевле, чем кажется: несколько фигур на пять секунд паузы, и только
+     * когда расчёту есть что показать.
+     */
+    this.drawAce(s);
 
     // Плашки те же, что в бою, только крупнее и по центру: игрок узнаёт их
     // мгновенно, потому что весь бой смотрел ровно на эти формы.
@@ -1198,23 +1661,9 @@ export class Renderer {
           cat.b,
           1,
         );
-        b.push(
-          categoryShape(spec.category),
-          w / 2 - 160,
-          y,
-          14,
-          14,
-          0,
-          cat.r,
-          cat.g,
-          cat.b,
-          1,
-          0,
-          0,
-          0,
-          0,
-          0,
-        );
+        // Та же пиктограмма, что на карте и на плашке: игрок узнаёт своё пари,
+        // а не разгадывает его в третий раз.
+        drawBetIcon(b, s.aBet[k], w / 2 - 160, y, 14, cat, won ? PALETTE.chip : PALETTE.card, 1);
 
         /*
          * Строка расчёта читается слева направо как расписка: кон, множитель,
@@ -1341,6 +1790,30 @@ export class Renderer {
   }
 }
 
+/**
+ * Индекс пари «Не заходи в красную зону» в каталоге.
+ *
+ * По строковому идентификатору, а не числом: порядок в `content/bets.json`
+ * меняется от правки каталога, и зашитый номер молча начал бы показывать
+ * разметку от чужого пари. Ищется один раз на загрузку модуля.
+ */
+const RED_ZONE_BET = BETS.findIndex((spec) => String(spec.id) === 'no_red_zone');
+
+/** Есть ли красная зона в этой комнате: карта на полу или активное пари. */
+function redZoneInPlay(s: SimState): boolean {
+  if (RED_ZONE_BET < 0) return false;
+  for (let i = 0; i < MAX_CARDS; i++) {
+    if (s.kActive[i] && s.kBet[i] === RED_ZONE_BET) return true;
+  }
+  for (let p = 0; p < s.playerCount; p++) {
+    for (let n = 0; n < MAX_ACTIVE_BETS; n++) {
+      const k = p * MAX_ACTIVE_BETS + n;
+      if (s.aState[k] === BetState.Active && s.aBet[k] === RED_ZONE_BET) return true;
+    }
+  }
+  return false;
+}
+
 /** Цвет категории пари: живёт в рамке, иконке и луче, но не в подложке. */
 const categoryColour = (c: BetCategory): Rgb =>
   c === BetCategory.Style
@@ -1354,6 +1827,291 @@ const categoryColour = (c: BetCategory): Rgb =>
           : c === BetCategory.Tricks
             ? PALETTE.betTricks
             : PALETTE.betSilly;
+
+/**
+ * Пиктограмма ПАРИ, а не категории (PRODUCTION §3, «Иконки пари — пиктограммы
+ * из примитивов»).
+ *
+ * Категорий шесть и пари шесть, но один к одному они не ложатся: «Без урона» и
+ * «Без рывка» обе относятся к Стилю, то есть с иконкой категории выглядели на
+ * карте ОДИНАКОВО. Игрок физически не мог отличить «пройду без урона» от
+ * «пройду без рывка» — два разных обязательства с разной ценой, — и владелец
+ * сформулировал итог прямо: «не понятно, на что я беру ставку с этой картой».
+ *
+ * Смысл иконки должен угадываться, а не заучиваться (столп №5, читаемость за
+ * 0.2 секунды): сердце, стрелка, часы, зона, монета, взрыв. Цвет категории при
+ * этом остаётся вторым признаком — двойное кодирование формой И цветом
+ * обязательно (GDD §21).
+ *
+ * `back` — цвет подложки, на которой рисуют: им прорезается перечёркивание,
+ * иначе запретительная черта тонет в самом глифе.
+ *
+ * Пари вне каталога 0.3.0 честно откатывается к форме категории: новое пари в
+ * `content/bets.json` не должно оставлять карту без иконки вовсе.
+ */
+function drawBetIcon(
+  b: ShapeBatch,
+  bet: number,
+  x: number,
+  y: number,
+  s: number,
+  c: Rgb,
+  back: Rgb,
+  a: number,
+): void {
+  const thin = Math.max(1.4, s * 0.11);
+
+  switch (bet) {
+    case BetId.NoDamage: {
+      // Сердце: две дольки сверху и клин книзу. Перечёркнуто — урона не будет.
+      for (const side of [-1, 1]) {
+        b.push(
+          Shape.Circle,
+          x + side * s * 0.4,
+          y - s * 0.3,
+          s * 0.48,
+          s * 0.48,
+          0,
+          c.r,
+          c.g,
+          c.b,
+          a,
+          0,
+          0,
+          0,
+          0,
+          0,
+        );
+      }
+      // Вершиной вниз: поворот на +π/2, потому что ось Y экрана смотрит вниз.
+      b.push(
+        Shape.Triangle,
+        x,
+        y + s * 0.28,
+        s * 0.7,
+        s * 0.7,
+        Math.PI / 2,
+        c.r,
+        c.g,
+        c.b,
+        a,
+        0,
+        0,
+        0,
+        0,
+        0,
+      );
+      drawSlash(b, x, y, s, c, back, a);
+      return;
+    }
+
+    case BetId.NoDash: {
+      // Рывок: стрелка со следами скорости позади. Без следов она читается как
+      // просто «направление», а запрещён здесь именно рывок.
+      b.push(Shape.Capsule, x - s * 0.15, y, s * 0.62, thin, 0, c.r, c.g, c.b, a, 0, 0, 0, 0, 0);
+      b.push(
+        Shape.Triangle,
+        x + s * 0.68,
+        y,
+        s * 0.42,
+        s * 0.42,
+        0,
+        c.r,
+        c.g,
+        c.b,
+        a,
+        0,
+        0,
+        0,
+        0,
+        0,
+      );
+      for (const side of [-1, 1]) {
+        b.push(
+          Shape.Capsule,
+          x - s * 0.82,
+          y + side * s * 0.44,
+          s * 0.3,
+          thin * 0.8,
+          0,
+          c.r,
+          c.g,
+          c.b,
+          a,
+          0,
+          0,
+          0,
+          0,
+          0,
+        );
+      }
+      drawSlash(b, x, y, s, c, back, a);
+      return;
+    }
+
+    case BetId.Under45s: {
+      // Часы: циферблат и две стрелки. Единственная пустая внутри иконка —
+      // отсюда и берётся отличие от зоны, которая залита.
+      b.push(
+        Shape.Ring,
+        x,
+        y,
+        s * 0.92,
+        s * 0.92,
+        0,
+        0,
+        0,
+        0,
+        0,
+        Math.max(2, s * 0.24),
+        c.r,
+        c.g,
+        c.b,
+        a,
+      );
+      b.push(Shape.Box, x, y - s * 0.28, thin, s * 0.4, 0, c.r, c.g, c.b, a, 0, 0, 0, 0, 0);
+      b.push(Shape.Box, x + s * 0.24, y, s * 0.34, thin, 0, c.r, c.g, c.b, a, 0, 0, 0, 0, 0);
+      return;
+    }
+
+    case BetId.NoRedZone: {
+      // Зона: заливка вполсилы и ровный контур — тот же язык, которым красная
+      // зона нарисована на полу (GDD §21). Перечёркнута: туда нельзя.
+      b.push(
+        Shape.Circle,
+        x,
+        y,
+        s * 0.88,
+        s * 0.88,
+        0,
+        c.r,
+        c.g,
+        c.b,
+        a * 0.42,
+        Math.max(2, s * 0.2),
+        c.r,
+        c.g,
+        c.b,
+        a,
+      );
+      drawSlash(b, x, y, s, c, back, a);
+      return;
+    }
+
+    case BetId.AllChips: {
+      // Монета и три стрелки, сходящиеся к ней: собрать ВСЁ, а не просто фишку.
+      b.push(Shape.Circle, x, y, s * 0.42, s * 0.42, 0, c.r, c.g, c.b, a, 0, 0, 0, 0, 0);
+      const arrows: readonly [number, number, number][] = [
+        [-s * 0.86, 0, 0],
+        [s * 0.86, 0, Math.PI],
+        [0, -s * 0.86, Math.PI / 2],
+      ];
+      for (const [dx, dy, angle] of arrows) {
+        b.push(
+          Shape.Triangle,
+          x + dx,
+          y + dy,
+          s * 0.32,
+          s * 0.32,
+          angle,
+          c.r,
+          c.g,
+          c.b,
+          a,
+          0,
+          0,
+          0,
+          0,
+          0,
+        );
+      }
+      return;
+    }
+
+    case BetId.Demolitionist: {
+      // Круг Фитиля с разлетающимися лучами. Лучи идут насквозь, а тело сверху
+      // залито цветом подложки: без этого звёздочка читается как звёздочка, а
+      // подрывать надо именно Фитилём.
+      for (const angle of [0, Math.PI / 4, Math.PI / 2, -Math.PI / 4]) {
+        b.push(Shape.Capsule, x, y, s * 0.98, thin * 0.9, angle, c.r, c.g, c.b, a, 0, 0, 0, 0, 0);
+      }
+      b.push(
+        Shape.Circle,
+        x,
+        y,
+        s * 0.4,
+        s * 0.4,
+        0,
+        back.r,
+        back.g,
+        back.b,
+        a,
+        Math.max(2, s * 0.2),
+        c.r,
+        c.g,
+        c.b,
+        a,
+      );
+      return;
+    }
+
+    default:
+      b.push(categoryShape(BETS[bet].category), x, y, s, s, 0, c.r, c.g, c.b, a, 0, 0, 0, 0, 0);
+  }
+}
+
+/**
+ * Перечёркивание: две полосы, широкая цветом подложки и тонкая цветом поверх.
+ *
+ * Одной полосой не выходит: цветом категории она тонет в залитом глифе, цветом
+ * подложки — исчезает за пределами глифа. Пара даёт линию, которая видна и на
+ * сердце, и на кремовом поле рядом с ним.
+ */
+function drawSlash(
+  b: ShapeBatch,
+  x: number,
+  y: number,
+  s: number,
+  c: Rgb,
+  back: Rgb,
+  a: number,
+): void {
+  const angle = -Math.PI / 4;
+  b.push(
+    Shape.Capsule,
+    x,
+    y,
+    s * 1.12,
+    Math.max(2.4, s * 0.2),
+    angle,
+    back.r,
+    back.g,
+    back.b,
+    a,
+    0,
+    0,
+    0,
+    0,
+    0,
+  );
+  b.push(
+    Shape.Capsule,
+    x,
+    y,
+    s * 1.04,
+    Math.max(1.2, s * 0.09),
+    angle,
+    c.r,
+    c.g,
+    c.b,
+    a,
+    0,
+    0,
+    0,
+    0,
+    0,
+  );
+}
 
 /** Форма иконки: категория обязана читаться и без цвета (GDD §21). */
 const categoryShape = (c: BetCategory): Shape =>
@@ -1402,6 +2160,7 @@ function drawNumber(
   y: number,
   size: number,
   c: Rgb,
+  a = 1,
 ): void {
   const text = String(Math.max(0, Math.trunc(value)));
   const w = size * 0.6;
@@ -1419,13 +2178,13 @@ function drawNumber(
     const cx = left + i * advance - (digit === 1 ? w : 0);
     // Порядок битов: верх, левый верх, правый верх, середина, левый низ,
     // правый низ, низ.
-    if (mask & 0b0000001) hbar(b, cx, y - size, w, t, c);
-    if (mask & 0b0000010) vbar(b, cx - w, y - size / 2, size / 2, t, c);
-    if (mask & 0b0000100) vbar(b, cx + w, y - size / 2, size / 2, t, c);
-    if (mask & 0b0001000) hbar(b, cx, y, w, t, c);
-    if (mask & 0b0010000) vbar(b, cx - w, y + size / 2, size / 2, t, c);
-    if (mask & 0b0100000) vbar(b, cx + w, y + size / 2, size / 2, t, c);
-    if (mask & 0b1000000) hbar(b, cx, y + size, w, t, c);
+    if (mask & 0b0000001) hbar(b, cx, y - size, w, t, c, a);
+    if (mask & 0b0000010) vbar(b, cx - w, y - size / 2, size / 2, t, c, a);
+    if (mask & 0b0000100) vbar(b, cx + w, y - size / 2, size / 2, t, c, a);
+    if (mask & 0b0001000) hbar(b, cx, y, w, t, c, a);
+    if (mask & 0b0010000) vbar(b, cx - w, y + size / 2, size / 2, t, c, a);
+    if (mask & 0b0100000) vbar(b, cx + w, y + size / 2, size / 2, t, c, a);
+    if (mask & 0b1000000) hbar(b, cx, y + size, w, t, c, a);
   }
 }
 
@@ -1444,6 +2203,7 @@ function drawMultiplier(
   y: number,
   size: number,
   c: Rgb,
+  a = 1,
 ): void {
   const step = size * 1.8;
   // Крестик «×»: два отрезка, а не буква — шрифта нет до стадии F2.
@@ -1458,7 +2218,7 @@ function drawMultiplier(
       c.r,
       c.g,
       c.b,
-      1,
+      a,
       0,
       0,
       0,
@@ -1469,18 +2229,34 @@ function drawMultiplier(
 
   const whole = Math.trunc(m);
   const tenth = Math.round((m - whole) * 10);
-  drawNumber(b, whole, x + step, y, size, c);
+  drawNumber(b, whole, x + step, y, size, c, a);
   if (tenth === 0) return;
 
   const t = Math.max(2, size * 0.2);
-  b.push(Shape.Box, x + step * 1.6, y + size, t, t, 0, c.r, c.g, c.b, 1, 0, 0, 0, 0, 0);
-  drawNumber(b, tenth, x + step * 2.3, y, size, c);
+  b.push(Shape.Box, x + step * 1.6, y + size, t, t, 0, c.r, c.g, c.b, a, 0, 0, 0, 0, 0);
+  drawNumber(b, tenth, x + step * 2.3, y, size, c, a);
 }
 
-const hbar = (b: ShapeBatch, x: number, y: number, w: number, t: number, c: Rgb): void => {
-  b.push(Shape.Box, x, y, w, t, 0, c.r, c.g, c.b, 1, 0, 0, 0, 0, 0);
+const hbar = (
+  b: ShapeBatch,
+  x: number,
+  y: number,
+  w: number,
+  t: number,
+  c: Rgb,
+  a: number,
+): void => {
+  b.push(Shape.Box, x, y, w, t, 0, c.r, c.g, c.b, a, 0, 0, 0, 0, 0);
 };
 
-const vbar = (b: ShapeBatch, x: number, y: number, h: number, t: number, c: Rgb): void => {
-  b.push(Shape.Box, x, y, t, h, 0, c.r, c.g, c.b, 1, 0, 0, 0, 0, 0);
+const vbar = (
+  b: ShapeBatch,
+  x: number,
+  y: number,
+  h: number,
+  t: number,
+  c: Rgb,
+  a: number,
+): void => {
+  b.push(Shape.Box, x, y, t, h, 0, c.r, c.g, c.b, a, 0, 0, 0, 0, 0);
 };

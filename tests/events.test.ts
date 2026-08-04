@@ -7,8 +7,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { Btn, createState, makeFrame, spawnPlayers, step } from '../packages/sim/src/index';
-import { EventLog } from '../packages/client/src/events';
+import { Btn, createState, makeFrame, spawnPlayers, step } from '@dod/sim';
+import { EventLog } from '@dod/client/events';
 
 function fresh(players = 1) {
   const s = createState(1, players);

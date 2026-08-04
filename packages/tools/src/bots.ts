@@ -23,7 +23,7 @@ import {
   SHARED,
   toFloat,
   type RngState,
-} from '../../sim/src/index';
+} from '@dod/sim';
 
 /**
  * Аппетит «По-крупному» — верхний тир, биты 8–9 маски (TECH §6).

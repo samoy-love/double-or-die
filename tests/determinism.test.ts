@@ -18,9 +18,9 @@ import {
   spawnPlayers,
   step,
   type InputFrame,
-} from '../packages/sim/src/index';
-import { ReplayPlayer, ReplayRecorder, deserialize, serialize } from '../packages/sim/src/replay';
-import { makeBot } from '../packages/tools/src/bots';
+} from '@dod/sim';
+import { ReplayPlayer, ReplayRecorder, deserialize, serialize } from '@dod/sim/replay';
+import { makeBot } from '@dod/tools/bots';
 
 function runToHash(seed: number, ticks: number, players = 1, bot = 'random' as const): number {
   const s = createState(seed, players);

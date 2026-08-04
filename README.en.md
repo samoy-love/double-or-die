@@ -95,17 +95,25 @@ player can hold more than four active bets.
 Six starting bets ship: no damage, no dash, under 45 seconds, stay out of the
 red zone, collect every chip, demolitionist. Each tracks progress `q`, and
 Cash Out pays `stake × (1 + q × (M−1)/2)` from it — bailing early returns just
-the stake, while a bet held to the end pays double. Stake size comes from
-three appetite tiers, and the choice latches for the whole room: releasing the
-button does not undo it. A bet that cannot be played on the player's input
-scheme is never dealt to them — the exclusions live in the bet catalogue,
-while the scheme itself travels in the input frame's bit mask.
+the stake, while a bet held to the end pays double. A run opens with 30 chips:
+the stake is `min(tier, wallet)`, so an empty wallet would make the whole
+mechanic run on nothing. Stake size comes from three appetite tiers, and the
+choice latches for the whole room: releasing the button does not undo it. A
+bet that cannot be played on the player's input scheme is never dealt to them
+— the exclusions live in the bet catalogue, while the scheme itself travels in
+the input frame's bit mask. There are two control schemes: gamepad, and
+keyboard with mouse — everything reachable on a pad is reachable on a keyboard.
 
-Ace steps onto the arena once per room, comments on the fight, telegraphs the
-toss, drops a card — and leaves three seconds later: a top hat parked by the
-wall until the end of the fight stops being an event. He appears at a point
-computed from the centre of mass of every living player. The settlement screen
-shows the near miss captured the moment the bet broke, not reconstructed from
-the log afterwards.
+Ace steps onto the arena once per room to toss a card: he comments on the
+fight, telegraphs the toss, drops the card — and leaves three seconds later, a
+top hat parked by the wall until the end of the fight stops being an event. His
+second appearance is spent on mood: an event worth reacting to brings him out
+itself, with the same telegraph. Applause at a failure, a thumbs down and a
+standing ovation summon him; the yawn, the turn-away and the fidgeting are
+background, visible only when he is already there. No more than two
+appearances per room, and the gap between them counts from his exit. He appears
+at a point computed from the centre of mass of every living player. The
+settlement screen shows the near miss captured the moment the bet broke, not
+reconstructed from the log afterwards.
 
 Next up is 0.4.0 "The Run": a floor, a boss, the shop and the house cut.

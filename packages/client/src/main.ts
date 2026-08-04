@@ -34,6 +34,10 @@ async function main(): Promise<void> {
 
   const loop = new GameLoop(canvas, { seed, players, autopause });
   const overlay = new Overlay(loop, IS_DEV || debugOverlay);
+  // Остановка по инварианту обязана быть видна на экране, а не только в
+  // консоли: замерший кадр без объяснения читается как поломка интерфейса, а
+  // не как дефект ядра. В релизе инвариантов нет, и звать это некому.
+  loop.onHalt((message, s, tick) => overlay.showHalt(message, s, tick));
   if (stable) {
     loop.feel.stable = true;
     document.documentElement.dataset.stable = '1';

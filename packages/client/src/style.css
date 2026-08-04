@@ -55,8 +55,43 @@ body {
   box-shadow: 0 4px 16px rgb(0 0 0 / 0.4);
 }
 
+/*
+ * Плашка остановки: нарушенный инвариант.
+ *
+ * Алая и по центру, а не строкой в углу. Инвариант останавливает цикл, и до
+ * этой плашки единственным следом остановки была запись в консоли: игрок
+ * получал замерший кадр и ни слова о том, что случилось и что нажать. На
+ * экране расчёта это читалось как «экран, который нельзя пропустить», и стоило
+ * вечера поисков не там.
+ *
+ * `pointer-events: none` — плашка сообщает, а не перехватывает: под ней живой
+ * канвас, и снятие паузы идёт клавишей, как и любая пауза (UX §2).
+ */
+.halt {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  max-width: min(680px, 88vw);
+  padding: 16px 20px;
+  transform: translate(-50%, -50%);
+  font-size: 15px;
+  line-height: 1.5;
+  color: #f2e4c4;
+  background: rgb(26 16 51 / 0.94);
+  border: 2px solid #ff3300;
+  border-radius: 10px;
+  box-shadow: 0 6px 28px rgb(0 0 0 / 0.5);
+  pointer-events: none;
+  white-space: pre-wrap;
+}
+
+.halt b {
+  color: #ff3300;
+}
+
 /* Режим стабильного кадра для сравнения скриншотов между версиями. */
 html[data-stable='1'] .overlay,
-html[data-stable='1'] .update {
+html[data-stable='1'] .update,
+html[data-stable='1'] .halt {
   display: none;
 }

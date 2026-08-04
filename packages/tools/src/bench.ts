@@ -32,9 +32,9 @@ import {
   type SimState,
   spawnPlayers,
   step,
-} from '../../sim/src/index';
+} from '@dod/sim';
 import { makeBot } from './bots';
-import { Particles, ParticleShape } from '../../client/src/particles';
+import { Particles, ParticleShape } from '@dod/client/particles';
 
 const FRAME_BUDGET_MS = 1000 / 60;
 /** Тик обязан быть дешевле кадра хотя бы во столько раз. */

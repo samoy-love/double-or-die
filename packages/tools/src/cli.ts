@@ -9,15 +9,21 @@
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
+  BetState,
   checkInvariants,
   createState,
   deserialize,
+  EntityFlag,
   hashHex,
+  MAX_ACTIVE_BETS,
+  MAX_CARDS,
   MAX_PLAYERS,
+  Meta,
   ReplayPlayer,
+  type SimState,
   spawnPlayers,
   step,
-} from '../../sim/src/index';
+} from '@dod/sim';
 import { BOT_NAMES, isBotName, makeBot, type BotName } from './bots';
 import {
   CONFIG_VERSION,
@@ -265,24 +271,123 @@ Headless-раннер Double or Die
 `);
 }
 
-/** Один забег. Возвращает итоговый хеш и признак успеха. */
+/**
+ * Чем закончился забег.
+ *
+ * Списка «death / victory / floor N» из будущего здесь намеренно нет: до
+ * 0.4.0 забег не кончается вовсе — ни этажей, ни босса, ни экрана итогов не
+ * существует, а гибель всех игроков разворачивается перезапуском той же
+ * симуляции (`stepRunEnd`). Придумать исход, которого не бывает, значит
+ * получить отчёт, который врёт одинаково во всех тысяче забегов.
+ */
+type Outcome = 'alive' | 'dead' | 'broken';
+
+/** Есть ли у кого-нибудь за столом хоть одно неразрешённое пари. */
+function anyBetActive(s: SimState): boolean {
+  for (let i = 0; i < s.playerCount * MAX_ACTIVE_BETS; i++) {
+    if (s.aState[i] === BetState.Active) return true;
+  }
+  return false;
+}
+
+/** Медиана: половина комнат короче, половина длиннее. Пусто — ноль. */
+function median(xs: readonly number[]): number {
+  if (xs.length === 0) return 0;
+  const v = [...xs].sort((a, b) => a - b);
+  const m = v.length >> 1;
+  return v.length % 2 === 1 ? v[m] : Math.trunc((v[m - 1] + v[m]) / 2);
+}
+
+/** Доля с тремя знаками: в JSON от 0.4383333333333333 никому не легче. */
+const share = (part: number, whole: number): number =>
+  whole === 0 ? 0 : Math.round((part / whole) * 1000) / 1000;
+
+/**
+ * Один забег.
+ *
+ * Отдаёт не только хеш: счётчики забега снимаются здесь, потому что снять их
+ * больше негде. Ядру запрещено аллоцировать в горячем пути, поэтому лога
+ * событий оно не ведёт (см. шапку `packages/shared/src/events.ts`) — всё, что
+ * известно о забеге, живёт в `Meta` и в буферах состояния, и наблюдать за
+ * ними можно только снаружи, тик за тиком.
+ *
+ * Числа собираются сейчас, хотя балансировщик приезжает в 0.4.0: ограничители
+ * G6 (доля забегов с нулём взятых пари), G14 (доля закрытых через «Забрать»)
+ * и D1 (длительность комнаты не зависит от состава) считаются ровно из них, а
+ * дописывать наблюдение в раннер задним числом дороже, чем вести с самого
+ * начала — к тому времени рядом будет тысяча золотых прогонов, которые
+ * придётся переснимать.
+ */
 function runOnce(seed: number, players: number, ticks: number, bot: BotName, safety = false) {
   const s = createState(seed, players);
   spawnPlayers(s);
   const b = makeBot(bot, seed, players);
   const errors: string[] = [];
 
+  // Карты считаются переходом слота 0→1, а не суммой розданных за комнату:
+  // так в «предложено» попадает и то, что Туз подбрасывает посреди боя.
+  // Знаменатель G10 («каждое пари берут не реже 3% и не чаще 25%») — это он.
+  const cardWas = new Uint8Array(MAX_CARDS);
+  let offered = 0;
+
+  // Убийства накапливаются, а не читаются в конце: `spawnPlayers` обнуляет
+  // `Meta.Kills` при перезапуске после гибели, и итоговое число иначе
+  // относилось бы к последней жизни, а не к забегу.
+  let killsTotal = 0;
+  let killsPrev = 0;
+
+  // Комнаты считаются по `RoomStartTick`, а не по номеру комнаты: перезапуск
+  // после гибели начинает первую комнату заново, номер при этом не меняется
+  // (был 1, стал 1), и по номеру такая комната потерялась бы вместе со своей
+  // длительностью — а это как раз самые интересные комнаты.
+  let roomStart = s.meta[Meta.RoomStartTick];
+  let roomsEntered = 1;
+  const roomTicks: number[] = [];
+
+  let betTicks = 0;
+
   for (let t = 0; t < ticks; t++) {
     step(s, b.inputs(s));
-    // Инварианты — самый дешёвый способ поймать дефект в момент появления,
-    // а не через десять минут, когда причина потеряна.
-    if (t % 60 === 0) {
-      try {
-        checkInvariants(s);
-      } catch (e) {
-        errors.push(String(e));
-        break;
-      }
+
+    for (let i = 0; i < MAX_CARDS; i++) {
+      const on = s.kActive[i];
+      if (on !== 0 && cardWas[i] === 0) offered++;
+      cardWas[i] = on;
+    }
+
+    const kills = s.meta[Meta.Kills];
+    if (kills >= killsPrev) killsTotal += kills - killsPrev;
+    killsPrev = kills;
+
+    if (s.meta[Meta.RoomStartTick] !== roomStart) {
+      roomTicks.push(s.meta[Meta.RoomStartTick] - roomStart);
+      roomStart = s.meta[Meta.RoomStartTick];
+      roomsEntered++;
+    }
+
+    if (anyBetActive(s)) betTicks++;
+
+    /*
+     * Инварианты — КАЖДЫЙ тик, как и в клиенте (DEVLOOP §6).
+     *
+     * Раньше здесь стояло `t % 60`, и раз в секунду выглядело достаточным:
+     * нарушение, мол, никуда не денется. Оно девается. Жест Туза без тела жил
+     * 150 тиков и пропускался тем чаще, чем короче оказывалось окно; поймать
+     * его удалось только сотней забегов подряд, и то не с первой попытки —
+     * при восьми прогонах дефект не показывался вовсе. Проверка, которая
+     * ловит через раз, хуже отсутствующей: она даёт зелёный отчёт, которому
+     * верят.
+     *
+     * Цена замерена, а не предположена: линейный проход по пулам стоит
+     * 0.0096 мс против 0.17 мс самого тика — те же 2.4% бюджета, за которые
+     * клиент проверяет каждый кадр. Тысяча забегов по 12 000 тиков от этого
+     * прибавляет секунды, а не минуты.
+     */
+    try {
+      checkInvariants(s);
+    } catch (e) {
+      errors.push(String(e));
+      break;
     }
     // Достижимость безопасной точки проверяется КАЖДЫЙ тик, а не раз в
     // секунду: непроходимой комбинация бывает ровно один кадр, и именно в
@@ -296,7 +401,45 @@ function runOnce(seed: number, players: number, ticks: number, bot: BotName, saf
     }
   }
 
-  return { hash: hashHex(s), ticks: s.tick, errors };
+  const alive = [...s.pFlags.slice(0, s.playerCount)].some((f) => (f & EntityFlag.Alive) !== 0);
+  const outcome: Outcome = errors.length > 0 ? 'broken' : alive ? 'alive' : 'dead';
+
+  return {
+    hash: hashHex(s),
+    ticks: s.tick,
+    // Кошелёк и сердца — списком по игрокам, а не суммой: G16 («пари за забег
+    // у самого пассивного не меньше половины от самого активного») сравнивает
+    // игроков между собой, и сумма стирает ровно то, что он ищет.
+    result: {
+      outcome,
+      room: s.meta[Meta.Room],
+      wave: s.meta[Meta.Wave],
+      kills: killsTotal,
+      deaths: s.meta[Meta.Deaths],
+      hearts: [...s.pHearts.slice(0, s.playerCount)],
+      chips: [...s.pChips.slice(0, s.playerCount)],
+    },
+    bets: {
+      offered,
+      taken: s.meta[Meta.BetsTaken],
+      won: s.meta[Meta.BetsWon],
+      lost: s.meta[Meta.BetsLost],
+      cashed: s.meta[Meta.BetsCashed],
+      // Доля времени под пари: чем она ниже, тем ближе забег к обычному
+      // шутеру, ради которого игру не делали.
+      activeTicks: betTicks,
+      activeShare: share(betTicks, s.tick),
+    },
+    rooms: {
+      entered: roomsEntered,
+      // Только завершённые: комната, оборванная концом прогона, — это не
+      // «быстрая комната», а отсутствие замера, и в медиане ей не место.
+      completed: roomTicks.length,
+      medianTicks: median(roomTicks),
+      ticks: roomTicks,
+    },
+    errors,
+  };
 }
 
 /**

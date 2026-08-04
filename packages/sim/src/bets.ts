@@ -64,7 +64,7 @@ export function dealCards(s: SimState): void {
   const total = Math.min(MAX_CARDS, s.playerCount + CARD.extraCards);
   for (let i = 0; i < total; i++) {
     const owner = i < s.playerCount ? i : SHARED;
-    placeCard(s, pickBet(s, owner), owner, s.tick + CARD.lifeTicks);
+    dealOne(s, owner);
   }
 
   /*
@@ -76,16 +76,86 @@ export function dealCards(s: SimState): void {
    */
   for (let p = 0; p < s.playerCount; p++) {
     if (hasCardFor(s, p)) continue;
-    placeCard(s, pickBet(s, p), p, s.tick + CARD.lifeTicks);
+    dealOne(s, p);
   }
 
-  // Туз подбрасывает карту в середине схватки: решения перестают быть
-  // разовыми и превращаются в поток. Момент — по зачищенной угрозе, а не по
-  // таймеру: середина боя это половина комнаты, а не полторы минуты.
+  // Подброс Туза посреди боя и весь его бюджет выходов живут в `resetAce`:
+  // раздача идёт ПОСЛЕ расчёта, а Туз выходит принимать расчёт — сброс на
+  // этом месте стирал бы его ровно тогда, когда он нужен.
+}
+
+/**
+ * Сбросить Туза к началу комнаты: присутствие, бюджет выходов и ЖЕСТ.
+ *
+ * Жест сбрасывается вместе с телом, и это не уборка на всякий случай. Пока
+ * этого не было, `startRoom` оставлял запрещённое состояние: расчёт прошлой
+ * комнаты срывает недожатые пари, каждый срыв зовёт `gesture()`, тот выводит
+ * Туза ради аплодисментов — а раздача карт двумя строками ниже убирала тело и
+ * оставляла жест. `AceX` ноль, `AceGesture` «аплодирует»: ровно ту пару
+ * запрещает инвариант «жест играется на пустой арене» (invariants.ts). В
+ * dev-сборке он останавливал цикл прямо на экране расчёта, и игрок оставался
+ * с кадром, который нечем пропустить; ботом ловилось в каждом пятом забеге.
+ *
+ * Живёт отдельно от `dealCards`, потому что зовётся РАНЬШЕ расчёта: Туз
+ * выходит принимать его уже с чистым бюджетом новой комнаты (`startRoom`).
+ * Пока сброс сидел внутри раздачи, он приходился на момент ПОСЛЕ расчёта и
+ * стирал именно то, ради чего Туз выходил.
+ */
+export function resetAce(s: SimState): void {
   s.meta[Meta.TossAt] = 0;
   s.meta[Meta.AceX] = 0;
   s.meta[Meta.AceY] = 0;
   s.meta[Meta.AceLeaveAt] = 0;
+  s.meta[Meta.AceTossed] = 0;
+  s.meta[Meta.AceCameos] = 0;
+  s.meta[Meta.AceCameoAt] = 0;
+  s.meta[Meta.AceMoods] = 0;
+  s.meta[Meta.AceGesture] = AceGesture.None;
+  s.meta[Meta.AceGestureUntil] = 0;
+}
+
+/**
+ * Туз выходит ПРИНЯТЬ РАСЧЁТ.
+ *
+ * Заведение показывается, когда сводят книги, — и это не украшение экрана
+ * итогов, а его смысл. Провал пари зовёт аплодисменты (`loseBet`), но звать
+ * их было некому: тело на арене отсутствовало, а выход «на настроение» тратил
+ * единственный бюджет реакции и всё равно стирался раздачей карт. В итоге
+ * самый драматичный момент комнаты — «сколько не хватило» — проходил в
+ * тишине, при том что GDD §17А объявляет комедию из правил несущей частью
+ * игры.
+ *
+ * Зовётся ДО `settleBets`: тело обязано стоять раньше, чем полетят жесты,
+ * иначе каждый из них снова уйдёт в `moodCameo` и съест реакцию боя.
+ *
+ * Выходит только когда есть что считать. Перед первой комнатой забега слоты
+ * пусты, панель расчёта не рисуется — и Туз, пришедший к пустому столу, был бы
+ * ровно той декорацией, от которой правило «пришёл и ушёл» защищает.
+ */
+export function aceAtSettlement(s: SimState): void {
+  let pending = 0;
+  for (let k = 0; k < s.playerCount * MAX_ACTIVE_BETS; k++) {
+    if (s.aState[k] === BetState.Active) pending++;
+  }
+  if (pending === 0) return;
+  if (!enterAce(s)) return;
+  // Уходит по тем же часам, что и с любого выхода: телеграф плюс три секунды.
+  // Пауза расчёта длиннее (пять секунд), так что уход виден игроку целиком —
+  // заведение приняло ставки и удалилось, а не растворилось со сменой экрана.
+  s.meta[Meta.AceLeaveAt] = s.tick + CARD.aceTelegraphTicks + CARD.aceStayTicks;
+}
+
+/**
+ * Положить одну карту, если для неё нашлось пари.
+ *
+ * Пустая рука — законный исход, а не сбой: `pickBet` скорее не даст ничего,
+ * чем выдаст пари, невыполнимое на схеме владельца. Карты не станет; карта,
+ * которую нельзя отыграть, была бы хуже (GDD §9.5).
+ */
+function dealOne(s: SimState, owner: number): void {
+  const bet = pickBet(s, owner);
+  if (bet < 0) return;
+  placeCard(s, bet, owner, s.tick + CARD.lifeTicks);
 }
 
 function hasCardFor(s: SimState, player: number): boolean {
@@ -115,14 +185,18 @@ function stepAce(s: SimState): void {
    * Пришёл он бросить карту, а не досмотреть бой: цилиндр, зависший у стены
    * до конца комнаты, перестаёт быть событием и становится частью интерьера,
    * а вместе с ним обесцениваются и жесты, которые он играет телом
-   * (GDD §12А.1, §17А). Место ухода помечается −1, а не нулём: обнулённая
-   * позиция иначе читалась бы как «он ещё не приходил», и подбросов за
-   * комнату стало бы сколько угодно.
+   * (GDD §12А.1, §17А). «Больше не придёт с картой» живёт отдельным полем
+   * `AceTossed`, а не отрицательной позицией: выход ради жеста и выход ради
+   * подброса — разные события, и пока оба смысла делили одно поле, первый же
+   * жест отменял подброс.
    */
   if (leaveAt > 0 && s.tick >= leaveAt) {
     s.meta[Meta.AceX] = 0;
     s.meta[Meta.AceY] = 0;
-    s.meta[Meta.AceLeaveAt] = -1;
+    s.meta[Meta.AceLeaveAt] = 0;
+    // Тик ухода — точка отсчёта паузы между выходами: приходить снова сразу
+    // же значит не уходить.
+    s.meta[Meta.AceCameoAt] = s.tick;
     s.meta[Meta.AceGesture] = AceGesture.None;
     s.meta[Meta.AceGestureUntil] = 0;
     return;
@@ -132,25 +206,43 @@ function stepAce(s: SimState): void {
   if (s.meta[Meta.TossAt] !== 0) {
     if (s.tick < s.meta[Meta.TossAt]) return;
     s.meta[Meta.TossAt] = 0;
+    s.meta[Meta.AceTossed] = 1;
     placeCard(s, pickBet(s, SHARED), SHARED, s.tick + CARD.lifeTicks);
     return;
   }
 
-  // Один подброс за комнату, ровно на середине зачищенной угрозы.
-  if (leaveAt !== 0) return;
+  // Он уже на арене — выходить второй раз неоткуда.
+  if (s.meta[Meta.AceX] !== 0) return;
+
+  // Подброс — один за комнату, ровно на середине зачищенной угрозы.
+  if (s.meta[Meta.AceTossed] !== 0) return;
   const total = s.meta[Meta.RoomThreat];
   if (total <= 0) return;
   if (s.meta[Meta.ThreatCleared] * 100 < total * CARD.tossAtThreatPct) return;
+  if (!enterAce(s)) return;
 
-  /*
-   * Точка стояния — чистая функция от положения ВСЕХ живых игроков.
-   *
-   * Считать её по игроку 0 нельзя даже в соло, где это работает случайно: в
-   * коопе «дальняя стена» первого игрока бывает ближней для четвёртого, и Туз
-   * вставал бы посреди чужого боя — то есть ровно там, где обещано, что его
-   * не будет. Центр масс живых даёт одну точку на всю команду и не зависит
-   * от нумерации.
-   */
+  s.meta[Meta.TossAt] = s.tick + CARD.aceTelegraphTicks;
+  s.meta[Meta.AceLeaveAt] = s.tick + CARD.aceTelegraphTicks + CARD.aceStayTicks;
+}
+
+/**
+ * Вывести Туза на арену. Возвращает false, если выходить нельзя.
+ *
+ * Точка стояния — ЧИСТАЯ ФУНКЦИЯ от положения всех живых игроков. Считать её
+ * по игроку 0 нельзя даже в соло, где это работает случайно: в коопе «дальняя
+ * стена» первого игрока бывает ближней для четвёртого, и Туз вставал бы
+ * посреди чужого боя — то есть ровно там, где обещано, что его не будет.
+ * Центр масс живых даёт одну точку на всю команду и не зависит от нумерации.
+ *
+ * Выходов за комнату не больше `aceCameosPerRoom`, и между ними держится
+ * пауза: Туз, мелькающий у стены каждые пару секунд, перестаёт быть событием
+ * ровно так же, как Туз, зависший там навсегда.
+ */
+function enterAce(s: SimState): boolean {
+  if (s.meta[Meta.AceCameos] >= CARD.aceCameosPerRoom) return false;
+  const last = s.meta[Meta.AceCameoAt];
+  if (last !== 0 && s.tick - last < CARD.aceCameoGapTicks) return false;
+
   let alive = 0;
   let sumX = 0;
   let sumY = 0;
@@ -160,17 +252,43 @@ function stepAce(s: SimState): void {
     sumY += s.pY[p];
     alive++;
   }
-  if (alive === 0) return;
+  if (alive === 0) return false;
   const midX = Math.trunc(sumX / alive) | 0;
   const midY = Math.trunc(sumY / alive) | 0;
 
   // Встаёт у края — там, куда команда смотрит меньше всего: у дальней от неё
   // стены по горизонтали и на её же высоте.
-  const far = midX > s.arenaW >> 1 ? fromUnits(90) : sub(s.arenaW, fromUnits(90));
-  s.meta[Meta.AceX] = far;
+  s.meta[Meta.AceX] = midX > s.arenaW >> 1 ? fromUnits(90) : sub(s.arenaW, fromUnits(90));
   s.meta[Meta.AceY] = midY;
-  s.meta[Meta.TossAt] = s.tick + CARD.aceTelegraphTicks;
+  s.meta[Meta.AceCameos]++;
+  return true;
+}
+
+/**
+ * Выход «на настроение»: Туз приходит ОТРЕАГИРОВАТЬ, а не бросить карту.
+ *
+ * Без него четыре жеста из шести были мёртвым кодом. Замер до правки: Туз на
+ * арене 7% времени, из шести жестов срабатывали два — зевок, отворачивание,
+ * палец вниз и овация не случались ни разу за пять минут, потому что и
+ * `gesture()`, и `stepGestures` выходят при пустой арене, а приходил он один
+ * раз за комнату и на три секунды. «Комедия из правил» (GDD §17А) при этом
+ * молчала почти весь бой.
+ *
+ * Приходит он не мгновенно: телеграф тот же, что у подброса, — свист и
+ * появление у стены. Реакция с опозданием на полсекунды честнее реакции из
+ * ниоткуда, и это тот же сигнал, который игрок уже выучил.
+ */
+function moodCameo(s: SimState, g: AceGesture): void {
+  if (s.meta[Meta.AceX] !== 0) return;
+  if (s.meta[Meta.AceMoods] >= CARD.aceMoodCameos) return;
+  if (!enterAce(s)) return;
+
+  s.meta[Meta.AceMoods]++;
   s.meta[Meta.AceLeaveAt] = s.tick + CARD.aceTelegraphTicks + CARD.aceStayTicks;
+  // Жест ставится с задержкой на телеграф: тело должно доехать раньше, чем
+  // начнёт играть.
+  s.meta[Meta.AceGesture] = g;
+  s.meta[Meta.AceGestureUntil] = s.tick + CARD.aceTelegraphTicks + CARD.gestureTicks;
 }
 
 /**
@@ -206,7 +324,16 @@ function pickBet(s: SimState, owner: number): number {
     for (let b = 0; b < BET_COUNT; b++) {
       if (!schemeBlocked(s, b, owner)) freeBets[free++] = b;
     }
-    if (free === 0) return 0;
+    /*
+     * Выдать нечего — значит карты не будет, и это законный исход.
+     *
+     * Раньше здесь стоял `return 0`, то есть первое пари каталога В ОБХОД
+     * схемы — ровно то, что абзацем выше объявлено недопустимым. Случай
+     * достижим: на таче с автоогнём весь каталог может оказаться закрытым
+     * матрицей, и тогда «сломанная карта» досталась бы игроку именно там, где
+     * матрица и заводилась, чтобы этого не случилось.
+     */
+    if (free === 0) return -1;
   }
 
   return freeBets[nextInt(s.rng, Stream.Bets, free)];
@@ -291,10 +418,15 @@ export function placeCard(s: SimState, bet: number, owner: number, deadline: num
   /*
    * Случайные точки кончились — перебираем сетку.
    *
-   * К RNG здесь не обращаемся намеренно: число обращений к потоку `Cards`
-   * иначе зависело бы от того, сколько раз не повезло, и раскладка перестала
-   * бы воспроизводиться в реплее. Порядок обхода фиксирован, поэтому результат
-   * — чистая функция от геометрии и от того, что уже лежит.
+   * К RNG здесь не обращаемся, и причина не в детерминизме: он цел и так —
+   * цикл случайных попыток выше уже тратит по два обращения на попытку, то
+   * есть их число ЗАВИСИТ от того, сколько раз не повезло, и это нормально.
+   * Поток `Cards` — чистая функция состояния, и одинаковое состояние даёт
+   * одинаковое число обращений.
+   *
+   * Причина в другом: случайные точки кончились, и продолжать бросать их
+   * бессмысленно — место либо есть, либо его нет. Фиксированный обход находит
+   * его за один проход, если оно вообще существует, и не зависит от везения.
    */
   const step = fromUnits(CARD.placeScanStep);
   const floor = minSpacing();
@@ -532,7 +664,7 @@ export function cashOut(s: SimState, player: number, n: number): number {
   s.aState[k] = BetState.Cashed;
   s.meta[Meta.BetsCashed]++;
   // Соскочил в шаге от полной выплаты — молчаливый палец вниз.
-  if (progressOf(s, player, n) * 100 >= FX_ONE * CARD.bigWinPct) {
+  if (progressOf(s, player, n) * 100 >= FX_ONE * CARD.cashOutTellPct) {
     gesture(s, AceGesture.ThumbsDown);
   }
   return payout;
@@ -628,15 +760,33 @@ function loseBet(s: SimState, player: number, n: number): void {
  * тике Туз дёргается кадр и не показывает ничего.
  */
 function gesture(s: SimState, g: AceGesture): void {
-  // Пустой арены это не касается: жест — это то, что делает тело, а тела на
-  // арене нет. Реплика без актёра превратилась бы в закадровый голос, которым
-  // Туз по замыслу не является.
-  if (s.meta[Meta.AceX] === 0) return;
   if (s.tick < s.meta[Meta.AceGestureUntil]) return;
-  const мимо =
-    s.meta[Meta.DeathStreak] >= CARD.mercyDeathStreak &&
-    (g === AceGesture.Applaud || g === AceGesture.ThumbsDown || g === AceGesture.Ovation);
-  if (мимо) return;
+  /*
+   * Дозировка: жесты за счёт игрока пропускаются, пока идёт серия смертей.
+   *
+   * Это не мягкость. После третьей смерти подряд издёвка перестаёт читаться
+   * как шутка и становится поводом закрыть игру (GDD §17А, границы). Проверка
+   * стоит ДО выхода на арену: приходить, чтобы промолчать, — худший из
+   * возможных вариантов, он превращает Туза в декорацию именно в тот момент,
+   * когда игроку и без него плохо.
+   */
+  const mocking =
+    g === AceGesture.Applaud || g === AceGesture.ThumbsDown || g === AceGesture.Ovation;
+  if (mocking && s.meta[Meta.DeathStreak] >= CARD.mercyDeathStreak) return;
+
+  /*
+   * Тела на арене нет — значит, надо прийти.
+   *
+   * Реплика без актёра превратилась бы в закадровый голос, которым Туз по
+   * замыслу не является: юмор играется телом (GDD §17А). Но и молчать нельзя —
+   * пока `gesture()` просто выходил при пустой арене, четыре жеста из шести
+   * не срабатывали ни разу за пять минут игры. Поэтому событие, достойное
+   * реакции, приводит его самого — с тем же телеграфом, что у подброса.
+   */
+  if (s.meta[Meta.AceX] === 0) {
+    moodCameo(s, g);
+    return;
+  }
   s.meta[Meta.AceGesture] = g;
   s.meta[Meta.AceGestureUntil] = s.tick + CARD.gestureTicks;
 }
@@ -650,6 +800,17 @@ function gesture(s: SimState, g: AceGesture): void {
 function stepGestures(s: SimState): void {
   if (s.tick < s.meta[Meta.AceGestureUntil]) return;
   s.meta[Meta.AceGesture] = AceGesture.None;
+  /*
+   * Эти жесты играются, только пока он УЖЕ на арене, и ради них он не выходит.
+   *
+   * Зевок, отворачивание и суета — не реакция на событие, а то, чем занят
+   * стоящий рядом человек: они верны всё время, пока верно положение дел.
+   * Дай им звать его — и первое же затянувшееся состояние потратит
+   * единственный выход «на настроение», после чего аплодисменты провалу и
+   * овация нелепой смерти не случатся уже никогда. Замер показал ровно это:
+   * присутствие выросло, а видов жестов стало ОДИН из шести вместо двух.
+   * Выход стоит тратить на событие, а не на фон.
+   */
   if (s.meta[Meta.AceX] === 0) return;
 
   // Игрок вот-вот сорвёт куш — Туз отворачивается и делает вид, что занят.
@@ -657,7 +818,7 @@ function stepGestures(s: SimState): void {
     for (let i = 0; i < MAX_ACTIVE_BETS; i++) {
       const k = slot(p, i);
       if (s.aState[k] !== BetState.Active) continue;
-      if (progressOf(s, p, i) * 100 >= FX_ONE * CARD.bigWinPct) {
+      if (progressOf(s, p, i) * 100 >= FX_ONE * CARD.turnAwayPct) {
         gesture(s, AceGesture.TurnAway);
         return;
       }
@@ -671,9 +832,9 @@ function stepGestures(s: SimState): void {
   }
 
   // Игрок в плюсе по сальдо — заведение нервничает.
-  let выиграно = 0;
-  for (let p = 0; p < s.playerCount; p++) выиграно += s.pChips[p];
-  if (s.meta[Meta.BetsWon] + s.meta[Meta.BetsCashed] > s.meta[Meta.BetsLost] && выиграно > 0) {
+  let chipsTotal = 0;
+  for (let p = 0; p < s.playerCount; p++) chipsTotal += s.pChips[p];
+  if (s.meta[Meta.BetsWon] + s.meta[Meta.BetsCashed] > s.meta[Meta.BetsLost] && chipsTotal > 0) {
     gesture(s, AceGesture.Fidget);
   }
 }
@@ -684,7 +845,12 @@ export function aceOnDeath(s: SimState, player: number): void {
   for (let i = 0; i < MAX_ACTIVE_BETS; i++) {
     const k = slot(player, i);
     if (s.aState[k] !== BetState.Active) continue;
-    if (progressOf(s, player, i) * 100 >= FX_ONE * CARD.bigWinPct) {
+    // Порог тот же, что у «соскочил на самом краю»: овация — это реакция на
+    // потерю почти выигранного, и «почти» здесь обязано значить то же самое,
+    // что при обналичивании. Разные числа означали бы, что одна и та же
+    // близость к кушу считается близкой или нет в зависимости от того, чем
+    // всё кончилось.
+    if (progressOf(s, player, i) * 100 >= FX_ONE * CARD.cashOutTellPct) {
       s.meta[Meta.AceGestureUntil] = 0;
       gesture(s, AceGesture.Ovation);
       return;
@@ -827,15 +993,6 @@ export function clearSettled(s: SimState): void {
     s.aCounter[k] = 0;
     s.aStake[k] = 0;
     s.aNearMiss[k] = 0;
-  }
-}
-
-export function clearBets(s: SimState): void {
-  for (let p = 0; p < s.playerCount * MAX_ACTIVE_BETS; p++) {
-    s.aState[p] = BetState.None;
-    s.aCounter[p] = 0;
-    s.aStake[p] = 0;
-    s.aNearMiss[p] = 0;
   }
 }
 

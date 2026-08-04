@@ -57,7 +57,7 @@ import {
   spawnPlayers,
   step,
   toFloat,
-} from '../../sim/src/index';
+} from '@dod/sim';
 
 /** Враги по именам: номер типа в сценарии читается не лучше маски кнопок. */
 const ENEMY_TYPES: Record<string, EnemyType> = {

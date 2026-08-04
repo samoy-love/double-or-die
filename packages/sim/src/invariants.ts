@@ -10,9 +10,13 @@
  * тестом, а не жалобой в отзывах.
  */
 
+import { BET_COUNT, InputScheme } from './bets.generated';
+import { APPETITE, MAX_ACTIVE_BETS } from './config';
 import { onScreenCap } from './enemies';
 import {
+  AceGesture,
   ARENA_H,
+  BetState,
   ARENA_W,
   EntityFlag,
   MAX_CHIPS,
@@ -108,4 +112,61 @@ export function checkInvariants(s: SimState): void {
 
   if (s.meta[Meta.Room] < 1) fail(`номер комнаты ${s.meta[Meta.Room]}`, s.tick);
   if (s.meta[Meta.WaveBudget] < 0) fail('бюджет волны ушёл в минус', s.tick);
+
+  checkBets(s);
+  checkAce(s);
+}
+
+/**
+ * Ставочная часть состояния.
+ *
+ * Появилась в 0.3.0 и до сих пор не была покрыта ничем: инварианты проверяли
+ * мир версии «Тир». Здесь дешёвые проверки на то, что слот пари вообще
+ * осмыслен, — ошибка в них не видна ни в бою, ни в логе, только в деньгах.
+ */
+function checkBets(s: SimState): void {
+  for (let p = 0; p < s.playerCount; p++) {
+    /*
+     * Схема ввода приезжает ДВУМЯ битами маски, то есть принимает 0..3, а
+     * схем три. Четвёртое значение даёт `1 << 3` — бит, которого нет ни в
+     * одной `schemeMask`, и матрица «пари × схема ввода» молча перестаёт
+     * фильтровать: игрок получает пари, невыполнимое его руками, ровно там,
+     * где матрица и заводилась, чтобы этого не случилось (GDD §9.5).
+     */
+    if (s.pScheme[p] < 0 || s.pScheme[p] > InputScheme.Touch) {
+      fail(`у игрока ${p} схема ввода ${s.pScheme[p]}, а их ${InputScheme.Touch + 1}`, s.tick);
+    }
+    if (s.pAppetite[p] < 0 || s.pAppetite[p] >= APPETITE.length) {
+      fail(`у игрока ${p} аппетит ${s.pAppetite[p]}, тиров ${APPETITE.length}`, s.tick);
+    }
+
+    for (let i = 0; i < MAX_ACTIVE_BETS; i++) {
+      const k = p * MAX_ACTIVE_BETS + i;
+      const state = s.aState[k];
+      if (state < BetState.None || state > BetState.Cashed) {
+        fail(`пари ${i} игрока ${p} в состоянии ${state}`, s.tick);
+      }
+      if (state === BetState.None) continue;
+      // Кон отрицательным не бывает: он списывается с кошелька, а кошелёк не
+      // уходит в минус — Туз в кредит не принимает (GDD §11).
+      if (s.aStake[k] < 0) fail(`у пари ${i} игрока ${p} отрицательный кон`, s.tick);
+      if (s.aBet[k] < 0 || s.aBet[k] >= BET_COUNT) {
+        fail(`пари ${i} игрока ${p} ссылается на несуществующее пари ${s.aBet[k]}`, s.tick);
+      }
+      if (s.aCounter[k] < 0) fail(`у пари ${i} игрока ${p} отрицательный счётчик`, s.tick);
+    }
+  }
+}
+
+/** Туз: жест и бюджет выходов. Жест вне перечисления — это дефект, а не мода. */
+function checkAce(s: SimState): void {
+  const g = s.meta[Meta.AceGesture];
+  if (g < AceGesture.None || g > AceGesture.Ovation) fail(`жест Туза ${g}`, s.tick);
+  if (s.meta[Meta.DeathStreak] < 0) fail('серия смертей ушла в минус', s.tick);
+  if (s.meta[Meta.AceCameos] < 0) fail('счётчик выходов Туза ушёл в минус', s.tick);
+  // Тело без позиции и позиция без тела — разные поломки, но обе означают,
+  // что клиент нарисует Туза не там, где он есть.
+  if (s.meta[Meta.AceX] === 0 && s.meta[Meta.AceGesture] !== AceGesture.None) {
+    fail('жест играется на пустой арене', s.tick);
+  }
 }

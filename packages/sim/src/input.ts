@@ -78,7 +78,28 @@ export const EMPTY_INPUT: Readonly<InputFrame> = Object.freeze({
 
 export const isDown = (f: InputFrame, b: Btn): boolean => (f.buttons & b) !== 0;
 
-export const appetiteOf = (f: InputFrame): number => (f.buttons >> APPETITE_SHIFT) & APPETITE_MASK;
+/**
+ * Тир кона из кадра, СО СДВИГОМ НА ЕДИНИЦУ: 0 — «молчит», 1..3 — тиры 0..2.
+ *
+ * Два бита дают четыре значения, а тиров три — и четвёртое значение обязано
+ * означать «игрок сейчас ничего не выбирает», иначе защёлка не отличит выбор
+ * от отпущенной кнопки. Наивная раскладка «биты и есть номер тира» стоила
+ * ровно одного тира: ноль читался как молчание, и «Скромно» нельзя было
+ * выбрать ЯВНО — крестовина вниз до упора и клавиша `1` не делали ничего.
+ * Молчаливо потерянным оказался самый нужный тир: в начале забега кошелёк
+ * мал, и Келли (ECONOMY §7) велит ставить именно скромно.
+ *
+ * Возвращает −1, когда игрок молчит: вызывающий сам решает, что с этим
+ * делать, и не путает молчание с нулевым тиром.
+ */
+export const appetiteOf = (f: InputFrame): number => {
+  const raw = (f.buttons >> APPETITE_SHIFT) & APPETITE_MASK;
+  return raw === 0 ? -1 : raw - 1;
+};
+
+/** Уложить тир в биты кадра. Обратная к `appetiteOf`, живёт рядом с ней. */
+export const withAppetite = (buttons: number, tier: number): number =>
+  (buttons & ~(APPETITE_MASK << APPETITE_SHIFT)) | ((tier + 1) << APPETITE_SHIFT);
 
 export const schemeOf = (f: InputFrame): number => (f.buttons >> SCHEME_SHIFT) & SCHEME_MASK;
 

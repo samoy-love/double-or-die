@@ -30,8 +30,9 @@ import {
   PLAYER,
   WAVE,
   WEDGE,
+  roomGapTicksFor,
 } from './config';
-import { clearSettled, dealCards, settleBets } from './bets';
+import { aceAtSettlement, clearSettled, dealCards, resetAce, settleBets } from './bets';
 import { flowTo, flowX, flowY, updateNav } from './nav';
 import { damagePlayer, explode, fireEnemy, killEnemy, statsOf } from './combat';
 import { add, type Fx, fromInt, mul, sub } from './fixed';
@@ -85,6 +86,18 @@ export const onScreenCap = (players: number): number =>
  * и начинаются вместе с ним, отдельного экрана ставок нет (GDD §9.1).
  */
 export function startRoom(s: SimState, room: number): void {
+  /*
+   * Порядок здесь несущий: Туз, расчёт, раздача.
+   *
+   * Сначала сбрасывается Туз — новая комната начинается с чистого бюджета
+   * выходов и без чужого жеста. Потом он выходит принимать расчёт, и только
+   * потом идёт сам расчёт: жесты, которые тот породит, попадают в уже стоящее
+   * тело. Обратный порядок стоил дефекта — раздача, шедшая последней, стирала
+   * присутствие и оставляла жест, а это запрещённое инвариантом состояние.
+   */
+  resetAce(s);
+  aceAtSettlement(s);
+
   // Расчёт прошлой комнаты, но БЕЗ очистки слотов: пока идёт пауза, игрок
   // смотрит на результаты — выигранное золотится, проигранное показывает,
   // насколько не хватило. Слоты освобождаются, когда начинается бой.
@@ -103,7 +116,10 @@ export function startRoom(s: SimState, room: number): void {
   s.meta[Meta.Wave] = 0;
   s.meta[Meta.WaveBudget] = 0;
   s.meta[Meta.RoomStartTick] = s.tick;
-  s.meta[Meta.NextWaveAt] = s.tick + WAVE.roomGapTicks;
+  // Перед первой комнатой расчёта не было, и пять секунд экрана итогов
+  // выродились бы в пять секунд пустоты. Развилка живёт в конфиге: её знает
+  // ещё и пропуск расчёта.
+  s.meta[Meta.NextWaveAt] = s.tick + roomGapTicksFor(room);
 
   // Бюджет комнаты целиком — знаменатель прогресса удержаний. Считается один
   // раз при входе: волны берут из него, а пари меряют по нему пройденный путь.

@@ -21,7 +21,7 @@
  *     npm run check:contrast -- --min 25   отчёт по более строгому порогу
  */
 
-import { checkContrast, DELTA_E_MIN, type ContrastResult } from '../packages/client/src/contrast';
+import { checkContrast, DELTA_E_MIN, type ContrastResult } from '@dod/client/contrast';
 
 interface Options {
   min: number;
