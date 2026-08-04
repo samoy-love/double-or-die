@@ -37,9 +37,13 @@ import './debug-api';
  * частицы и HUD.
  */
 
-const БАЗА = join(dirname(fileURLToPath(import.meta.url)), 'baselines', 'stress-frame.json');
-const КОЛОНОК = 16;
-const СТРОК = 9;
+const BASELINE_PATH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  'baselines',
+  'stress-frame.json',
+);
+const COLS = 16;
+const ROWS = 9;
 
 /**
  * Допуск на клетку, в долях канала.
@@ -48,13 +52,13 @@ const СТРОК = 9;
  * случайных искр и заметно меньше любой настоящей поломки: пропавший слой
  * врагов меняет клетку на десятки процентов, а съехавшая палитра — сразу все.
  */
-const ДОПУСК = 0.12;
+const TOLERANCE = 0.12;
 
-interface Кадр {
-  колонок: number;
-  строк: number;
+interface Frame {
+  cols: number;
+  rows: number;
   /** Средние RGB по клеткам, слева направо и сверху вниз, 0..1. */
-  клетки: number[][];
+  cells: number[][];
 }
 
 /*
@@ -68,8 +72,8 @@ interface Кадр {
 test.use({ serviceWorkers: 'block' });
 
 test('стресс-кадр не разошёлся с эталоном', async ({ page }) => {
-  const ошибки: string[] = [];
-  page.on('pageerror', (e) => ошибки.push(String(e)));
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
 
   await page.goto('/?debug=1&autopause=1');
   await page.waitForFunction(() => '__DOD__' in window, null, { timeout: 30_000 });
@@ -88,9 +92,9 @@ test('стресс-кадр не разошёлся с эталоном', async 
    * с эталоном обязан тест, а не читатель отчёта. Перезагрузка стоит секунды,
    * а мигающий гейт перестают читать.
    */
-  const снять = (): Promise<number[][]> =>
+  const grab = (): Promise<number[][]> =>
     page.evaluate(
-      ({ колонок, строк }) => {
+      ({ cols, rows }) => {
         const d = window.__DOD__!;
         d.newRun({ seed: 3, players: 1 });
         d.mute(true);
@@ -101,59 +105,61 @@ test('стресс-кадр не разошёлся с эталоном', async 
         // Пара тиков, чтобы сущности встали по местам и появились телеграфы:
         // кадр обязан содержать все слои, иначе он ничего не стережёт.
         d.tick(2);
-        return d.frameGrid(колонок, строк);
+        return d.frameGrid(cols, rows);
       },
-      { колонок: КОЛОНОК, строк: СТРОК },
+      { cols: COLS, rows: ROWS },
     );
 
-  let клетки: number[][] = [];
-  for (let попытка = 1; попытка <= 3; попытка++) {
+  let cells: number[][] = [];
+  for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      клетки = await снять();
+      cells = await grab();
       break;
     } catch (e) {
-      const текст = String(e);
-      if (!текст.includes('контекст потерян') || попытка === 3) throw e;
+      const text = String(e);
+      if (!text.includes('контекст потерян') || attempt === 3) throw e;
       await page.reload();
       await page.waitForFunction(() => '__DOD__' in window, null, { timeout: 30_000 });
     }
   }
 
-  const кадр: Кадр = { колонок: КОЛОНОК, строк: СТРОК, клетки };
+  const frame: Frame = { cols: COLS, rows: ROWS, cells };
 
-  expect(ошибки).toEqual([]);
-  expect(клетки.length).toBe(КОЛОНОК * СТРОК);
+  expect(errors).toEqual([]);
+  expect(cells.length).toBe(COLS * ROWS);
 
   // Кадр обязан быть неоднородным: равномерная заливка означает, что не
   // нарисовалось ничего, и сравнение с эталоном такой отказ пропустило бы,
   // будь эталон снят в том же состоянии.
-  const яркости = клетки.map(([r, g, b]) => (r + g + b) / 3);
-  expect(Math.max(...яркости) - Math.min(...яркости)).toBeGreaterThan(0.02);
+  const brightness = cells.map(([r, g, b]) => (r + g + b) / 3);
+  expect(Math.max(...brightness) - Math.min(...brightness)).toBeGreaterThan(0.02);
 
-  if (!existsSync(БАЗА)) {
+  if (!existsSync(BASELINE_PATH)) {
     // Первый прогон записывает эталон и честно падает: молча принять
     // сегодняшнюю картинку за образец — значит получить проверку, которая
     // подтверждает что угодно.
-    writeFileSync(БАЗА, JSON.stringify(кадр, null, 2) + '\n');
-    throw new Error(`эталона не было — записан ${БАЗА}. Проверьте кадр глазами и запустите снова`);
+    writeFileSync(BASELINE_PATH, JSON.stringify(frame, null, 2) + '\n');
+    throw new Error(
+      `эталона не было — записан ${BASELINE_PATH}. Проверьте кадр глазами и запустите снова`,
+    );
   }
 
-  const эталон = JSON.parse(readFileSync(БАЗА, 'utf8')) as Кадр;
-  expect({ колонок: эталон.колонок, строк: эталон.строк }).toEqual({
-    колонок: КОЛОНОК,
-    строк: СТРОК,
+  const baseline = JSON.parse(readFileSync(BASELINE_PATH, 'utf8')) as Frame;
+  expect({ cols: baseline.cols, rows: baseline.rows }).toEqual({
+    cols: COLS,
+    rows: ROWS,
   });
 
-  const разошлись: string[] = [];
-  for (let i = 0; i < эталон.клетки.length; i++) {
+  const diffs: string[] = [];
+  for (let i = 0; i < baseline.cells.length; i++) {
     for (let c = 0; c < 3; c++) {
-      const d = Math.abs(эталон.клетки[i][c] - клетки[i][c]);
-      if (d <= ДОПУСК) continue;
-      const col = i % КОЛОНОК;
-      const row = Math.floor(i / КОЛОНОК);
-      разошлись.push(`клетка ${col},${row}: канал ${'rgb'[c]} разошёлся на ${d.toFixed(3)}`);
+      const d = Math.abs(baseline.cells[i][c] - cells[i][c]);
+      if (d <= TOLERANCE) continue;
+      const col = i % COLS;
+      const row = Math.floor(i / COLS);
+      diffs.push(`клетка ${col},${row}: канал ${'rgb'[c]} разошёлся на ${d.toFixed(3)}`);
       break;
     }
   }
-  expect(разошлись).toEqual([]);
+  expect(diffs).toEqual([]);
 });

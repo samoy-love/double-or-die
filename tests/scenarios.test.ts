@@ -9,7 +9,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { parseScenario, runScenario } from '../packages/tools/src/scenario';
+import { parseScenario, runScenario } from '@dod/tools/scenario';
 
 const DIR = join(__dirname, 'scenarios');
 

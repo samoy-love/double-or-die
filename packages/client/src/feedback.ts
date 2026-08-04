@@ -33,7 +33,7 @@ import {
   Meta,
   type SimState,
   toFloat,
-} from '../../sim/src/index';
+} from '@dod/sim';
 import type { Audio } from './audio';
 import { pickBark, severityOf } from './barks';
 import type { Feel } from './feel';
@@ -44,6 +44,15 @@ import { ParticleShape, type Particles } from './particles';
 const HIT_FLASH = 0.06;
 /** Скваш при попадании: 1.15× по одной оси. */
 const HIT_SQUASH = 0.15;
+
+/**
+ * Сколько живёт всплывающая сделка над головой игрока, секунды.
+ *
+ * Полторы секунды — это время, за которое взгляд успевает уйти с боя на две
+ * цифры и вернуться. Меньше — не прочитать под обстрелом; больше — плашка
+ * висит над головой и мешает видеть, куда бежать.
+ */
+export const DEAL_LIFE = 1.4;
 
 const rand = (): number => Math.random() * 2 - 1;
 
@@ -79,6 +88,8 @@ export class Feedback {
   private readonly prevChips = new Int32Array(MAX_PLAYERS);
 
   private readonly prevCardActive = new Uint8Array(MAX_CARDS);
+  /** Срок пропавшей карты: по нему подбор отличается от истечения. */
+  private readonly prevCardDeadline = new Int32Array(MAX_CARDS);
   private readonly prevBetState = new Int32Array(MAX_PLAYERS * MAX_ACTIVE_BETS);
   private readonly prevChipActive = new Uint8Array(MAX_CHIPS);
   private readonly prevSpawnActive = new Uint8Array(MAX_SPAWNS);
@@ -105,6 +116,24 @@ export class Feedback {
    * читался бы как «100%», потому что время у него вышло целиком.
    */
   readonly betLostTick = new Int32Array(MAX_PLAYERS * MAX_ACTIVE_BETS);
+
+  /**
+   * Взятая сделка над головой игрока: остаток жизни, пари, кон и обещанный куш.
+   *
+   * Момент подбора обязан быть СОБЫТИЕМ. Пока он был только звуком, игрок не
+   * видел ни того, что у него списали, ни того, что он за это получит:
+   * владелец сформулировал это прямо — «я их могу взять, но не понятно, что я
+   * от этого получаю или теряю». Кон списывается молча один раз и навсегда, и
+   * увидеть его больше негде — плашка в HUD показывает уже последствия, а не
+   * саму сделку.
+   *
+   * Массивами по игрокам, а не одним слотом: вчетвером карты берут в один тик,
+   * и общий слот показал бы чужую сделку над своей головой.
+   */
+  readonly dealLife = new Float32Array(MAX_PLAYERS);
+  readonly dealBet = new Int32Array(MAX_PLAYERS);
+  readonly dealStake = new Int32Array(MAX_PLAYERS);
+  readonly dealPayout = new Int32Array(MAX_PLAYERS);
   private barkOccasion = 0;
   /**
    * Реплика, которой Туз сопроводил текущий жест.
@@ -115,7 +144,6 @@ export class Feedback {
    * отлаживать и правило дозировки.
    */
   bark = '';
-  private takenThisTick = false;
   private primed = false;
 
   constructor(
@@ -131,6 +159,7 @@ export class Feedback {
     this.playerSquash.fill(0);
     this.betPayout.fill(0);
     this.betLostTick.fill(0);
+    this.dealLife.fill(0);
     this.prevAceOnArena = s.meta[Meta.AceX] !== 0;
     this.primed = false;
     this.remember(s);
@@ -146,6 +175,7 @@ export class Feedback {
     for (let i = 0; i < MAX_PLAYERS; i++) {
       if (this.playerSquash[i] > 0)
         this.playerSquash[i] = Math.max(0, this.playerSquash[i] - dt * 5);
+      if (this.dealLife[i] > 0) this.dealLife[i] = Math.max(0, this.dealLife[i] - dt);
     }
   }
 
@@ -155,14 +185,6 @@ export class Feedback {
       this.remember(s);
       this.primed = true;
       return;
-    }
-
-    // Списание кона видно только сравнением с прошлым тиком, а сравнивать
-    // приходится ДО того, как прошлое перезапишется. Подбор карты — это
-    // единственное, что уменьшает кошелёк: фишки его только пополняют.
-    this.takenThisTick = false;
-    for (let p = 0; p < s.playerCount; p++) {
-      if (s.pChips[p] < this.prevChips[p]) this.takenThisTick = true;
     }
 
     this.observeEnemies(s);
@@ -391,7 +413,14 @@ export class Feedback {
    *
    * Исчезнувшая карта — это либо подбор, либо истёкший срок, и звучать они
    * обязаны по-разному: одно решение игрока, другое — упущенная возможность.
-   * Различаем по кошельку: подбор списывает кон.
+   *
+   * Различаем ПО СРОКУ карты, а не по кошельку. Кошелёк врал: кон равен
+   * `min(тир, кошелёк)`, и при пустом кошельке он ноль — списывать нечего, а
+   * значит подбор ничем не отличался от истечения и звучал как упущенная
+   * возможность. Случай не редкий: провал пари вычищает кошелёк, и следующая
+   * же взятая карта звучала соболезнованием вместо шелеста колоды. Срок карты
+   * отвечает на тот же вопрос точно: `stepCards` гасит её ровно тогда, когда
+   * тик дошёл до `kDeadline`, всё остальное — руки игрока.
    */
   private observeCards(s: SimState): void {
     for (let i = 0; i < MAX_CARDS; i++) {
@@ -421,8 +450,10 @@ export class Feedback {
       // вот-вот истлеет: одно — «беги, если хочешь успеть», другое — «уже
       // нет». Одним звуком на оба игрок перестаёт различать шанс и его
       // потерю, а карта только этим таймером и давит.
-      if (was && !now && this.takenThisTick) this.audio.play('cardTake');
-      else if (was && !now) this.audio.play('cardExpire');
+      if (was && !now) {
+        const expired = s.tick >= this.prevCardDeadline[i];
+        this.audio.play(expired ? 'cardExpire' : 'cardTake');
+      }
     }
 
     // Предупреждение об истечении: угасающий звон за три секунды до конца.
@@ -448,7 +479,9 @@ export class Feedback {
       const n = k % MAX_ACTIVE_BETS;
       const spec = BETS[s.aBet[k]];
 
-      if (now === BetState.Cashed) {
+      if (now === BetState.Active) {
+        this.onBetTaken(s, player, k, spec.multiplier);
+      } else if (now === BetState.Cashed) {
         // Выплату считаем ДО того, как прогресс уедет вместе с комнатой.
         this.betPayout[k] = cashOutValue(s, player, n);
         this.audio.play('cashOut');
@@ -461,6 +494,46 @@ export class Feedback {
         this.audio.play('betLost');
       }
     }
+  }
+
+  /**
+   * Сделка заключена: кон списан, куш обещан.
+   *
+   * Громкость выбрана НИЖЕ убийства врага намеренно (таблица сочности GDD §6:
+   * убийство — хитстоп 40 мс, тряска 3 u, двенадцать осколков). Подбор — это
+   * решение, а не удар: тряски нет вовсе, хитстоп короче, а осыпающееся золото
+   * показывает направление события — из кошелька, а не в него. Тряска здесь
+   * врала бы дважды: сообщала бы об ударе, которого не было, и сбивала бы
+   * прицел в тот момент, когда игрок стоит на карте посреди боя.
+   */
+  private onBetTaken(s: SimState, player: number, k: number, multiplier: number): void {
+    this.dealLife[player] = DEAL_LIFE;
+    this.dealBet[player] = s.aBet[k];
+    this.dealStake[player] = s.aStake[k];
+    this.dealPayout[player] = Math.trunc((s.aStake[k] * multiplier) / FX_ONE);
+
+    this.feel.freeze(0.03);
+    const x = toFloat(s.pX[player]);
+    const y = toFloat(s.pY[player]);
+    // Золото осыпается: кон ушёл Тузу, и видно это ровно тем, что фишки летят
+    // ВНИЗ и гаснут, а не подпрыгивают, как подобранная фишка.
+    for (let n = 0; n < 8; n++) {
+      const a = (n / 8) * Math.PI * 2;
+      this.particles.spawn(
+        ParticleShape.Dot,
+        x,
+        y,
+        Math.cos(a) * 170,
+        Math.sin(a) * 170 + 110,
+        5,
+        0.3,
+        PALETTE.chip,
+        -7,
+        3,
+      );
+    }
+    // Кольцо цветом карты: сделка захлопнулась там, где карта лежала.
+    this.particles.spawn(ParticleShape.Ring, x, y, 0, 0, 12, 0.28, PALETTE.card, 190);
   }
 
   private observeWaves(s: SimState): void {
@@ -484,6 +557,7 @@ export class Feedback {
       this.prevAlive[i] = (s.pFlags[i] & EntityFlag.Alive) !== 0 ? 1 : 0;
     }
     this.prevCardActive.set(s.kActive);
+    this.prevCardDeadline.set(s.kDeadline);
     this.prevBetState.set(s.aState);
     this.prevChipActive.set(s.cActive);
     this.prevSpawnActive.set(s.spActive);

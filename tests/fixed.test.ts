@@ -17,7 +17,7 @@ import {
   sub,
   toFloat,
   toInt,
-} from '../packages/sim/src/fixed';
+} from '@dod/sim/fixed';
 
 describe('преобразования', () => {
   it('целое туда и обратно', () => {

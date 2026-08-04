@@ -45,7 +45,7 @@ async function loadWatcher(manifest: unknown, ok = true) {
     vi.fn(async () => ({ ok, status: ok ? 200 : 500, json: async () => manifest })),
   );
   vi.resetModules();
-  return await import('../packages/client/src/version');
+  return await import('@dod/client/version');
 }
 
 /** Дождаться первой проверки: она уходит немедленно, но асинхронно. */
@@ -104,7 +104,7 @@ describe('проверка обновлений', () => {
       }),
     );
     vi.resetModules();
-    const { watchForUpdates } = await import('../packages/client/src/version');
+    const { watchForUpdates } = await import('@dod/client/version');
 
     const seen: string[] = [];
     const stop = watchForUpdates((v) => seen.push(v));

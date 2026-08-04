@@ -36,8 +36,8 @@ import {
   toFloat,
   tryTakeCard,
   type SimState,
-} from '../../sim/src/index';
-import { serialize } from '../../sim/src/replay';
+} from '@dod/sim';
+import { serialize } from '@dod/sim/replay';
 import type { SimEvent } from './events';
 import type { GameLoop } from './loop';
 import { log } from './protocol';
@@ -151,6 +151,14 @@ export interface DebugState {
     invulnerable: boolean;
     /** Тир кона, выбранный до входа в комнату. */
     appetite: number;
+    /**
+     * Схема ввода этого игрока: 0 геймпад, 1 клавиатура, 2 тач.
+     *
+     * Наружу отдаётся потому, что от неё зависит раскладка карт (матрица
+     * «пари × схема», GDD §9.5), а проверить её иначе нечем: схема приезжает
+     * кадром ввода и в живой игре меняется молча.
+     */
+    scheme: number;
     /** Активные и уже разрешённые пари этого игрока. */
     bets: DebugBet[];
   }[];
@@ -162,8 +170,14 @@ export interface DebugState {
    * В кадре реплики пока нет — текст приезжает со шрифтом в стадии F2, — а
    * проверять правило дозировки надо уже сейчас: «чем сильнее игрок
    * пострадал, тем мягче» ловится только на живом забеге, не в юните.
+   *
+   * Присутствие и точка стояния отдаются вместе с жестом, и это не полнота
+   * ради полноты. Отладочному интерфейсу нечем было ответить на вопрос «Туз
+   * сейчас на арене?» — а именно он и оказался нужен, когда владелец сказал,
+   * что Туза не видно: без этого признака нельзя ни отличить «его нет» от «он
+   * есть, но неразличим», ни поставить проверку на видимость.
    */
-  ace: { gesture: number; bark: string };
+  ace: { gesture: number; bark: string; onArena: boolean; x: number; y: number };
 }
 
 export interface DebugApi {
@@ -186,7 +200,7 @@ export interface DebugApi {
   isPaused(): boolean;
   state(): DebugState;
   hash(): string;
-  perf(): { fps: number; particles: number; shapes: number };
+  perf(): { fps: number; particles: number; shapes: number; dropped: number };
   /** Поставить врагов вокруг игрока. Без волн — ровно тех, кого попросили. */
   spawn(type: EnemyName, count?: number): void;
   /** Убрать с арены всё, кроме игроков. */
@@ -331,6 +345,7 @@ function snapshot(s: SimState, hash: string, bark: string): DebugState {
       alive: (s.pFlags[i] & EntityFlag.Alive) !== 0,
       invulnerable: (s.pFlags[i] & EntityFlag.Invulnerable) !== 0,
       appetite: s.pAppetite[i],
+      scheme: s.pScheme[i],
       bets: betsOf(s, i),
     });
   }
@@ -347,7 +362,13 @@ function snapshot(s: SimState, hash: string, bark: string): DebugState {
     bullets,
     chipsOnFloor,
     players,
-    ace: { gesture: s.meta[Meta.AceGesture], bark },
+    ace: {
+      gesture: s.meta[Meta.AceGesture],
+      bark,
+      onArena: s.meta[Meta.AceX] !== 0,
+      x: toFloat(s.meta[Meta.AceX]),
+      y: toFloat(s.meta[Meta.AceY]),
+    },
   };
 }
 
@@ -392,6 +413,10 @@ export function installDebugApi(loop: GameLoop): void {
       fps: loop.fps,
       particles: loop.particles.count,
       shapes: loop.shapeCount,
+      // Ненулевое значение означает, что кадр обрезан и картинка неполна:
+      // без него бенч и визуальная регрессия сравнивали бы урезанный кадр,
+      // не зная об этом.
+      dropped: loop.droppedShapes,
     }),
 
     spawn(type, count = 1) {

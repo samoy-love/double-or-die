@@ -33,8 +33,8 @@ import {
   toFloat,
   type InputFrame,
   type SimState,
-} from '../packages/sim/src/index';
-import { makeBot } from '../packages/tools/src/bots';
+} from '@dod/sim';
+import { makeBot } from '@dod/tools/bots';
 
 /** Пустая арена: врагов ставим сами, волны не мешают. */
 function arena(players = 1): SimState {
@@ -209,17 +209,17 @@ describe('навигация', () => {
     s.pY[0] = fromInt(120);
     const e = spawnEnemy(s, EnemyType.Wedge, fromInt(480), fromInt(520));
 
-    const было = Math.hypot(toFloat(s.eX[e]) - 480, toFloat(s.eY[e]) - 120);
+    const before = Math.hypot(toFloat(s.eX[e]) - 480, toFloat(s.eY[e]) - 120);
     run(s, 240);
-    const стало = Math.hypot(
+    const after = Math.hypot(
       toFloat(s.eX[e]) - toFloat(s.pX[0]),
       toFloat(s.eY[e]) - toFloat(s.pY[0]),
     );
 
     expect(
-      стало,
-      `не приблизился: было ${было.toFixed(0)}, стало ${стало.toFixed(0)}`,
-    ).toBeLessThan(было - 100);
+      after,
+      `не приблизился: было ${before.toFixed(0)}, стало ${after.toFixed(0)}`,
+    ).toBeLessThan(before - 100);
   });
 
   it('не объявляет таран сквозь колонну', () => {
@@ -232,8 +232,8 @@ describe('навигация', () => {
 
     for (let t = 0; t < 20; t++) {
       run(s, 1);
-      const прямо = Math.abs(toFloat(s.eX[e]) - 480) < 60;
-      if (прямо && s.ePhase[e] === EnemyPhase.Telegraph) {
+      const inLine = Math.abs(toFloat(s.eX[e]) - 480) < 60;
+      if (inLine && s.ePhase[e] === EnemyPhase.Telegraph) {
         // Разрешено только если он уже обошёл и колонны между ними нет.
         expect(toFloat(s.eY[e]), 'объявил таран сквозь колонну').toBeLessThan(240);
       }

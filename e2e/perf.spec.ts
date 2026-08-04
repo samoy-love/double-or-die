@@ -24,7 +24,7 @@ import './debug-api';
  */
 
 /** Из бюджета кадра TECH §5. */
-const БЮДЖЕТ_РЕНДЕРА_МС = 6;
+const RENDER_BUDGET_MS = 6;
 /**
  * Порог «кадры вообще идут», а не порог производительности.
  *
@@ -40,16 +40,16 @@ const БЮДЖЕТ_РЕНДЕРА_МС = 6;
  * Три кадра в секунду не проходит ни одна живая отрисовка и проходит любая
  * мёртвая.
  */
-const МИН_FPS = 3;
+const MIN_FPS = 3;
 
 test('2000 частиц и 200 болванок укладываются в бюджет кадра', async ({ page }) => {
-  const ошибки: string[] = [];
-  page.on('pageerror', (e) => ошибки.push(String(e)));
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
 
   await page.goto('/?debug=1&autopause=1');
   await page.waitForFunction(() => '__DOD__' in window, null, { timeout: 30_000 });
 
-  const замер = await page.evaluate(() => {
+  const measured = await page.evaluate(() => {
     const d = window.__DOD__!;
     d.newRun({ seed: 1, players: 4 });
     d.mute(true);
@@ -62,25 +62,25 @@ test('2000 частиц и 200 болванок укладываются в бю
     const t0 = performance.now();
     const N = 120;
     for (let i = 0; i < N; i++) d.render();
-    const мсНаКадр = (performance.now() - t0) / N;
+    const msPerFrame = (performance.now() - t0) / N;
 
-    return { мсНаКадр, ...d.perf() };
+    return { msPerFrame, ...d.perf() };
   });
 
   console.log(
-    `рендер: ${замер.мсНаКадр.toFixed(2)} мс на кадр, ` +
-      `${замер.shapes} фигур, ${замер.particles} частиц`,
+    `рендер: ${measured.msPerFrame.toFixed(2)} мс на кадр, ` +
+      `${measured.shapes} фигур, ${measured.particles} частиц`,
   );
 
   expect(
-    замер.particles,
+    measured.particles,
     'частицы не заполнились — бенч мерит пустую сцену',
   ).toBeGreaterThanOrEqual(2000);
-  expect(замер.shapes, 'фигур меньше, чем сущностей — сцена собралась не вся').toBeGreaterThan(
+  expect(measured.shapes, 'фигур меньше, чем сущностей — сцена собралась не вся').toBeGreaterThan(
     2000,
   );
-  expect(замер.мсНаКадр).toBeLessThan(БЮДЖЕТ_РЕНДЕРА_МС);
-  expect(ошибки).toEqual([]);
+  expect(measured.msPerFrame).toBeLessThan(RENDER_BUDGET_MS);
+  expect(errors).toEqual([]);
 });
 
 test('под полной нагрузкой цикл не встаёт', async ({ page }) => {
@@ -97,19 +97,19 @@ test('под полной нагрузкой цикл не встаёт', async 
     // Считаем настоящие кадры цикла, а не вызовы render(): здесь важно, что
     // requestAnimationFrame успевает, а не сколько стоит одна отрисовка.
     return await new Promise<number>((resolve) => {
-      let кадров = 0;
-      const начало = performance.now();
-      const шаг = (): void => {
-        кадров++;
-        if (performance.now() - начало < 2000) requestAnimationFrame(шаг);
-        else resolve((кадров * 1000) / (performance.now() - начало));
+      let frames = 0;
+      const startedAt = performance.now();
+      const step = (): void => {
+        frames++;
+        if (performance.now() - startedAt < 2000) requestAnimationFrame(step);
+        else resolve((frames * 1000) / (performance.now() - startedAt));
       };
-      requestAnimationFrame(шаг);
+      requestAnimationFrame(step);
     });
   });
 
   console.log(`кадров в секунду под нагрузкой: ${fps.toFixed(1)}`);
-  expect(fps).toBeGreaterThan(МИН_FPS);
+  expect(fps).toBeGreaterThan(MIN_FPS);
 });
 
 /**
@@ -123,7 +123,7 @@ test('кадр содержит арену, врагов и игрока', async
   await page.goto('/?debug=1&autopause=1');
   await page.waitForFunction(() => '__DOD__' in window, null, { timeout: 30_000 });
 
-  const кадр = await page.evaluate(() => {
+  const frame = await page.evaluate(() => {
     const d = window.__DOD__!;
     d.newRun({ seed: 3, players: 1 });
     d.mute(true);
@@ -140,17 +140,17 @@ test('кадр содержит арену, врагов и игрока', async
     const px = new Uint8Array(w * h * 4);
     gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
 
-    const цвета = new Set<number>();
+    const colors = new Set<number>();
     for (let i = 0; i < w * h; i += 13) {
-      цвета.add((px[i * 4] << 16) | (px[i * 4 + 1] << 8) | px[i * 4 + 2]);
+      colors.add((px[i * 4] << 16) | (px[i * 4 + 1] << 8) | px[i * 4 + 2]);
     }
-    return { цветов: цвета.size, ошибка: gl.getError(), фигур: d.perf().shapes };
+    return { colorCount: colors.size, glError: gl.getError(), shapes: d.perf().shapes };
   });
 
-  expect(кадр.ошибка).toBe(0);
-  expect(кадр.фигур, 'сцена пуста — рисовать было нечего').toBeGreaterThan(50);
+  expect(frame.glError).toBe(0);
+  expect(frame.shapes, 'сцена пуста — рисовать было нечего').toBeGreaterThan(50);
   // Залитый фон дал бы единицы цветов. Пол с сеткой, колонны, враги, частицы,
   // игрок и HUD дают десятки — и именно этого не будет, если рендер молча
   // перестал отрисовывать сущности.
-  expect(кадр.цветов, 'кадр почти одноцветный — сцена не отрисовалась').toBeGreaterThan(10);
+  expect(frame.colorCount, 'кадр почти одноцветный — сцена не отрисовалась').toBeGreaterThan(10);
 });

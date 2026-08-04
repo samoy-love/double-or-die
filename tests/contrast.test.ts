@@ -8,14 +8,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import {
-  CONTRAST_PAIRS,
-  DELTA_E_MIN,
-  contrastFailures,
-  deltaE,
-  toLab,
-} from '../packages/client/src/contrast';
-import { PALETTE } from '../packages/client/src/palette';
+import { CONTRAST_PAIRS, DELTA_E_MIN, contrastFailures, deltaE, toLab } from '@dod/client/contrast';
+import { PALETTE } from '@dod/client/palette';
 
 describe('контраст палитры', () => {
   it('все обязательные пары различимы', () => {

@@ -20,7 +20,7 @@ import {
   step,
   toFloat,
   type InputFrame,
-} from '../packages/sim/src/index';
+} from '@dod/sim';
 
 function newRun(players = 1) {
   const s = createState(1, players);

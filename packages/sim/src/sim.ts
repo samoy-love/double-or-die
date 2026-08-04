@@ -11,7 +11,15 @@
  */
 
 import { pushOutOfColumns, pushedX, pushedY } from './arena';
-import { PISTOL, PLAYER, RESTART_DELAY_TICKS, START_SPREAD, WAVE } from './config';
+import {
+  PISTOL,
+  PLAYER,
+  RESTART_DELAY_TICKS,
+  START_CHIPS,
+  START_SPREAD,
+  WAVE,
+  roomGapTicksFor,
+} from './config';
 import { BetId, cashOutBest, failBetId, stepBets, tryTakeCard } from './bets';
 import { fire, stepBullets, stepChips } from './combat';
 import { clearArena, startRoom, stepEnemies } from './enemies';
@@ -45,7 +53,11 @@ export function spawnPlayers(s: SimState): void {
     // Оружие готово с первого тика: игрок появляется на арене, где уже есть
     // враги, и «первый выстрел через десять тиков» ощущается осечкой.
     s.pShotAcc[i] = PLAYER.shotReserve * FX_ONE;
-    s.pChips[i] = 0;
+    // Стартовый капитал выдаётся ЗДЕСЬ, а не при создании состояния, и это
+    // важно: эта же функция перезапускает забег после гибели всех. Кошелёк,
+    // выданный один раз, оставил бы воскресшего нищим — то есть без ставок,
+    // ради которых он и вернулся (ECONOMY §4).
+    s.pChips[i] = START_CHIPS;
   }
 
   s.meta[Meta.SeenTypes] = 0;
@@ -203,9 +215,8 @@ function stepBetInput(s: SimState, i: number, inp: InputFrame): void {
    * кнопку. Своего экрана двери в 0.3.0 ещё нет, и защёлка здесь — он и есть:
    * сбрасывает выбор только начало комнаты (`startRoom`).
    */
-  if ((inp.buttons & (Btn.AppetiteLo | Btn.AppetiteHi)) !== 0) {
-    s.pAppetite[i] = appetiteOf(inp);
-  }
+  const tier = appetiteOf(inp);
+  if (tier >= 0) s.pAppetite[i] = tier;
   // Схема ввода — свойство кадра, а не настройка клиента: игрок берётся за
   // геймпад посреди забега, и раскладка обязана это учесть уже в следующей
   // комнате. Матрица «пари × схема» (GDD §9.5) решает, что ему предлагать.
@@ -227,7 +238,10 @@ function stepBetInput(s: SimState, i: number, inp: InputFrame): void {
 function skipSettlement(s: SimState): void {
   const at = s.meta[Meta.NextWaveAt];
   if (at === 0 || s.meta[Meta.Wave] !== 0) return;
-  const shown = WAVE.roomGapTicks - (at - s.tick);
+  // Длительность паузы берётся у той же развилки, что её и назначила: в первой
+  // комнате она короче, и чужое число дало бы «уже секунда прошла» на первом
+  // же тике.
+  const shown = roomGapTicksFor(s.meta[Meta.Room]) - (at - s.tick);
   if (shown < WAVE.settleSkipAfterTicks) return;
   s.meta[Meta.NextWaveAt] = s.tick + 1;
 }

@@ -14,7 +14,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { CHECKPOINT_EVERY, type Golden, verifyGolden } from '../packages/tools/src/golden';
+import { CHECKPOINT_EVERY, type Golden, verifyGolden } from '@dod/tools/golden';
 
 const DIR = join(__dirname, 'golden');
 

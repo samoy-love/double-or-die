@@ -31,7 +31,7 @@ import {
   toFloat,
   type InputFrame,
   type SimState,
-} from '../packages/sim/src/index';
+} from '@dod/sim';
 
 const CX = 960;
 const CY = 540;
@@ -199,9 +199,12 @@ describe('неуязвимость рывка', () => {
 describe('фишки', () => {
   it('подбираются наездом и попадают в кошелёк', () => {
     const s = arena();
+    // От стартового капитала, а не от нуля: забег начинается с кошельком
+    // (ECONOMY §4), иначе коны нулевые и ставки не включаются вовсе.
+    const before = s.pChips[0];
     dropChip(s, fromInt(CX + 20), fromInt(CY));
     run(s, 4);
-    expect(s.pChips[0]).toBe(1);
+    expect(s.pChips[0] - before).toBe(1);
   });
 
   it('исчезают с пола за три секунды', () => {

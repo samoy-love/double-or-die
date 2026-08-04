@@ -21,25 +21,26 @@ import { expect, test } from '@playwright/test';
  */
 
 /** Оверлей: `0.2.2+abc1234 · тик 123 · 60 FPS · сид 1 · игроков 1 · 0x...`. */
-async function оверлей(page: import('@playwright/test').Page): Promise<string> {
+async function overlayText(page: import('@playwright/test').Page): Promise<string> {
   return (await page.locator('.hud, .overlay, body > div').first().textContent()) ?? '';
 }
 
-const число = (текст: string, метка: RegExp): number => Number(метка.exec(текст)?.[1] ?? NaN);
+const readNumber = (text: string, pattern: RegExp): number =>
+  Number(pattern.exec(text)?.[1] ?? NaN);
 
 test.describe('релизная сборка', () => {
   test('открывается без ошибок и держит канвас', async ({ page }) => {
-    const ошибки: string[] = [];
+    const errors: string[] = [];
     page.on('console', (m) => {
-      if (m.type() === 'error') ошибки.push(m.text());
+      if (m.type() === 'error') errors.push(m.text());
     });
-    page.on('pageerror', (e) => ошибки.push(String(e)));
+    page.on('pageerror', (e) => errors.push(String(e)));
 
     await page.goto('/');
     const canvas = page.locator('#game');
     await expect(canvas).toBeVisible();
 
-    const состояние = await canvas.evaluate((el) => {
+    const canvasState = await canvas.evaluate((el) => {
       const c = el as HTMLCanvasElement;
       // Тот же контекст, что уже создала игра: повторный вызов возвращает его.
       const gl = c.getContext('webgl2');
@@ -48,30 +49,30 @@ test.describe('релизная сборка', () => {
 
     // Канвас нулевого размера — самый тихий из отказов: элемент на месте,
     // ошибок нет, картинки нет.
-    expect(состояние.w).toBeGreaterThan(100);
-    expect(состояние.h).toBeGreaterThan(100);
-    expect(состояние.webgl2, 'WebGL2 недоступен — игра не рисуется вовсе').toBe(true);
+    expect(canvasState.w).toBeGreaterThan(100);
+    expect(canvasState.h).toBeGreaterThan(100);
+    expect(canvasState.webgl2, 'WebGL2 недоступен — игра не рисуется вовсе').toBe(true);
 
     // Несобравшийся шейдер и любое исключение на старте видны здесь: точка
     // входа сама пишет их в консоль своим форматом.
-    expect(ошибки).toEqual([]);
+    expect(errors).toEqual([]);
   });
 
   test('цикл идёт: тик растёт, кадры считаются', async ({ page }) => {
     await page.goto('/?debug=1');
     await page.waitForTimeout(900);
 
-    const первый = await оверлей(page);
-    expect(первый, 'отладочный оверлей не появился').toMatch(/тик \d+/);
+    const first = await overlayText(page);
+    expect(first, 'отладочный оверлей не появился').toMatch(/тик \d+/);
 
     await page.waitForTimeout(900);
-    const второй = await оверлей(page);
+    const second = await overlayText(page);
 
-    const тик1 = число(первый, /тик (\d+)/);
-    const тик2 = число(второй, /тик (\d+)/);
-    const fps = число(второй, /(\d+) FPS/);
+    const tick1 = readNumber(first, /тик (\d+)/);
+    const tick2 = readNumber(second, /тик (\d+)/);
+    const fps = readNumber(second, /(\d+) FPS/);
 
-    expect(тик2, 'тик не растёт — симуляция стоит').toBeGreaterThan(тик1);
+    expect(tick2, 'тик не растёт — симуляция стоит').toBeGreaterThan(tick1);
     // FPS считает игровой цикл в своём кадре: ненулевое значение означает,
     // что кадры действительно рисуются, а не только тикает симуляция.
     expect(fps, 'кадры не идут — рендер не вызывается').toBeGreaterThan(0);
@@ -81,7 +82,7 @@ test.describe('релизная сборка', () => {
     await page.goto('/?debug=1');
     await page.waitForTimeout(500);
     // Даже с ?debug=1: параметр включает оверлей, а не управление симуляцией.
-    const есть = await page.evaluate(() => '__DOD__' in window);
-    expect(есть, '__DOD__ доступен в релизной сборке — это чит, а не удобство').toBe(false);
+    const present = await page.evaluate(() => '__DOD__' in window);
+    expect(present, '__DOD__ доступен в релизной сборке — это чит, а не удобство').toBe(false);
   });
 });

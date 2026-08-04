@@ -2,7 +2,7 @@ import { defineConfig } from 'vitest/config';
 import { aliases } from './vite.config.ts';
 
 /** Прогон идёт под покрытием: `vitest run --coverage`. */
-const покрытие = process.argv.includes('--coverage');
+const withCoverage = process.argv.includes('--coverage');
 
 export default defineConfig({
   // Те же псевдонимы пакетов, что у сборки. Список один: разъехавшись, они
@@ -29,7 +29,7 @@ export default defineConfig({
     // Замер аллокаций под покрытием исключается списком, а не отрицанием
     // внутри `include`: отрицание там выбирает тесты как надо, но молча
     // обнуляет сам отчёт покрытия — «0/0 строк» вместо цифры.
-    ...(покрытие
+    ...(withCoverage
       ? { exclude: ['tests/allocations.test.ts'], testTimeout: 25_000, hookTimeout: 25_000 }
       : {}),
     // Ядро обязано не аллоцировать в горячем пути, а проверить это без

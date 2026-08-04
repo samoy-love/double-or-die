@@ -33,7 +33,7 @@ import {
   fromFloat,
   toFloat,
   type SimState,
-} from '../../sim/src/index';
+} from '@dod/sim';
 
 /** Шаг сетки поиска в единицах арены. Мельче — дороже, крупнее — врёт. */
 const GRID = 40;
