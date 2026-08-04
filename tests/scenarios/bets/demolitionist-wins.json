@@ -1,0 +1,32 @@
+{
+  "name": "«Подрывник» засчитывается, когда взрыв снял трёх",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "clear": true },
+    { "chips": { "amount": 100 } },
+    { "bet": { "id": "demolitionist", "stake": 10 } },
+    { "place": { "x": 300, "y": 800 } },
+    { "spawn": { "type": "клин", "x": 1300, "y": 300 } },
+    { "spawn": { "type": "клин", "x": 1340, "y": 300 } },
+    { "spawn": { "type": "клин", "x": 1380, "y": 300 } },
+    { "explode": { "x": 1340, "y": 300 } },
+    {
+      "expect": {
+        "kills": { "min": 3, "max": 3 },
+        "bets": {
+          "id": "demolitionist",
+          "counter": { "min": 3, "max": 3 },
+          "progressPct": { "min": 99 }
+        }
+      }
+    },
+    { "settle": true },
+    {
+      "expect": {
+        "bets": { "id": "demolitionist", "state": "won" },
+        "chips": { "min": 115, "max": 115 }
+      }
+    }
+  ]
+}

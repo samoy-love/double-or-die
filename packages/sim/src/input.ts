@@ -32,12 +32,24 @@ export const enum Btn {
   Emote0 = 1 << 11,
   Emote1 = 1 << 12,
   Emote2 = 1 << 13,
+  /**
+   * Схема ввода: два бита на геймпад, клавиатуру и тач.
+   *
+   * Живёт в кадре ввода, а не в состоянии, ровно потому, что это свойство
+   * ввода: игрок берётся за геймпад посреди забега, и реплей обязан
+   * переиграть и это. Схема решает, какие пари ему вообще предлагать —
+   * матрица «пари × схема» (GDD §9.5).
+   */
+  Scheme0 = 1 << 14,
+  Scheme1 = 1 << 15,
 }
 
 export const APPETITE_SHIFT = 8;
 export const APPETITE_MASK = 0b11;
 export const EMOTE_SHIFT = 11;
 export const EMOTE_MASK = 0b111;
+export const SCHEME_SHIFT = 14;
+export const SCHEME_MASK = 0b11;
 
 /**
  * Один кадр ввода одного игрока.
@@ -67,6 +79,8 @@ export const EMPTY_INPUT: Readonly<InputFrame> = Object.freeze({
 export const isDown = (f: InputFrame, b: Btn): boolean => (f.buttons & b) !== 0;
 
 export const appetiteOf = (f: InputFrame): number => (f.buttons >> APPETITE_SHIFT) & APPETITE_MASK;
+
+export const schemeOf = (f: InputFrame): number => (f.buttons >> SCHEME_SHIFT) & SCHEME_MASK;
 
 /**
  * Кадры пакуются в плоский Int32Array: пять слов на кадр на игрока.

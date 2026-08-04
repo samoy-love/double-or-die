@@ -1,0 +1,20 @@
+{
+  "name": "Кон не превышает кошелёк: Туз в кредит не принимает",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "clear": true },
+    { "chips": { "amount": 12 } },
+    { "appetite": { "tier": "по-крупному" } },
+    { "place": { "x": 300, "y": 800 } },
+    { "card": { "id": "no_dash", "x": 300, "y": 800 } },
+    { "input": { "buttons": ["take"] } },
+    { "tick": 1 },
+    {
+      "expect": {
+        "chips": { "min": 0, "max": 0 },
+        "bets": { "id": "no_dash", "state": "active", "cashOut": { "min": 12, "max": 12 } }
+      }
+    }
+  ]
+}

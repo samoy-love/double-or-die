@@ -1,0 +1,46 @@
+{
+  "name": "«Забрать» на половине прогресса платит по формуле",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    {
+      "chips": {
+        "amount": 100
+      }
+    },
+    {
+      "bet": {
+        "id": "under_45s",
+        "stake": 10
+      }
+    },
+    {
+      "expect": {
+        "chips": {
+          "min": 90,
+          "max": 90
+        }
+      }
+    },
+    {
+      "tick": 1350
+    },
+    {
+      "cashOut": {
+        "id": "under_45s"
+      }
+    },
+    {
+      "expect": {
+        "bets": {
+          "id": "under_45s",
+          "state": "cashed"
+        },
+        "chips": {
+          "min": 102,
+          "max": 102
+        }
+      }
+    }
+  ]
+}

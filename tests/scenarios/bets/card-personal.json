@@ -1,0 +1,56 @@
+{
+  "name": "Чужая персональная карта не берётся",
+  "seed": 1,
+  "players": 2,
+  "steps": [
+    {
+      "clear": true
+    },
+    {
+      "chips": {
+        "amount": 200
+      }
+    },
+    {
+      "chips": {
+        "player": 1,
+        "amount": 200
+      }
+    },
+    {
+      "place": {
+        "x": 960,
+        "y": 300
+      }
+    },
+    {
+      "card": {
+        "id": "no_dash",
+        "x": 960,
+        "y": 300,
+        "player": 1
+      }
+    },
+    {
+      "input": {
+        "buttons": ["take"]
+      }
+    },
+    {
+      "tick": 10
+    },
+    {
+      "expect": {
+        "bets": {
+          "active": {
+            "max": 0
+          },
+          "cardsOnArena": {
+            "min": 1,
+            "max": 1
+          }
+        }
+      }
+    }
+  ]
+}

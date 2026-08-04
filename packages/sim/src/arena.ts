@@ -108,6 +108,31 @@ export function isFreeSpot(s: SimState, x: Fx, y: Fx, r: Fx): boolean {
   return !hitsColumn(s, x, y, r);
 }
 
+/**
+ * Перекрыт ли прямой путь колонной.
+ *
+ * Нужно тому, кто собирается лететь по прямой: таран, объявленный сквозь
+ * колонну, гарантированно кончается ударом в неё, а игрок при этом видит
+ * телеграф, обещающий атаку, которой не будет. Хуже того, Клин после такого
+ * упирается и объявляет её снова — со стороны это враг, который бесконечно
+ * бодает стену.
+ *
+ * Шагаем по отрезку с шагом в радиус тела: точное пересечение с
+ * прямоугольником здесь не нужно, а считается это не в горячем пути, а один
+ * раз на объявление атаки.
+ */
+export function pathBlocked(s: SimState, x0: Fx, y0: Fx, x1: Fx, y1: Fx, r: Fx): boolean {
+  const dx = sub(x1, x0);
+  const dy = sub(y1, y0);
+  const steps = 12;
+  for (let i = 1; i <= steps; i++) {
+    const x = add(x0, Math.trunc((dx * i) / steps) | 0);
+    const y = add(y0, Math.trunc((dy * i) / steps) | 0);
+    if (hitsColumn(s, x, y, r)) return true;
+  }
+  return false;
+}
+
 /** Вышла ли точка за пределы игровой зоны — для гашения снарядов. */
 export const outOfArena = (s: SimState, x: Fx, y: Fx): boolean =>
   x < ARENA_PAD || y < ARENA_PAD || x > maxX(s) || y > maxY(s);

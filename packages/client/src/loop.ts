@@ -7,6 +7,8 @@
  */
 
 import {
+  APPETITE_MASK,
+  APPETITE_SHIFT,
   checkInvariants,
   clearArena,
   createState,
@@ -14,6 +16,7 @@ import {
   fromFloat,
   hashHex,
   type InputFrame,
+  MAX_PLAYERS,
   Meta,
   setSpawning,
   type SimState,
@@ -24,6 +27,7 @@ import {
   toFloat,
 } from '../../sim/src/index';
 import { ReplayRecorder } from '../../sim/src/replay';
+import { CONFIG_VERSION } from '../../shared/src/index';
 import { Audio } from './audio';
 import { EventLog } from './events';
 import { Feedback } from './feedback';
@@ -52,7 +56,7 @@ export class GameLoop {
   readonly feel = new Feel();
   readonly particles = new Particles();
   readonly audio = new Audio();
-  private readonly feedback: Feedback;
+  readonly feedback: Feedback;
   private recorder: ReplayRecorder;
   readonly events = new EventLog();
   private acc = 0;
@@ -87,7 +91,11 @@ export class GameLoop {
     return new ReplayRecorder({
       seed: this.state.seed,
       playerCount: this.state.playerCount,
-      configVersion: 'dev',
+      // Реплей = сид + инпуты + версия симуляционного конфига (TECH §2.5).
+      // Строка 'dev' стояла здесь заглушкой и превращала клиентский реплей в
+      // мусор: лог из браузера — это баг-репорт игрока, и без верной версии
+      // конфига он не переигрывается ни раннером, ни проверкой эталонов.
+      configVersion: CONFIG_VERSION,
       build: BUILD,
     });
   }
@@ -206,23 +214,66 @@ export class GameLoop {
     this.overrides.set(player, { ...EMPTY, ...frame });
   }
 
+  /**
+   * Аппетит, подмешиваемый в кадр ввода игрока. −1 — не подмешивать.
+   *
+   * Аппетит живёт в маске кнопок, а не в состоянии: симуляция переписывает
+   * `pAppetite` из кадра КАЖДЫЙ тик (GDD §9.3 — тир держится всю комнату и
+   * приходит с экрана двери). Поэтому запись прямо в состояние живёт ровно до
+   * следующего тика, и отладочный «поставь по-крупному» обязан идти тем же
+   * путём, что настоящий выбор игрока, — через ввод.
+   */
+  private readonly appetite = new Int32Array(MAX_PLAYERS).fill(-1);
+  /** Кадры под подмешанный аппетит: копия чужого кадра, чтобы не портить его. */
+  private readonly appetiteFrames: InputFrame[] = Array.from({ length: MAX_PLAYERS }, () => ({
+    ...EMPTY,
+  }));
+
+  setAppetite(player: number, tier: number | null): void {
+    this.appetite[player] = tier ?? -1;
+  }
+
+  /** Кадр игрока с учётом подмешанного аппетита. */
+  private withAppetite(player: number, frame: InputFrame): InputFrame {
+    const tier = this.appetite[player];
+    if (tier < 0) return frame;
+    const out = this.appetiteFrames[player];
+    out.moveX = frame.moveX;
+    out.moveY = frame.moveY;
+    out.aimX = frame.aimX;
+    out.aimY = frame.aimY;
+    out.buttons =
+      (frame.buttons & ~(APPETITE_MASK << APPETITE_SHIFT)) |
+      ((tier & APPETITE_MASK) << APPETITE_SHIFT);
+    return out;
+  }
+
+  /**
+   * Кадры ввода этого тика.
+   *
+   * Буфер предаллоцирован и переиспользуется: свежий массив на каждый тик —
+   * это шестьдесят мусорных объектов в секунду на ровном месте, а сборка мусора
+   * съедает кадр целиком. Ссылки в нём чужие (кадр опроса ввода и подмены
+   * агента переиспользуются своими владельцами), и это безопасно: `step` и
+   * запись реплея читают их в том же тике и не хранят.
+   */
+  private readonly inputs: InputFrame[] = [];
+
   private tickOnce(): void {
     this.renderer.capture(this.state);
 
-    const inputs: InputFrame[] = [];
+    const inputs = this.inputs;
+    inputs.length = this.state.playerCount;
     for (let i = 0; i < this.state.playerCount; i++) {
       const override = this.overrides.get(i);
-      if (override) {
-        inputs.push(override);
-        continue;
-      }
       // Живой ввод только у первого игрока: остальные нужны, чтобы
       // состав влиял на состояние и это ловилось тестами.
-      inputs.push(
-        i === 0
+      const frame =
+        override ??
+        (i === 0
           ? this.input.poll(toArenaFloat(this.state.pX[0]), toArenaFloat(this.state.pY[0]))
-          : EMPTY,
-      );
+          : EMPTY);
+      inputs[i] = this.withAppetite(i, frame);
     }
 
     const deaths = this.state.meta[Meta.Deaths];
@@ -236,12 +287,24 @@ export class GameLoop {
     // точки старта, а не появился в ней.
     if (this.state.meta[Meta.Deaths] !== deaths) this.renderer.forget();
 
-    // Инвариант нарушен — это дефект ядра, а не ситуация. Цикл при этом
-    // останавливается, но НЕ падает исключением наружу: упавший rAF уносит с
-    // собой и рендер, и отладочный интерфейс, и агент видит вместо причины
-    // застывшую картинку. Останавливаемся сами и говорим, на каком сиде и
-    // тике, — этого хватает, чтобы воспроизвести.
-    if (IS_DEV && !this.benchMode && this.state.tick % 60 === 0) {
+    /*
+     * Инварианты — КАЖДЫЙ тик в dev-сборке (DEVLOOP §6).
+     *
+     * Раньше проверка шла раз в секунду и ловила дефект на пятьдесят девять
+     * тиков позже, чем могла: в записи это уже не тот кадр, а в живой игре —
+     * не тот бой. Смысл уровня ровно в том, чтобы поймать нарушение В МОМЕНТ
+     * возникновения, а не через десять минут игры.
+     *
+     * Цена замерена, а не предположена: линейный проход по пулам стоит
+     * 0.0096 мс против 0.17 мс самого тика — 2.4% бюджета симуляции в 0.4 мс.
+     * За такие деньги проверять реже нечего.
+     *
+     * Нарушение останавливает цикл, но НЕ падает исключением наружу: упавший
+     * rAF уносит с собой и рендер, и отладочный интерфейс, и агент видит
+     * вместо причины застывшую картинку. Останавливаемся сами и говорим, на
+     * каком сиде и тике, — этого хватает, чтобы воспроизвести.
+     */
+    if (IS_DEV && !this.benchMode) {
       try {
         checkInvariants(this.state);
       } catch (e) {
@@ -323,6 +386,11 @@ export class GameLoop {
   }
 
   /** Сколько фигур ушло в последний кадр: главный показатель бюджета рендера. */
+  /** Снимок кадра сеткой средних цветов: см. `Renderer.frameGrid`. */
+  frameGrid(cols: number, rows: number): number[][] {
+    return this.renderer.frameGrid(() => this.renderOnce(), cols, rows);
+  }
+
   get shapeCount(): number {
     return this.renderer.lastShapeCount;
   }

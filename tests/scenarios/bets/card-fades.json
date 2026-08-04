@@ -1,0 +1,42 @@
+{
+  "name": "Карта тает, если её не взяли",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    {
+      "clear": true
+    },
+    {
+      "card": {
+        "id": "no_dash",
+        "x": 300,
+        "y": 300
+      }
+    },
+    {
+      "tick": 700
+    },
+    {
+      "expect": {
+        "bets": {
+          "cardsOnArena": {
+            "min": 1,
+            "max": 1
+          }
+        }
+      }
+    },
+    {
+      "tick": 40
+    },
+    {
+      "expect": {
+        "bets": {
+          "cardsOnArena": {
+            "max": 0
+          }
+        }
+      }
+    }
+  ]
+}

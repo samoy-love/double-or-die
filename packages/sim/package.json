@@ -1,0 +1,12 @@
+{
+  "name": "@dod/sim",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "description": "Ядро симуляции: чистый детерминированный TypeScript. Ноль зависимостей — требование SECURITY §7, проверяется scripts/check-boundaries.ts",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  }
+}

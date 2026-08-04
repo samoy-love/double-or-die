@@ -1,0 +1,21 @@
+{
+  "name": "Одновременный подбор общей карты достаётся ровно одному",
+  "seed": 1,
+  "players": 2,
+  "steps": [
+    { "clear": true },
+    { "chips": { "player": 0, "amount": 200 } },
+    { "chips": { "player": 1, "amount": 200 } },
+    { "place": { "player": 0, "x": 300, "y": 800 } },
+    { "place": { "player": 1, "x": 300, "y": 800 } },
+    { "card": { "id": "no_dash", "x": 300, "y": 800 } },
+    { "input": { "player": 0, "buttons": ["take"] } },
+    { "input": { "player": 1, "buttons": ["take"] } },
+    { "tick": 1 },
+    {
+      "expect": { "cards": { "total": { "max": 0 } }, "bets": { "taken": { "min": 1, "max": 1 } } }
+    },
+    { "expect": { "player": 0, "bets": { "active": { "min": 1, "max": 1 } } } },
+    { "expect": { "player": 1, "bets": { "active": { "max": 0 } } } }
+  ]
+}

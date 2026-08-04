@@ -1,0 +1,11 @@
+{
+  "name": "@dod/tools",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "description": "Headless-раннер, боты, сценарии, golden-реплеи, бенч. Не поставляется игрокам",
+  "license": "MIT",
+  "exports": {
+    "./*": "./src/*.ts"
+  }
+}

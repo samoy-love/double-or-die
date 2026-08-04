@@ -10,7 +10,7 @@
  * можно, не тронув ни одного другого числа.
  */
 
-import { isFreeSpot, maxX, maxY, pushOutOfColumns, pushedX, pushedY } from './arena';
+import { isFreeSpot, maxX, maxY, pathBlocked, pushOutOfColumns, pushedX, pushedY } from './arena';
 import {
   AI_DECISION_PERIOD,
   AI_SEPARATION_REACH,
@@ -18,6 +18,7 @@ import {
   ARENA_PAD,
   AGRO_CAP_PCT,
   AI_TARGET_MEMORY_TICKS,
+  APPETITE_DEFAULT,
   BRICK,
   ENEMIES,
   ENEMY_BULLET,
@@ -30,13 +31,19 @@ import {
   WAVE,
   WEDGE,
 } from './config';
+import { clearSettled, dealCards, settleBets } from './bets';
+import { flowTo, flowX, flowY, updateNav } from './nav';
 import { damagePlayer, explode, fireEnemy, killEnemy, statsOf } from './combat';
 import { add, type Fx, fromInt, mul, sub } from './fixed';
 import { Stream, nextInt } from './rng';
 import { EntityFlag, MAX_ENEMIES, MAX_PLAYERS, MAX_SPAWNS, Meta, type SimState } from './state';
 import { ANGLE_FULL, cos, length, normalize, normX, normY, sin, within } from './trig';
 
-/** Флаг «новичок» едет в типе отложенного спавна: отдельный массив ради бита избыточен. */
+/**
+ * Флаг «новичок» едет в типе отложенного спавна: отдельный массив ради бита
+ * избыточен. Число не балансное, а упаковочное, потому и живёт здесь, а не в
+ * симуляционном конфиге.
+ */
 const NOVICE_BIT = 1 << 8;
 
 /**
@@ -49,11 +56,6 @@ const telegraphs = new Int32Array(MAX_PLAYERS);
 
 /** Сколько врагов сейчас нацелено на каждого игрока — для потолка агро. */
 const targeting = new Int32Array(MAX_PLAYERS);
-
-/** Одновременно в воздухе не больше этого числа отложенных спавнов. */
-const MAX_PENDING = 8;
-/** Метки ставятся не в один тик: вспышка из восьми точек нечитаема. */
-const SPAWN_STAGGER = 4;
 
 // ---------------------------------------------------------------------------
 // Волны
@@ -76,16 +78,47 @@ export function roomBudget(room: number, players: number): number {
 export const onScreenCap = (players: number): number =>
   WAVE.onScreenBase + WAVE.onScreenPerPlayer * (players - 1);
 
-/** Начать комнату с первой волны. */
+/**
+ * Начать комнату с первой волны.
+ *
+ * Здесь же — расчёт предыдущей и новая раскладка карт: пари живут внутри боя
+ * и начинаются вместе с ним, отдельного экрана ставок нет (GDD §9.1).
+ */
 export function startRoom(s: SimState, room: number): void {
+  // Расчёт прошлой комнаты, но БЕЗ очистки слотов: пока идёт пауза, игрок
+  // смотрит на результаты — выигранное золотится, проигранное показывает,
+  // насколько не хватило. Слоты освобождаются, когда начинается бой.
+  settleBets(s);
+
+  // Дошёл до новой комнаты — серия смертей прервана, и Тузу снова можно
+  // шутить: правило дозировки защищает от добивания, а не запрещает юмор.
+  if (room > 1) s.meta[Meta.DeathStreak] = 0;
+
+  // Аппетит держится всю комнату и сбрасывается только здесь (GDD §9.3):
+  // новая комната — новое решение о размере кона, и молчание игрока означает
+  // самый скромный тир, а не тот, которым он рискнул в прошлый раз.
+  s.pAppetite.fill(APPETITE_DEFAULT);
+
   s.meta[Meta.Room] = room;
   s.meta[Meta.Wave] = 0;
   s.meta[Meta.WaveBudget] = 0;
   s.meta[Meta.RoomStartTick] = s.tick;
   s.meta[Meta.NextWaveAt] = s.tick + WAVE.roomGapTicks;
+
+  // Бюджет комнаты целиком — знаменатель прогресса удержаний. Считается один
+  // раз при входе: волны берут из него, а пари меряют по нему пройденный путь.
+  s.meta[Meta.RoomThreat] = roomBudget(room, s.playerCount);
+  s.meta[Meta.ThreatCleared] = 0;
+  dealCards(s);
 }
 
 function startWave(s: SimState, wave: number): void {
+  // Первая волна комнаты — конец расчёта: итоги прошлых пари уступают место
+  // новым. Между комнатами они жили ровно затем, чтобы их прочитали. Пари,
+  // взятое во время расчёта, при этом остаётся: карты новой комнаты лежат
+  // уже там, и взятое на них — живое.
+  if (wave === 1) clearSettled(s);
+
   const budget = roomBudget(s.meta[Meta.Room], s.playerCount);
   s.meta[Meta.Wave] = wave;
   s.meta[Meta.WaveBudget] = Math.trunc(budget / WAVE.wavesPerRoom);
@@ -125,7 +158,12 @@ function pickType(s: SimState, budget: number): number {
   for (let t = 0; t < ENEMY_TYPE_COUNT; t++) {
     if (ENEMIES[t].unlockRoom > room) continue;
     if ((s.meta[Meta.SeenTypes] & (1 << t)) === 0) {
-      if (unseen < 0) unseen = t;
+      // Бюджет проверяется и для нового типа. Вызывающий вычитает угрозу
+      // безусловно, и знакомство, выданное в кредит, уводило остаток волны в
+      // минус — то есть роняло инвариант «бюджет волны ушёл в минус» тем
+      // вернее, чем дороже новый враг. Не по карману — подождёт следующей
+      // волны: показать его в одиночку всё равно требуется целиком.
+      if (unseen < 0 && ENEMIES[t].threat <= budget) unseen = t;
       continue;
     }
     if (ENEMIES[t].threat <= budget) affordable++;
@@ -323,14 +361,14 @@ function stepWaves(s: SimState): void {
   if (s.meta[Meta.WaveBudget] > 0) {
     if (noviceInPlay(s)) return;
     const cap = onScreenCap(s.playerCount);
-    for (let n = pending; n < MAX_PENDING && alive + n < cap; n++) {
+    for (let n = pending; n < WAVE.maxPendingSpawns && alive + n < cap; n++) {
       const type = pickType(s, s.meta[Meta.WaveBudget]);
       if (type < 0) {
         // Бюджета не хватает даже на самого дешёвого — волна выпущена.
         s.meta[Meta.WaveBudget] = 0;
         break;
       }
-      if (!scheduleSpawn(s, type, (n - pending) * SPAWN_STAGGER)) break;
+      if (!scheduleSpawn(s, type, (n - pending) * WAVE.spawnStaggerTicks)) break;
       s.meta[Meta.WaveBudget] -= ENEMIES[type & ~NOVICE_BIT].threat;
       // Врага-новичка выпускаем в одиночку и ждём, пока с ним разберутся.
       if ((type & NOVICE_BIT) !== 0) break;
@@ -377,20 +415,6 @@ const DG_X1 = 2;
 const DG_Y1 = 3;
 const DG_R = 4;
 
-/**
- * Запас, с которым коридор атаки считается накрывающим игрока.
- *
- * Шире хитбокса, и это не осторожность, а суть правила. Потолок в три
- * телеграфа существует, чтобы игроку было куда уйти; коридор, прошедший в
- * двух десятках единиц, урона не наносит, но забирает ровно то место, куда
- * уходить. Считая только прямые попадания, потолок пропускал лишний таран на
- * загнанного в угол игрока — формально мимо, фактически некуда.
- *
- * На урон это число не влияет никак: computeDanger живёт только внутри правил
- * честности, попадания считает contactDamage по настоящим радиусам.
- */
-const DANGER_SLACK = 24;
-
 const units = (v: Fx): number => v / 65536;
 
 /**
@@ -401,7 +425,7 @@ function computeDanger(s: SimState, i: number, dirX: Fx, dirY: Fx, remaining: nu
   const stats = statsOf(s.eType[i]);
   const x = units(s.eX[i]);
   const y = units(s.eY[i]);
-  const pr = units(PLAYER.radius) + DANGER_SLACK;
+  const pr = units(PLAYER.radius) + FAIRNESS.dangerSlackUnits;
 
   dg[DG_X0] = x;
   dg[DG_Y0] = y;
@@ -551,6 +575,23 @@ const isAlive = (s: SimState, p: number): boolean =>
 function telegraphAllowed(s: SimState, i: number, target: number): boolean {
   normalize(sub(s.pX[target], s.eX[i]), sub(s.pY[target], s.eY[i]));
   if (normX === 0 && normY === 0) return false;
+
+  /*
+   * Сквозь колонну не атакуют.
+   *
+   * Клин летит строго по прямой, поэтому таран, объявленный через укрытие,
+   * кончается ударом в это укрытие — и объявляется снова, и снова. Со стороны
+   * это враг, который бодает стену вместо того, чтобы её обойти; игрок при
+   * этом видит телеграф, обещающий атаку, которой не будет.
+   *
+   * Отказ здесь отправляет врага в обход: в ожидании он кружит, а сторона
+   * обхода переворачивается, когда он упирается. Кирпич проверяется тем же
+   * правилом по той же причине — его снаряд гасится колонной.
+   */
+  if (pathBlocked(s, s.eX[i], s.eY[i], s.pX[target], s.pY[target], statsOf(s.eType[i]).radius)) {
+    return false;
+  }
+
   computeDanger(s, i, normX, normY, attackRemaining(s, i));
 
   for (let p = 0; p < s.playerCount; p++) {
@@ -695,9 +736,19 @@ function stepFuse(s: SimState, i: number): void {
  */
 function orbit(s: SimState, i: number, dx: Fx, dy: Fx): void {
   const distance = length(dx, dy);
-  normalize(dx, dy);
-  const towardX = normX;
-  const towardY = normY;
+
+  // Радиальная составляющая идёт по потоку — иначе враг, обходящий цель по
+  // кругу, упирается в колонну ровно так же, как шедший напролом.
+  let towardX: Fx;
+  let towardY: Fx;
+  if (flowTo(s, s.eTarget[i], s.eX[i], s.eY[i])) {
+    towardX = flowX;
+    towardY = flowY;
+  } else {
+    normalize(dx, dy);
+    towardX = normX;
+    towardY = normY;
+  }
 
   // Своя полоса и своя сторона обхода у каждого — из индекса, а не из RNG:
   // случайность здесь ничего не добавляет, а поток сдвигает.
@@ -713,14 +764,38 @@ function orbit(s: SimState, i: number, dx: Fx, dy: Fx): void {
   s.eVY[i] = add(mul(towardY, closing), mul(towardX * side, WEDGE.orbitSpeed));
 }
 
+/**
+ * Идти к цели, обходя препятствия.
+ *
+ * Направление берётся из поля потока, а не из вектора «на игрока»: прямая
+ * упирается в колонну и держит там врага сколько угодно долго. Поле уже знает
+ * обход, и знает его для всей арены сразу — цена не растёт с числом врагов.
+ *
+ * Отрицательная скорость означает бегство: тот же поток, развёрнутый на сто
+ * восемьдесят градусов. Так отходит Клин с дистанции разгона, а с 0.7.0 так
+ * же будет убегать Вьюн, украв фишку.
+ */
 function approach(s: SimState, i: number, target: number, speed: Fx): void {
   if (!isAlive(s, target)) {
     brake(s, i);
     return;
   }
-  normalize(sub(s.pX[target], s.eX[i]), sub(s.pY[target], s.eY[i]));
-  s.eVX[i] = mul(normX, speed);
-  s.eVY[i] = mul(normY, speed);
+
+  let dirX: Fx;
+  let dirY: Fx;
+  if (flowTo(s, target, s.eX[i], s.eY[i])) {
+    dirX = flowX;
+    dirY = flowY;
+  } else {
+    // Поле не дало направления: враг в закутке, куда волна не дошла. Прямая
+    // хуже обхода, но лучше остановки.
+    normalize(sub(s.pX[target], s.eX[i]), sub(s.pY[target], s.eY[i]));
+    dirX = normX;
+    dirY = normY;
+  }
+
+  s.eVX[i] = mul(dirX, speed);
+  s.eVY[i] = mul(dirY, speed);
 }
 
 /** Кирпич держит 420 u и стрейфится перпендикулярно — по этому он и читается. */
@@ -811,6 +886,10 @@ function contactDamage(s: SimState, i: number): void {
 
 /** Один тик всех врагов и всей системы волн. */
 export function stepEnemies(s: SimState): void {
+  // Навигация готовится один раз на тик и обслуживает всех: поле потока
+  // считается от цели, а не от врага, поэтому его стоимость не зависит от
+  // того, сколько врагов на арене.
+  updateNav(s);
   countTelegraphs(s);
   const activeEnemies = countTargeting(s);
 
@@ -877,9 +956,11 @@ export function stepEnemies(s: SimState): void {
           s.ePhaseUntil[i] = s.tick + stats.recoverTicks;
           brake(s, i);
         } else {
-          // Разворот стороны обхода — весь его способ обойти препятствие:
-          // полноценный поиск пути арене из шести прямоугольников не нужен,
-          // а застрявший навсегда враг ломает темп боя.
+          // Разворот стороны обхода — не способ найти дорогу, её находит
+          // поле потока (nav.ts). Это страховка на тот случай, когда враг
+          // упёрся, а поле говорит идти дальше: в толкучке его прижимают
+          // соседи, у самой грани клетки направление ещё старое, и застрявший
+          // навсегда враг ломает темп боя вернее, чем неоптимальный обход.
           s.eFlags[i] ^= EntityFlag.OrbitFlip;
         }
       }
@@ -902,9 +983,6 @@ export function setSpawning(s: SimState, on: boolean): void {
   s.meta[Meta.SpawnOff] = on ? 0 : 1;
 }
 
-/** Доля намеченного пути, ниже которой движение считается упёршимся. */
-const BLOCKED_FRACTION = 0.4;
-
 /** Сдвинулось ли тело заметно меньше, чем намеревалось. */
 function blocked(fromX: Fx, fromY: Fx, toX: Fx, toY: Fx, vx: Fx, vy: Fx): boolean {
   const wantX = units(vx);
@@ -913,7 +991,8 @@ function blocked(fromX: Fx, fromY: Fx, toX: Fx, toY: Fx, vx: Fx, vy: Fx): boolea
   if (want === 0) return false;
   const gotX = units(sub(toX, fromX));
   const gotY = units(sub(toY, fromY));
-  return gotX * gotX + gotY * gotY < want * BLOCKED_FRACTION * BLOCKED_FRACTION;
+  const fraction = FAIRNESS.blockedFraction;
+  return gotX * gotX + gotY * gotY < want * fraction * fraction;
 }
 
 /** Убрать с арены всё, кроме игроков: перезапуск забега и старт комнаты. */
@@ -922,4 +1001,8 @@ export function clearArena(s: SimState): void {
   s.bActive.fill(0);
   s.cActive.fill(0);
   s.spActive.fill(0);
+  // Карты — тоже арена. Сценарий про подбор кладёт свою карту в известную
+  // точку, и раскладка начала забега, оставшаяся лежать, превращает счёт
+  // карт в счёт чужих карт.
+  s.kActive.fill(0);
 }

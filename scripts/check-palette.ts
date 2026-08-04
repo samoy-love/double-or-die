@@ -10,16 +10,46 @@
  *
  * Разрешено: сам модуль палитры и таблицы стилей. Запрещено: шестнадцатеричный
  * цвет, rgb()/rgba()/hsl()/hsla() и цветовые слова CSS в коде отрисовки.
+ *
+ * ## Разметка проверяется тоже
+ *
+ * Точка входа — это тоже поверхность игры: `theme-color` красит строку
+ * браузера на телефоне, а фон страницы виден в первый кадр до того, как
+ * канвас что-нибудь нарисует. Цвет, вписанный туда мимо палитры, не
+ * перекрашивается под дальтоника и не участвует в замере ΔE — то есть ровно
+ * тот же дефект, что и в коде отрисовки, только заметный ещё позже.
+ *
+ * Импортировать `palette.ts` из HTML нельзя, поэтому правило для разметки
+ * другое по форме и то же по сути: **цвет в HTML обязан существовать в
+ * палитре**. Разъехаться молча он после этого не может — правка палитры,
+ * забытая в разметке, валит проверку.
+ *
+ * ## Что исключено осознанно
+ *
+ * `packages/client/src/style.css` — таблица стилей страницы: фон вокруг
+ * канваса и размеры. CSS не читает TypeScript, а превращать палитру в
+ * генератор переменных ради трёх правил дороже, чем стоит выгода.
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, relative } from 'node:path';
 
 const ROOT = join(import.meta.dirname, '..');
-const SCAN = [join(ROOT, 'packages', 'client', 'src')];
+
+/** Код отрисовки: цвет разрешён только в палитре. */
+const SCAN_CODE = [join(ROOT, 'packages', 'client', 'src')];
+
+/** Разметка: цвет разрешён, если он есть в палитре. */
+const SCAN_MARKUP = [ROOT, join(ROOT, 'public')];
 
 /** Единственный файл, которому цвета положены по должности. */
 const ALLOWED = new Set(['packages/client/src/palette.ts']);
+
+/**
+ * Исключено осознанно, а не забыто. Список обязан оставаться коротким: каждая
+ * строка здесь — место, где цвет может разъехаться с палитрой незамеченным.
+ */
+const EXCLUDED = new Set(['packages/client/src/style.css']);
 
 interface Finding {
   file: string;
@@ -99,13 +129,47 @@ function walk(dir: string, acc: string[] = []): string[] {
   return acc;
 }
 
-function main(): void {
-  const findings: Finding[] = [];
+/** Разметка в каталоге, без рекурсии: точка входа и то, что раздаётся как есть. */
+function htmlIn(dir: string): string[] {
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  return names
+    .filter((n) => extname(n) === '.html')
+    .map((n) => join(dir, n))
+    .filter((p) => statSync(p).isFile())
+    .sort();
+}
 
-  for (const dir of SCAN) {
+const PALETTE_FILE = join(ROOT, 'packages', 'client', 'src', 'palette.ts');
+
+/**
+ * Цвета, которые в палитре действительно есть, — в нормальном виде `#rrggbb`.
+ *
+ * Палитра пишет их как `hex(0x1a1033)`, разметка — как `#1a1033`. Сравнивать
+ * надо значения, а не написание, иначе проверка развалится от смены регистра.
+ */
+function paletteColors(): Set<string> {
+  const src = readFileSync(PALETTE_FILE, 'utf8');
+  const out = new Set<string>();
+  for (const m of src.matchAll(/0x([0-9a-fA-F]{6})\b/g)) out.add(`#${m[1].toLowerCase()}`);
+  return out;
+}
+
+/** Нормализовать `#abc` и `#AABBCC` к одному виду `#aabbcc`. */
+function normalizeHex(h: string): string {
+  const v = h.slice(1).toLowerCase();
+  return v.length === 3 ? `#${v[0]}${v[0]}${v[1]}${v[1]}${v[2]}${v[2]}` : `#${v}`;
+}
+
+function scanCode(findings: Finding[]): void {
+  for (const dir of SCAN_CODE) {
     for (const file of walk(dir)) {
       const rel = relative(ROOT, file).replace(/\\/g, '/');
-      if (ALLOWED.has(rel)) continue;
+      if (ALLOWED.has(rel) || EXCLUDED.has(rel)) continue;
 
       const lines = stripNoise(readFileSync(file, 'utf8')).split('\n');
       lines.forEach((line, i) => {
@@ -118,9 +182,44 @@ function main(): void {
       });
     }
   }
+}
+
+function scanMarkup(findings: Finding[], known: Set<string>): void {
+  const seen = new Set<string>();
+  for (const dir of SCAN_MARKUP) {
+    for (const file of htmlIn(dir)) {
+      const rel = relative(ROOT, file).replace(/\\/g, '/');
+      if (seen.has(rel) || EXCLUDED.has(rel)) continue;
+      seen.add(rel);
+
+      // HTML-комментарии режем по той же причине, что и в коде: в них цвета
+      // объясняются словами.
+      const text = readFileSync(file, 'utf8').replace(/<!--[\s\S]*?-->/g, (c) =>
+        c.replace(/[^\n]/g, ' '),
+      );
+      text.split('\n').forEach((line, i) => {
+        const add = (what: string): void => {
+          findings.push({ file: rel, line: i + 1, text: line.trim(), what });
+        };
+
+        for (const m of line.matchAll(/#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?\b/g)) {
+          if (!known.has(normalizeHex(m[0]))) add(`цвета ${m[0]} нет в палитре`);
+        }
+        // Функции цвета в разметке не сверить с палитрой построчно и незачем:
+        // писать их там нечего вовсе.
+        if (/\b(rgba?|hsla?)\s*\(/.test(line)) add('функция цвета в разметке');
+      });
+    }
+  }
+}
+
+function main(): void {
+  const findings: Finding[] = [];
+  scanCode(findings);
+  scanMarkup(findings, paletteColors());
 
   if (findings.length === 0) {
-    console.log('палитра: цвета только в palette.ts');
+    console.log('палитра: цвета только в palette.ts, разметка с ней сходится');
     return;
   }
 

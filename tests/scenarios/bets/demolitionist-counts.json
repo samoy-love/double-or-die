@@ -1,0 +1,62 @@
+{
+  "name": "«Подрывник» считает подрывы и засчитывается на третьем",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    {
+      "clear": true
+    },
+    {
+      "chips": {
+        "amount": 200
+      }
+    },
+    {
+      "bet": {
+        "id": "demolitionist",
+        "stake": 10
+      }
+    },
+    {
+      "expect": {
+        "bets": {
+          "id": "demolitionist",
+          "progressPct": {
+            "max": 1
+          }
+        }
+      }
+    },
+    {
+      "place": {
+        "x": 300,
+        "y": 300
+      }
+    },
+    {
+      "spawn": {
+        "type": "фитиль",
+        "x": 460,
+        "y": 300,
+        "count": 4
+      }
+    },
+    {
+      "tick": 400
+    },
+    {
+      "expect": {
+        "kills": {
+          "min": 4
+        },
+        "bets": {
+          "id": "demolitionist",
+          "progressPct": {
+            "min": 99
+          },
+          "state": "active"
+        }
+      }
+    }
+  ]
+}

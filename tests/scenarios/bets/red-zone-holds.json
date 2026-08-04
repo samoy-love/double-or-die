@@ -1,0 +1,35 @@
+{
+  "name": "«Не заходи в красную зону» держится за её краем",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    {
+      "chips": {
+        "amount": 200
+      }
+    },
+    {
+      "bet": {
+        "id": "no_red_zone",
+        "stake": 10
+      }
+    },
+    {
+      "place": {
+        "x": 200,
+        "y": 200
+      }
+    },
+    {
+      "tick": 120
+    },
+    {
+      "expect": {
+        "bets": {
+          "id": "no_red_zone",
+          "state": "active"
+        }
+      }
+    }
+  ]
+}

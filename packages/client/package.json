@@ -1,0 +1,11 @@
+{
+  "name": "@dod/client",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "description": "Рендер, аудио, ввод, интерфейс. Импортирует @dod/sim и @dod/shared; обратной стрелки не существует",
+  "license": "MIT",
+  "exports": {
+    "./*": "./src/*.ts"
+  }
+}

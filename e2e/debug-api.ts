@@ -17,6 +17,10 @@ export interface DebugApi {
   waves(on?: boolean): void;
   clear(): void;
   stress(o?: { enemies?: number; particles?: number }): void;
+  /** Стабильный кадр: тряска, вспышки и хитстоп выключены. */
+  stable(on?: boolean): void;
+  /** Снимок кадра сеткой средних цветов: визуальная регрессия. */
+  frameGrid(cols?: number, rows?: number): number[][];
   perf(): { fps: number; particles: number; shapes: number };
 }
 

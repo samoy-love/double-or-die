@@ -1,0 +1,56 @@
+{
+  "$schema": "./bets.schema.md",
+  "version": 1,
+  "bets": [
+    {
+      "id": "no_damage",
+      "name": "Без урона",
+      "category": "style",
+      "multiplier": 3.0,
+      "progress": "threat",
+      "conflicts": []
+    },
+    {
+      "id": "no_dash",
+      "name": "Без рывка",
+      "category": "style",
+      "multiplier": 2.0,
+      "progress": "threat",
+      "conflicts": []
+    },
+    {
+      "id": "under_45s",
+      "name": "Быстрее 45 секунд",
+      "category": "tempo",
+      "multiplier": 2.0,
+      "progress": "time",
+      "limitTicks": 2700,
+      "conflicts": []
+    },
+    {
+      "id": "no_red_zone",
+      "name": "Не заходи в красную зону",
+      "category": "space",
+      "multiplier": 2.0,
+      "progress": "threat",
+      "conflicts": []
+    },
+    {
+      "id": "all_chips",
+      "name": "Собери все фишки",
+      "category": "greed",
+      "multiplier": 2.0,
+      "progress": "threat",
+      "conflicts": []
+    },
+    {
+      "id": "demolitionist",
+      "name": "Подрывник",
+      "category": "tricks",
+      "multiplier": 2.5,
+      "progress": "counter",
+      "target": 3,
+      "conflicts": []
+    }
+  ]
+}

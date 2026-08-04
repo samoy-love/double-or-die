@@ -1,0 +1,32 @@
+{
+  "name": "«Подрывник» проваливается, когда подрывов не хватило до трёх",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "clear": true },
+    { "chips": { "amount": 100 } },
+    { "bet": { "id": "demolitionist", "stake": 10 } },
+    { "place": { "x": 300, "y": 800 } },
+    { "spawn": { "type": "клин", "x": 1340, "y": 300 } },
+    { "explode": { "x": 1340, "y": 300 } },
+    {
+      "expect": {
+        "kills": { "min": 1, "max": 1 },
+        "bets": { "id": "demolitionist", "counter": { "min": 1, "max": 1 } }
+      }
+    },
+    { "settle": true },
+    {
+      "expect": {
+        "bets": {
+          "id": "demolitionist",
+          "state": "lost",
+          "nearMissPct": { "min": 33, "max": 34 },
+          "lost": { "min": 1, "max": 1 },
+          "won": { "max": 0 }
+        },
+        "chips": { "min": 90, "max": 90 }
+      }
+    }
+  ]
+}

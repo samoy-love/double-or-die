@@ -1,0 +1,35 @@
+{
+  "name": "«Без рывка» срывается первым же рывком",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    {
+      "chips": {
+        "amount": 200
+      }
+    },
+    {
+      "bet": {
+        "id": "no_dash",
+        "stake": 10
+      }
+    },
+    {
+      "input": {
+        "move": [1, 0],
+        "buttons": ["dash"]
+      }
+    },
+    {
+      "tick": 2
+    },
+    {
+      "expect": {
+        "bets": {
+          "id": "no_dash",
+          "state": "lost"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "name": "«Без урона» держится, пока по игроку не попали",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    {
+      "chips": {
+        "amount": 200
+      }
+    },
+    {
+      "bet": {
+        "id": "no_damage",
+        "stake": 10
+      }
+    },
+    {
+      "tick": 300
+    },
+    {
+      "expect": {
+        "hearts": {
+          "min": 3
+        },
+        "bets": {
+          "id": "no_damage",
+          "state": "active"
+        }
+      }
+    }
+  ]
+}
