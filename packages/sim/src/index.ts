@@ -20,6 +20,7 @@ export * from './config';
 export * from './state';
 export * from './arena';
 export * from './combat';
+export * from './nav';
 export * from './enemies';
 export * from './bets';
 export * from './sim';

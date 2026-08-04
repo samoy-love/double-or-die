@@ -10,7 +10,7 @@
  * можно, не тронув ни одного другого числа.
  */
 
-import { isFreeSpot, maxX, maxY, pushOutOfColumns, pushedX, pushedY } from './arena';
+import { isFreeSpot, maxX, maxY, pathBlocked, pushOutOfColumns, pushedX, pushedY } from './arena';
 import {
   AI_DECISION_PERIOD,
   AI_SEPARATION_REACH,
@@ -31,6 +31,7 @@ import {
   WEDGE,
 } from './config';
 import { clearBets, dealCards, settleBets } from './bets';
+import { flowTo, flowX, flowY, updateNav } from './nav';
 import { damagePlayer, explode, fireEnemy, killEnemy, statsOf } from './combat';
 import { add, type Fx, fromInt, mul, sub } from './fixed';
 import { Stream, nextInt } from './rng';
@@ -566,6 +567,23 @@ const isAlive = (s: SimState, p: number): boolean =>
 function telegraphAllowed(s: SimState, i: number, target: number): boolean {
   normalize(sub(s.pX[target], s.eX[i]), sub(s.pY[target], s.eY[i]));
   if (normX === 0 && normY === 0) return false;
+
+  /*
+   * Сквозь колонну не атакуют.
+   *
+   * Клин летит строго по прямой, поэтому таран, объявленный через укрытие,
+   * кончается ударом в это укрытие — и объявляется снова, и снова. Со стороны
+   * это враг, который бодает стену вместо того, чтобы её обойти; игрок при
+   * этом видит телеграф, обещающий атаку, которой не будет.
+   *
+   * Отказ здесь отправляет врага в обход: в ожидании он кружит, а сторона
+   * обхода переворачивается, когда он упирается. Кирпич проверяется тем же
+   * правилом по той же причине — его снаряд гасится колонной.
+   */
+  if (pathBlocked(s, s.eX[i], s.eY[i], s.pX[target], s.pY[target], statsOf(s.eType[i]).radius)) {
+    return false;
+  }
+
   computeDanger(s, i, normX, normY, attackRemaining(s, i));
 
   for (let p = 0; p < s.playerCount; p++) {
@@ -710,9 +728,19 @@ function stepFuse(s: SimState, i: number): void {
  */
 function orbit(s: SimState, i: number, dx: Fx, dy: Fx): void {
   const distance = length(dx, dy);
-  normalize(dx, dy);
-  const towardX = normX;
-  const towardY = normY;
+
+  // Радиальная составляющая идёт по потоку — иначе враг, обходящий цель по
+  // кругу, упирается в колонну ровно так же, как шедший напролом.
+  let towardX: Fx;
+  let towardY: Fx;
+  if (flowTo(s, s.eTarget[i], s.eX[i], s.eY[i])) {
+    towardX = flowX;
+    towardY = flowY;
+  } else {
+    normalize(dx, dy);
+    towardX = normX;
+    towardY = normY;
+  }
 
   // Своя полоса и своя сторона обхода у каждого — из индекса, а не из RNG:
   // случайность здесь ничего не добавляет, а поток сдвигает.
@@ -728,14 +756,38 @@ function orbit(s: SimState, i: number, dx: Fx, dy: Fx): void {
   s.eVY[i] = add(mul(towardY, closing), mul(towardX * side, WEDGE.orbitSpeed));
 }
 
+/**
+ * Идти к цели, обходя препятствия.
+ *
+ * Направление берётся из поля потока, а не из вектора «на игрока»: прямая
+ * упирается в колонну и держит там врага сколько угодно долго. Поле уже знает
+ * обход, и знает его для всей арены сразу — цена не растёт с числом врагов.
+ *
+ * Отрицательная скорость означает бегство: тот же поток, развёрнутый на сто
+ * восемьдесят градусов. Так отходит Клин с дистанции разгона, а с 0.7.0 так
+ * же будет убегать Вьюн, украв фишку.
+ */
 function approach(s: SimState, i: number, target: number, speed: Fx): void {
   if (!isAlive(s, target)) {
     brake(s, i);
     return;
   }
-  normalize(sub(s.pX[target], s.eX[i]), sub(s.pY[target], s.eY[i]));
-  s.eVX[i] = mul(normX, speed);
-  s.eVY[i] = mul(normY, speed);
+
+  let dirX: Fx;
+  let dirY: Fx;
+  if (flowTo(s, target, s.eX[i], s.eY[i])) {
+    dirX = flowX;
+    dirY = flowY;
+  } else {
+    // Поле не дало направления: враг в закутке, куда волна не дошла. Прямая
+    // хуже обхода, но лучше остановки.
+    normalize(sub(s.pX[target], s.eX[i]), sub(s.pY[target], s.eY[i]));
+    dirX = normX;
+    dirY = normY;
+  }
+
+  s.eVX[i] = mul(dirX, speed);
+  s.eVY[i] = mul(dirY, speed);
 }
 
 /** Кирпич держит 420 u и стрейфится перпендикулярно — по этому он и читается. */
@@ -826,6 +878,10 @@ function contactDamage(s: SimState, i: number): void {
 
 /** Один тик всех врагов и всей системы волн. */
 export function stepEnemies(s: SimState): void {
+  // Навигация готовится один раз на тик и обслуживает всех: поле потока
+  // считается от цели, а не от врага, поэтому его стоимость не зависит от
+  // того, сколько врагов на арене.
+  updateNav(s);
   countTelegraphs(s);
   const activeEnemies = countTargeting(s);
 
