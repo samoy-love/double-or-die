@@ -62,7 +62,22 @@
       "summary.keys": "Ключи за забег",
       "summary.floor": "Этаж",
       "summary.paid": "Отдано заведению",
-      "summary.again": "Ещё разок"
+      "summary.again": "Ещё разок",
+      "menu.title": "Double or Die",
+      "menu.play": "Играть",
+      "menu.tagline": "Сложность выбираете вы",
+      "screen.confirm.pad": "RB — подтвердить",
+      "screen.confirm.key": "Enter — подтвердить",
+      "screen.cancel.pad": "B — отказаться",
+      "screen.cancel.key": "Q — отказаться",
+      "shop.title": "Лавка",
+      "shop.hint": "Заведение не торгуется",
+      "shop.sold": "Продано",
+      "shop.leave": "Уйти без покупки",
+      "haggle.title": "Туз предлагает выбор",
+      "haggle.bet": "Взять пари в следующей комнате",
+      "haggle.sell": "Продать апгрейд",
+      "haggle.none": "Заведение пока не выкупает"
     },
     "en": {
       "bet.no_damage.name": "No Damage",
@@ -124,7 +139,22 @@
       "summary.keys": "Keys earned",
       "summary.floor": "Floor",
       "summary.paid": "Paid to the house",
-      "summary.again": "One more"
+      "summary.again": "One more",
+      "menu.title": "Double or Die",
+      "menu.play": "Play",
+      "menu.tagline": "You pick the difficulty",
+      "screen.confirm.pad": "RB to confirm",
+      "screen.confirm.key": "Enter to confirm",
+      "screen.cancel.pad": "B to decline",
+      "screen.cancel.key": "Q to decline",
+      "shop.title": "Shop",
+      "shop.hint": "The house does not haggle",
+      "shop.sold": "Sold",
+      "shop.leave": "Leave empty-handed",
+      "haggle.title": "The Ace offers a choice",
+      "haggle.bet": "Take a bet in the next room",
+      "haggle.sell": "Sell an upgrade",
+      "haggle.none": "The house does not buy back yet"
     }
   }
 }

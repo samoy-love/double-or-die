@@ -27,8 +27,10 @@ import {
   cashOut,
   cashOutValue,
   clearArena,
+  enterHouseCut,
   fromFloat,
   nearMissOf,
+  openShop,
   progressOf,
   putCard,
   setSpawning,
@@ -249,6 +251,24 @@ export interface DebugApi {
   setAppetite(player: number, tier: number): void;
   /** Выключить звук: он мешает, когда агент гоняет сотню прогонов. */
   mute(on?: boolean): void;
+  /**
+   * Открыть плату за этаж — тем же входом, каким её открывает забег.
+   *
+   * Нужна проверке отрисовки: своим ходом экран платы стоит ЗА боссом, а бот
+   * до босса не доходит. Подменять фазу руками нельзя — проверялся бы кадр,
+   * которого в игре не бывает, — поэтому зовётся `enterHouseCut` ядра: она
+   * ставит и фазу, и сумму по формуле этажа, как в настоящем забеге.
+   */
+  houseCut(): void;
+  /**
+   * Открыть лавку — входом ядра, а не подменой фазы.
+   *
+   * Нужна той же проверке отрисовки: лавка стоит за дверью «Лавка» и за
+   * зачищенной комнатой, а бот до неё доходит не всякий раз и не быстро.
+   * `openShop` раскладывает витрину из потока `shop` и назначает цены по
+   * этажу — то же самое, что увидит игрок.
+   */
+  shop(): void;
   /** Нарисовать кадр немедленно: в невидимой вкладке кадров не бывает. */
   render(): void;
   /** Нагрузить сцену для замера бюджета кадра: враги и частицы разом. */
@@ -539,6 +559,16 @@ export function installDebugApi(loop: GameLoop): void {
 
     mute(on = true) {
       loop.audio.setMuted(on);
+    },
+
+    houseCut() {
+      enterHouseCut(loop.state);
+      log('house_cut', { floor: loop.state.meta[Meta.Floor], cut: loop.state.meta[Meta.HouseCut] });
+    },
+
+    shop() {
+      openShop(loop.state);
+      log('shop', { items: [...loop.state.shopItem], prices: [...loop.state.shopPrice] });
     },
 
     render: () => loop.renderOnce(),

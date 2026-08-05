@@ -301,10 +301,18 @@ export class TextAtlas {
         font = want;
       }
       ctx.fillText(cell.ch, cell.x + PAD + cell.left, cell.y + PAD + cell.ascent);
+      /*
+       * Знак без отпечатка — это пробел, и в атласе у него пустой прямоугольник.
+       *
+       * Пустой намеренно: перо обязано по нему ШАГНУТЬ (иначе слова слипаются),
+       * а инстанс на прозрачный квадрат тратить не за что. Признак — размер
+       * ячейки: у пробела он равен одним полям.
+       */
+      const ink = cell.w > PAD * 2 && cell.h > PAD * 2;
       this.glyphs[cell.face].set(cell.ch, {
         u0: cell.x / width,
         v0: cell.y / height,
-        u1: (cell.x + cell.w) / width,
+        u1: ink ? (cell.x + cell.w) / width : cell.x / width,
         v1: (cell.y + cell.h) / height,
         x0: (-cell.left - PAD) / PX,
         x1: (cell.w - PAD - cell.left) / PX,

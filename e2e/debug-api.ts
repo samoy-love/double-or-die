@@ -19,6 +19,12 @@ export interface DebugApi {
   stress(o?: { enemies?: number; particles?: number }): void;
   /** Стабильный кадр: тряска, вспышки и хитстоп выключены. */
   stable(on?: boolean): void;
+  /** Открыть плату за этаж входом ядра: экран платы стоит за боссом. */
+  houseCut(): void;
+  /** Открыть лавку входом ядра: она стоит за дверью «Лавка» и за боем. */
+  shop(): void;
+  /** Выдать фишки: ими проверяется развилка «хватает / торг». */
+  give(o: { chips?: number; hearts?: number }, player?: number): void;
   /** Снимок кадра сеткой средних цветов: визуальная регрессия. */
   frameGrid(cols?: number, rows?: number): number[][];
   perf(): { fps: number; particles: number; shapes: number };

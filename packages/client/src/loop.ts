@@ -8,6 +8,7 @@
 
 import {
   withAppetite,
+  Btn,
   checkInvariants,
   clearArena,
   createState,
@@ -17,6 +18,7 @@ import {
   type InputFrame,
   MAX_PLAYERS,
   Meta,
+  RunPhase,
   setSpawning,
   type SimState,
   spawnEnemy,
@@ -63,6 +65,20 @@ export class GameLoop {
   private running = false;
   private paused: boolean;
   private frameId = 0;
+
+  /**
+   * Забег ещё не начат: на экране главное меню.
+   *
+   * Живёт в клиенте, а не в симуляции, потому что фазы `Menu` в ядре нет:
+   * `RunPhase` начинается с двери. Ядру она и не нужна — в меню ничего не
+   * происходит, ни один тик не считается и реплею нечего переигрывать, — но
+   * пока её нет, меню обязано ОСТАНАВЛИВАТЬ забег снаружи. Иначе первая
+   * комната играется сама, пока игрок читает заголовок, и «МЕНЮ ──► ЗАБЕГ»
+   * (GDD §5) превращается в надпись поверх уже идущего боя.
+   */
+  private menu = true;
+  /** Кого позвать, когда игрок начал забег из меню. */
+  private runStarted: (() => void) | null = null;
 
   fps = 0;
   private fpsAcc = 0;
@@ -129,6 +145,43 @@ export class GameLoop {
     return this.paused;
   }
 
+  /** Стоит ли игра в меню: рендер рисует его поверх кадра. */
+  get atMenu(): boolean {
+    return this.menu;
+  }
+
+  onRunStart(fn: () => void): void {
+    this.runStarted = fn;
+  }
+
+  /**
+   * Начать забег из меню.
+   *
+   * Часы сбрасываются вместе с накопителем: между загрузкой страницы и
+   * нажатием «Играть» проходит сколько угодно времени, и без сброса первый же
+   * кадр забега получил бы пачку догоняющих тиков — бой начинался бы уже
+   * идущим.
+   */
+  /**
+   * Начать следующий забег с экрана итогов.
+   *
+   * Сид получается из текущего линейным конгруэнтным шагом, а не из часов:
+   * цепочка забегов остаётся воспроизводимой целиком, и «повтори мой вечер»
+   * из баг-репорта означает то же самое у всех.
+   */
+  private again(): void {
+    this.restart((Math.imul(this.state.seed, 1664525) + 1013904223) >>> 0, this.state.playerCount);
+    this.runStarted?.();
+  }
+
+  private startRun(): void {
+    if (!this.menu) return;
+    this.menu = false;
+    this.last = performance.now();
+    this.acc = 0;
+    this.runStarted?.();
+  }
+
   /** Кого позвать, когда инвариант остановил симуляцию. */
   private halted: ((message: string, seed: number, tick: number) => void) | null = null;
 
@@ -152,6 +205,9 @@ export class GameLoop {
   /** Начать заново с другим сидом или составом. */
   restart(seed: number, players: number): void {
     this.benchMode = false;
+    // Явно заказанный забег меню не ждёт: так его заказывают агент, сценарий и
+    // сквозной тест, и висящее поверх меню сделало бы их кадр не тем кадром.
+    this.menu = false;
     this.state = createState(seed, players);
     spawnPlayers(this.state);
     this.recorder = this.makeRecorder();
@@ -186,8 +242,37 @@ export class GameLoop {
      */
     const simDt = this.feel.advance(dt / 1000);
 
+    /*
+     * В меню опрашивается только подтверждение.
+     *
+     * Кадр ввода при этом собирается целиком и выбрасывается: опрос — единственный
+     * способ узнать состояние геймпада (событий Gamepad API не даёт вовсе), и
+     * ради одного бита городить второй путь опроса значило бы завести вторую
+     * раскладку, которая разъедется с первой.
+     */
+    if (this.menu || this.state.meta[Meta.Phase] === RunPhase.Summary) {
+      const f = this.input.poll(
+        toArenaFloat(this.state.pX[0]),
+        toArenaFloat(this.state.pY[0]),
+        this.state.pAppetite[0],
+      );
+      /*
+       * «Ещё разок» — действие клиента, а не ядра, и это не обход правила.
+       *
+       * Забег в ядре кончается насовсем: на итогах симуляция намеренно
+       * остановлена, и «начать заново» означает НОВЫЙ забег с новым сидом —
+       * то есть новое состояние, а не переход внутри старого. Реплей от этого
+       * не страдает: их становится два, по одному на забег, каждый со своим
+       * сидом.
+       */
+      if ((f.buttons & Btn.Confirm) !== 0) {
+        if (this.menu) this.startRun();
+        else this.again();
+      }
+    }
+
     // В паузе кадр только рисует: шаги делает advance(), синхронно.
-    if (!this.paused) {
+    if (!this.paused && !this.menu) {
       this.acc += simDt * 1000;
       while (this.acc >= MS_PER_TICK) {
         this.tickOnce();
@@ -199,8 +284,11 @@ export class GameLoop {
     this.particles.update(simDt);
     this.feedback.frame(simDt);
 
+    // Схема ввода — в рендер каждый кадр: подписи экранов называют физическую
+    // кнопку, а устройство меняется прямо во время игры (UX §2).
+    this.renderer.scheme = this.input.inputScheme;
     const alpha = this.paused ? 1 : this.acc / MS_PER_TICK;
-    this.renderer.draw(this.state, alpha, this.feel, this.particles, this.feedback);
+    this.renderer.draw(this.state, alpha, this.feel, this.particles, this.feedback, this.menu);
 
     this.frameId = requestAnimationFrame(this.frame);
   };
@@ -417,7 +505,7 @@ export class GameLoop {
    * планировщик решит.
    */
   renderOnce(): void {
-    this.renderer.draw(this.state, 1, this.feel, this.particles, this.feedback);
+    this.renderer.draw(this.state, 1, this.feel, this.particles, this.feedback, this.menu);
   }
 
   /** Сколько фигур ушло в последний кадр: главный показатель бюджета рендера. */

@@ -47,12 +47,19 @@ export type StringKey =
   | 'door.type.pit'
   | 'door.type.shop'
   | 'error.webgl2'
+  | 'haggle.bet'
+  | 'haggle.none'
+  | 'haggle.sell'
+  | 'haggle.title'
   | 'house.cut'
   | 'house.debt'
   | 'house.pay'
   | 'house.purse'
   | 'house.short'
   | 'house.title'
+  | 'menu.play'
+  | 'menu.tagline'
+  | 'menu.title'
   | 'overlay.dropped'
   | 'overlay.halt.hint'
   | 'overlay.halt.report'
@@ -61,7 +68,15 @@ export type StringKey =
   | 'overlay.paused'
   | 'overlay.stats'
   | 'overlay.update'
+  | 'screen.cancel.key'
+  | 'screen.cancel.pad'
+  | 'screen.confirm.key'
+  | 'screen.confirm.pad'
   | 'settlement.title'
+  | 'shop.hint'
+  | 'shop.leave'
+  | 'shop.sold'
+  | 'shop.title'
   | 'summary.again'
   | 'summary.death'
   | 'summary.floor'
@@ -111,12 +126,19 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
     'door.type.shop': 'Лавка',
     'error.webgl2':
       'WebGL2 недоступен: без него игра не рисуется. Обновите браузер или включите аппаратное ускорение.',
+    'haggle.bet': 'Взять пари в следующей комнате',
+    'haggle.none': 'Заведение пока не выкупает',
+    'haggle.sell': 'Продать апгрейд',
+    'haggle.title': 'Туз предлагает выбор',
     'house.cut': 'Доля заведения',
     'house.debt': 'Иди в долг',
     'house.pay': 'Заплатить',
     'house.purse': 'В кошельке',
     'house.short': 'Не хватает',
     'house.title': 'Стол берёт своё',
+    'menu.play': 'Играть',
+    'menu.tagline': 'Сложность выбираете вы',
+    'menu.title': 'Double or Die',
     'overlay.dropped': 'ПОТЕРЯНО ФИГУР {count}',
     'overlay.halt.hint':
       'Это дефект ядра, а не ваш ход. P или Esc — продолжить, F5 — начать заново.',
@@ -127,7 +149,15 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
     'overlay.stats':
       '{build}  ·  тик {tick}  ·  {fps} FPS  ·  сид {seed}  ·  игроков {players}  ·  {hash}',
     'overlay.update': 'Доступна новая версия ({build}) — обновите страницу',
+    'screen.cancel.key': 'Q — отказаться',
+    'screen.cancel.pad': 'B — отказаться',
+    'screen.confirm.key': 'Enter — подтвердить',
+    'screen.confirm.pad': 'RB — подтвердить',
     'settlement.title': 'Расчёт',
+    'shop.hint': 'Заведение не торгуется',
+    'shop.leave': 'Уйти без покупки',
+    'shop.sold': 'Продано',
+    'shop.title': 'Лавка',
     'summary.again': 'Ещё разок',
     'summary.death': 'Мёртвый не выигрывает',
     'summary.floor': 'Этаж',
@@ -176,12 +206,19 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
     'door.type.shop': 'Shop',
     'error.webgl2':
       'WebGL2 is unavailable: the game cannot draw without it. Update the browser or enable hardware acceleration.',
+    'haggle.bet': 'Take a bet in the next room',
+    'haggle.none': 'The house does not buy back yet',
+    'haggle.sell': 'Sell an upgrade',
+    'haggle.title': 'The Ace offers a choice',
     'house.cut': 'House cut',
     'house.debt': 'Go into debt',
     'house.pay': 'Pay up',
     'house.purse': 'In the purse',
     'house.short': 'Short',
     'house.title': 'The house takes its cut',
+    'menu.play': 'Play',
+    'menu.tagline': 'You pick the difficulty',
+    'menu.title': 'Double or Die',
     'overlay.dropped': 'SHAPES DROPPED {count}',
     'overlay.halt.hint':
       'This is a core defect, not your move. P or Esc to continue, F5 to start over.',
@@ -192,7 +229,15 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
     'overlay.stats':
       '{build}  ·  tick {tick}  ·  {fps} FPS  ·  seed {seed}  ·  players {players}  ·  {hash}',
     'overlay.update': 'A new build ({build}) is available — reload the page',
+    'screen.cancel.key': 'Q to decline',
+    'screen.cancel.pad': 'B to decline',
+    'screen.confirm.key': 'Enter to confirm',
+    'screen.confirm.pad': 'RB to confirm',
     'settlement.title': 'Settlement',
+    'shop.hint': 'The house does not haggle',
+    'shop.leave': 'Leave empty-handed',
+    'shop.sold': 'Sold',
+    'shop.title': 'Shop',
     'summary.again': 'One more',
     'summary.death': 'The dead do not collect',
     'summary.floor': 'Floor',

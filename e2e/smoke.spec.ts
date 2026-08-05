@@ -72,6 +72,17 @@ test.describe('релизная сборка', () => {
    */
   test('цикл идёт: тик растёт, кадры считаются', async ({ page }) => {
     await page.goto('/?debug=1&lang=ru');
+    /*
+     * Забег начинается с меню, и тест начинает его так же, как игрок.
+     *
+     * Обойти меню нечем и не нужно: отладочного интерфейса в релизной сборке
+     * нет по решению 0.1.0, а «Играть» — это одна клавиша. Зажатая на кадр:
+     * опрос ввода идёт раз в кадр, и нажатие с отпусканием в одном микротаске
+     * игра не увидит.
+     */
+    await page.keyboard.down('Enter');
+    await page.waitForTimeout(200);
+    await page.keyboard.up('Enter');
     await page.waitForTimeout(900);
 
     const first = await overlayText(page);

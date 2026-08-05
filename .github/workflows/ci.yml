@@ -272,7 +272,28 @@ jobs:
             const f = fs.readdirSync(d)[0];
             return { os: d, data: JSON.parse(fs.readFileSync(d + '/' + f, 'utf8')) };
           });
+          // Гейт обязан объяснять, чем недоволен. Раньше он падал за две
+          // секунды на разыменовании undefined — «сравнение не состоялось» и
+          // «хеши разошлись» выглядели одинаково, а это разные события: первое
+          // означает сломанную оснастку, второе — сломанный детерминизм.
+          console.log('скачано наборов: ' + runs.length + ' (' + dirs.join(', ') + ')');
+          if (runs.length < 2) {
+            console.error('::error::сравнивать нечего: наборов хешей ' + runs.length + ', нужно минимум два');
+            process.exit(1);
+          }
           const base = runs[0];
+          const sizes = runs.map(r => r.os + '=' + (r.data.results ? r.data.results.length : 'нет results'));
+          if (runs.some(r => !Array.isArray(r.data.results))) {
+            console.error('::error::в наборе нет списка результатов: ' + sizes.join(' '));
+            process.exit(1);
+          }
+          if (new Set(runs.map(r => r.data.results.length)).size !== 1) {
+            // Разное число забегов означает, что на какой-то платформе прогон
+            // оборвался. Сравнивать поэлементно тут нельзя: вторая половина
+            // сравнений уйдёт в undefined и соврёт про детерминизм.
+            console.error('::error::платформы прогнали разное число забегов: ' + sizes.join(' '));
+            process.exit(1);
+          }
           let bad = 0;
           for (const r of runs.slice(1)) {
             for (let i = 0; i < base.data.results.length; i++) {
