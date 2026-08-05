@@ -174,6 +174,102 @@ test('кадр содержит арену, врагов и игрока', async
  * логика покрыта юнит-тестами (tests/doors.test.ts), а отрисовка ждёт
  * проверки глазами — оснастка тут стоит дороже пользы.
  */
+/**
+ * Кадр не пуст и не одноцветен — тот же критерий, что у экрана итогов.
+ *
+ * Вынесено функцией, потому что проверок таких стало четыре: пустой экран
+ * ловится только чтением пикселей, и повторять двадцать строк на каждый экран
+ * значит однажды забыть их в пятом.
+ */
+async function screenFrame(page: import('@playwright/test').Page): Promise<{
+  colorCount: number;
+  shapes: number;
+}> {
+  return await page.evaluate(() => {
+    const d = window.__DOD__!;
+    d.render();
+    const el = document.getElementById('game') as HTMLCanvasElement;
+    const gl = el.getContext('webgl2')!;
+    const w = gl.drawingBufferWidth;
+    const h = gl.drawingBufferHeight;
+    const px = new Uint8Array(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    const colors = new Set<number>();
+    for (let i = 0; i < w * h; i += 13) {
+      colors.add((px[i * 4] << 16) | (px[i * 4 + 1] << 8) | px[i * 4 + 2]);
+    }
+    return { colorCount: colors.size, shapes: d.perf().shapes };
+  });
+}
+
+/**
+ * Меню рисуется до всякого забега — и до него игра не тикает.
+ *
+ * Второе здесь важнее первого: меню обязано ОСТАНАВЛИВАТЬ забег, иначе первая
+ * комната играется сама, пока игрок читает заголовок (GDD §5, «МЕНЮ ──►
+ * ЗАБЕГ»). `newRun` тут не зовётся намеренно — он и есть заказанный забег,
+ * который меню снимает.
+ */
+test('меню рисуется и держит забег до нажатия', async ({ page }) => {
+  await page.goto('/?debug=1');
+  await page.waitForFunction(() => '__DOD__' in window, null, { timeout: 30_000 });
+  await page.evaluate(() => window.__DOD__!.mute(true));
+
+  const frame = await screenFrame(page);
+  expect(frame.shapes, 'меню пусто — рисовать было нечего').toBeGreaterThan(20);
+  expect(frame.colorCount, 'кадр меню почти одноцветный').toBeGreaterThan(6);
+
+  const before = await page.evaluate(() => window.__DOD__!.state().tick);
+  await page.waitForTimeout(600);
+  const idle = await page.evaluate(() => window.__DOD__!.state().tick);
+  expect(idle, 'забег идёт под меню').toBe(before);
+
+  /*
+   * Клавиша именно ЗАЖИМАЕТСЯ на кадр, а не «нажимается».
+   *
+   * Опрос ввода идёт раз в кадр, поэтому нажатие и отпускание в одном
+   * микротаске игра не видит вовсе — ни здесь, ни у живого игрока с
+   * макросом. Человеческое нажатие длится десятки миллисекунд, и тест
+   * повторяет именно его.
+   */
+  await page.keyboard.down('Enter');
+  await page.waitForTimeout(200);
+  await page.keyboard.up('Enter');
+  await page.waitForTimeout(600);
+  const after = await page.evaluate(() => window.__DOD__!.state().tick);
+  expect(after, 'нажатие «Играть» не начало забег').toBeGreaterThan(idle);
+});
+
+/**
+ * Плата за этаж и торг — два разных кадра одной фазы.
+ *
+ * Развилка проходит по кошельку: хватает — экран платы, не хватает — торг с
+ * тремя вариантами (GDD §12А.2). Оба доводятся входом ядра `houseCut()`, а не
+ * подменой фазы: проверяется кадр, который бывает в игре.
+ */
+for (const money of [
+  { name: 'платы', chips: 100_000 },
+  { name: 'торга', chips: 0 },
+] as const) {
+  test(`экран ${money.name} рисуется, а не оставляет пустой кадр`, async ({ page }) => {
+    await page.goto('/?debug=1&autopause=1');
+    await page.waitForFunction(() => '__DOD__' in window, null, { timeout: 30_000 });
+
+    await page.evaluate((chips) => {
+      const d = window.__DOD__!;
+      d.newRun({ seed: 3, players: 1 });
+      d.mute(true);
+      if (chips > 0) d.give({ chips });
+      d.houseCut();
+    }, money.chips);
+
+    const frame = await screenFrame(page);
+    expect(await page.evaluate(() => window.__DOD__!.state().phase), 'фаза не платы').toBe(5);
+    expect(frame.shapes, 'экран пуст — рисовать было нечего').toBeGreaterThan(20);
+    expect(frame.colorCount, 'кадр почти одноцветный').toBeGreaterThan(6);
+  });
+}
+
 for (const screen of [{ name: 'итогов', phase: 6 }] as const) {
   test(`экран ${screen.name} рисуется, а не оставляет пустой кадр`, async ({ page }) => {
     await page.goto('/?debug=1&autopause=1');

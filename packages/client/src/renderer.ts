@@ -54,6 +54,8 @@ import {
   BetProgress,
   BetState,
   MAX_ACTIVE_BETS,
+  MAX_UPGRADE_SLOTS,
+  SHOP_SLOTS,
   FX_ONE,
   cashOutValue,
   nearMissOf,
@@ -224,6 +226,15 @@ export class Renderer {
   private readonly seenEnemy = new Uint8Array(MAX_ENEMIES);
   private readonly seenBullet = new Uint8Array(MAX_BULLETS);
   private seenPlayers = false;
+
+  /**
+   * Схема ввода прямо сейчас: подписи экранов называют физическую кнопку.
+   *
+   * Ставится клиентом каждый кадр. Не из состояния: `pScheme` заполняется
+   * кадром ввода, то есть до первого тика его нет вовсе, — а меню стоит именно
+   * до первого тика и обязано назвать кнопку верно.
+   */
+  scheme: InputScheme = InputScheme.Keyboard;
 
   /** Фигур в последнем кадре: по нему видно, во что упирается рендер. */
   lastShapeCount = 0;
@@ -408,8 +419,22 @@ export class Renderer {
     this.seenPlayers = false;
   }
 
-  /** `alpha` — доля пройденного тика, 0..1. */
-  draw(s: SimState, alpha: number, feel: Feel, particles: Particles, fb: Feedback): void {
+  /**
+   * `alpha` — доля пройденного тика, 0..1.
+   *
+   * `menu` — забег ещё не начат: поверх кадра стоит главное меню. Признак
+   * приходит параметром, а не из состояния, потому что в состоянии его нет:
+   * фазы `Menu` в ядре не заведено, и меню целиком живёт в клиенте
+   * (`loop.ts`).
+   */
+  draw(
+    s: SimState,
+    alpha: number,
+    feel: Feel,
+    particles: Particles,
+    fb: Feedback,
+    menu = false,
+  ): void {
     const { gl, canvas, batch } = this;
     const arenaW = toFloat(s.arenaW);
     const arenaH = toFloat(s.arenaH);
@@ -435,6 +460,9 @@ export class Renderer {
     this.drawBullets(s, alpha);
     this.drawParticles(particles);
     this.drawHud(s, arenaW, arenaH, fb);
+    // Меню — поверх всего, включая экраны забега: пока оно на экране, забег
+    // не идёт вовсе, и любая надпись из-под него говорила бы об обратном.
+    if (menu) this.drawMenuScreen(arenaW, arenaH);
     this.drawScreenEffects(feel, arenaW, arenaH);
 
     const scale = Math.min(canvas.width / arenaW, canvas.height / arenaH);
@@ -1707,6 +1735,7 @@ export class Renderer {
   private drawRunScreens(s: SimState, w: number, h: number): void {
     const phase = s.meta[Meta.Phase] as RunPhase;
     if (phase === RunPhase.Door) this.drawDoorScreen(s, w, h);
+    else if (phase === RunPhase.Reward) this.drawShopScreen(s, w, h);
     else if (phase === RunPhase.HouseCut) this.drawHouseCutScreen(s, w, h);
     else if (phase === RunPhase.Summary) this.drawSummaryScreen(s, w, h);
   }
@@ -1727,6 +1756,28 @@ export class Renderer {
   }
 
   /**
+   * Строка «подпись и число под ней». Возвращает `y` следующей свободной строки.
+   *
+   * Шаг считается, а не подбирается на глаз, и это не педантизм: `drawNumber`
+   * меряет цифру ПОЛУВЫСОТОЙ, то есть число кеглем 30 занимает шестьдесят
+   * единиц. Разложенные по «примерно сорока», подписи налезали на цифры на
+   * трёх экранах сразу — «Доля заведения» читалась поверх самой доли.
+   */
+  private screenValue(
+    label: string,
+    value: number,
+    w: number,
+    y: number,
+    size: number,
+    colour: Rgb,
+    labelColour = PALETTE.hudDim,
+  ): number {
+    this.screenLine(label, w, y, labelColour);
+    drawNumber(this.batch, value, w / 2, y + size + 18, size, colour);
+    return y + size * 2 + 46;
+  }
+
+  /**
    * Выбор двери: три карточки, выбранная — золотом.
    *
    * Золото здесь то же, что подсвечивает ближайшую карту на арене: «вот это
@@ -1735,11 +1786,13 @@ export class Renderer {
    */
   private drawDoorScreen(s: SimState, w: number, h: number): void {
     this.dim(w, h);
-    this.screenTitle(t('door.title'), w, h / 2 - 150);
-    this.screenLine(t('door.hint'), w, h / 2 - 110);
+    // Титул и подсказка стоят НАД карточками, а не на них: полувысота двери —
+    // 128 единиц, и прежние −150/−110 клали подсказку прямо на лица дверей.
+    this.screenTitle(t('door.title'), w, h / 2 - 230);
+    this.screenLine(t('door.hint'), w, h / 2 - 186);
 
     const pick = s.meta[Meta.DoorPick];
-    const gap = 230;
+    const gap = 250;
     for (let i = 0; i < MAX_DOORS; i++) {
       const x = w / 2 + (i - (MAX_DOORS - 1) / 2) * gap;
       const chosen = i === pick;
@@ -1758,43 +1811,213 @@ export class Renderer {
         'center',
       );
     }
+    this.confirmHint(w, h / 2 + 220);
   }
 
   /**
-   * Плата: три строки и то, чем кончится нажатие.
+   * Подпись «чем подтверждают» — по схеме ввода из кадра.
    *
-   * Строк ровно три — сколько просят, сколько есть, чего не хватает, — потому
-   * что решение здесь одно и считается в уме. Кнопка называется по-разному в
-   * зависимости от кошелька: «Заплатить», когда хватает, и «Иди в долг»,
-   * когда нет. Одна подпись на оба случая врала бы в одном из них.
+   * Экранов в игре пять, и ни один из них не боевой: сюда смотрят, а не косят
+   * глазом, и правило «в бою букв нет» (UX §4) на них не распространяется.
+   * Кнопка при этом названа СЛОВОМ, а не глифом, как на арене: глиф в оправе
+   * говорит «нажми вот эту», и работает он, пока кнопка одна и общеизвестна
+   * (X — подбор). Подтверждение живёт на RB и на `Enter`, то есть на кнопках,
+   * которых игрок не угадает, — их надо назвать.
+   *
+   * Схема берётся ЖИВАЯ, из слоя ввода, а не из `pScheme` состояния, — в
+   * отличие от глифа на арене. Разница не формальная: `pScheme` заполняется
+   * кадром ввода, то есть существует только пока идут тики, а меню стоит до
+   * первого из них — и подпись обещала бы кнопку геймпада тому, кто держит
+   * мышь. Глиф на арене остаётся на состоянии: там схема нужна ПО ИГРОКУ, и
+   * в коопе она у всех своя.
+   */
+  private confirmHint(w: number, y: number): void {
+    const pad = this.scheme === InputScheme.Gamepad;
+    this.screenLine(pad ? t('screen.confirm.pad') : t('screen.confirm.key'), w, y, PALETTE.hudDim);
+  }
+
+  /**
+   * Карточка экрана: та же тёмная заливка и несущая обводка, что у арены.
+   *
+   * Выбранная — золотом заведения: то же золото, что подсвечивает карту под
+   * ногами, «вот это возьмётся, если нажать».
+   *
+   * Недоступная уходит в ХРОМ, а доступная-невыбранная — в приглушённый
+   * лиловый, и порядок здесь именно такой. Наоборот уже было: хром тёмный,
+   * лиловый светлый, и вариант «продавать нечего» светился ярче варианта,
+   * который игрок мог выбрать. Недоступное обязано быть самым тусклым на
+   * экране — это его единственный признак.
+   */
+  private screenCard(
+    x: number,
+    y: number,
+    halfW: number,
+    halfH: number,
+    focused: boolean,
+    available = true,
+  ): Rgb {
+    const colour = !available ? PALETTE.chrome : focused ? PALETTE.accent : PALETTE.hudDim;
+    const alpha = !available ? 0.5 : focused ? 1 : 0.75;
+    entity(this.batch, Shape.Box, x, y, halfW, halfH, 0, colour, alpha);
+    return colour;
+  }
+
+  /**
+   * Главное меню: одна крупная кнопка «Играть», остальное мельче (UX §6).
+   *
+   * Выбора персонажа и сложности здесь нет и в 0.4.0 не будет — на нулевой
+   * секунде игрок жмёт одну кнопку и оказывается в бою (GDD §23). «Выбор
+   * режима», обещанный той же таблицей после первого забега, не нарисован
+   * намеренно: режимов до кооперативa 0.5.0 не существует, а кнопка, которая
+   * ничего не делает, дороже отсутствующей (UX §2).
+   *
+   * Элемент на экране ровно один, поэтому фокусу некуда деться: он стоит на
+   * «Играть» всегда, и тупика фокуса здесь нет по построению.
+   */
+  private drawMenuScreen(w: number, h: number): void {
+    this.dim(w, h);
+    this.screenTitle(t('menu.title'), w, h / 2 - 170, 56);
+    this.screenLine(t('menu.tagline'), w, h / 2 - 110);
+
+    // Кнопка крупная не для красоты: она единственная, и её размер — весь
+    // ответ на вопрос «что тут делать».
+    const c = this.screenCard(w / 2, h / 2, 210, 52, true);
+    this.text.push(t('menu.play'), w / 2, h / 2, 30, Face.Ui, c.r, c.g, c.b, 1, 'center');
+    this.confirmHint(w, h / 2 + 100);
+  }
+
+  /**
+   * Лавка: три карточки товара с ценой (UX §6, GDD §5).
+   *
+   * Экран читает состояние и ничего не решает: что лежит в слоте
+   * (`shopItem`, индекс апгрейда плюс единица), сколько просят (`shopPrice`) и
+   * что уже куплено (`pUpgrades`). Пустой слот — проданный товар, и он
+   * остаётся на экране пустой рамкой: исчезнувшая карточка сдвинула бы
+   * соседние под пальцем игрока.
+   *
+   * Имени у товара пока нет, и подписано оно словом «Апгрейд»: каталога
+   * апгрейдов в `content/` не существует, а выдумывать имя в коде — это ровно
+   * тот хардкод, который запрещён (UX §8). Имена приедут вместе с каталогом
+   * ключами `upgrade.<id>.name`.
+   *
+   * Цена красится алым, когда не хватает: решение здесь одно — «беру или
+   * коплю», — и оно считается в уме из двух чисел, цены и кошелька.
+   */
+  private drawShopScreen(s: SimState, w: number, h: number): void {
+    this.dim(w, h);
+    this.screenTitle(t('shop.title'), w, h / 2 - 190);
+    this.screenLine(t('shop.hint'), w, h / 2 - 150);
+
+    const purse = walletOf(s);
+    const pick = s.meta[Meta.DoorPick];
+    const gap = 250;
+
+    for (let i = 0; i < SHOP_SLOTS; i++) {
+      const x = w / 2 + (i - (SHOP_SLOTS - 1) / 2) * gap;
+      const item = s.shopItem[i];
+      const sold = item === 0;
+      const price = s.shopPrice[i];
+      const afford = !sold && price <= purse;
+      const c = this.screenCard(x, h / 2, 100, 120, i === pick, !sold);
+
+      if (sold) {
+        this.text.push(t('shop.sold'), x, h / 2, 15, Face.Ui, c.r, c.g, c.b, 0.8, 'center');
+        continue;
+      }
+
+      // Пиктограмма товара — «плюс в кольце»: апгрейд прибавляет, и это всё,
+      // что о нём сегодня известно. Форма, а не буква: на неё смотрят раньше,
+      // чем читают подпись.
+      const ring = 34;
+      this.batch.push(Shape.Ring, x, h / 2 - 40, ring, ring, 0, 0, 0, 0, 0, 4, c.r, c.g, c.b, 1);
+      this.batch.push(Shape.Box, x, h / 2 - 40, 16, 3, 0, c.r, c.g, c.b, 1, 0, 0, 0, 0, 0);
+      this.batch.push(Shape.Box, x, h / 2 - 40, 3, 16, 0, c.r, c.g, c.b, 1, 0, 0, 0, 0, 0);
+
+      this.text.push(t('shop.item'), x, h / 2 + 20, 15, Face.Ui, c.r, c.g, c.b, 0.9, 'center');
+      // Цена — фишками и в языке арены: золотой кружок слева от числа, ровно
+      // как под картой пари, где называется кон.
+      const money = afford ? PALETTE.chip : PALETTE.danger;
+      this.batch.push(
+        Shape.Circle,
+        x - 46,
+        h / 2 + 74,
+        9,
+        9,
+        0,
+        money.r,
+        money.g,
+        money.b,
+        0.9,
+        0,
+        0,
+        0,
+        0,
+        0,
+      );
+      drawNumber(this.batch, price, x + 14, h / 2 + 74, 16, money);
+    }
+
+    const next = this.screenValue(t('house.purse'), purse, w, h / 2 + 190, 18, PALETTE.chip);
+    this.confirmHint(w, next);
+  }
+
+  /**
+   * Плата в конце этажа и торг, если не хватило.
+   *
+   * Пока хватает, решение одно и экран отвечает тремя числами: сколько просят,
+   * сколько есть, что будет по нажатию. Не хватило — это уже не отказ в
+   * обслуживании, а торг: Туз выкладывает три выхода (GDD §12А.2), и экран
+   * обязан показать все три, включая тот, которым игрок не воспользуется.
+   *
+   * Продажа апгрейда гаснет, когда продавать нечего: вариант, недоступный по
+   * состоянию, обязан выглядеть недоступным — иначе фокус упирается в
+   * молчание, а игрок ищет причину в кнопке.
    */
   private drawHouseCutScreen(s: SimState, w: number, h: number): void {
     this.dim(w, h);
-    this.screenTitle(t('house.title'), w, h / 2 - 130);
-
-    let purse = 0;
-    for (let i = 0; i < s.playerCount; i++) purse += s.pChips[i];
+    const purse = walletOf(s);
     const cut = s.meta[Meta.HouseCut];
     const enough = purse >= cut;
 
-    this.screenLine(t('house.cut'), w, h / 2 - 60);
-    drawNumber(this.batch, cut, w / 2, h / 2 - 24, 34, PALETTE.accent);
+    this.screenTitle(enough ? t('house.title') : t('haggle.title'), w, h / 2 - 250);
 
-    this.screenLine(t('house.purse'), w, h / 2 + 26);
-    drawNumber(this.batch, purse, w / 2, h / 2 + 60, 26, PALETTE.chip);
+    let y = this.screenValue(t('house.cut'), cut, w, h / 2 - 190, 26, PALETTE.accent);
+    y = this.screenValue(t('house.purse'), purse, w, y, 18, PALETTE.chip);
 
-    if (!enough) {
-      this.screenLine(t('house.short'), w, h / 2 + 104, PALETTE.danger);
-      drawNumber(this.batch, cut - purse, w / 2, h / 2 + 138, 26, PALETTE.danger);
+    if (enough) {
+      this.screenLine(t('house.pay'), w, y + 10, PALETTE.accent, 18);
+      this.confirmHint(w, y + 60);
+      return;
     }
 
-    this.screenLine(
-      enough ? t('house.pay') : t('house.debt'),
-      w,
-      h / 2 + (enough ? 118 : 186),
-      enough ? PALETTE.accent : PALETTE.danger,
-      18,
-    );
+    y = this.screenValue(t('house.short'), cut - purse, w, y, 18, PALETTE.danger, PALETTE.danger);
+
+    /*
+     * Три варианта торга — карточками в ряд, как двери.
+     *
+     * Форма повторяет экран двери намеренно: это то же самое решение — какой
+     * ценой идти дальше, — и второй язык выбора игроку заводить незачем.
+     *
+     * Фокус берётся из `DoorPick`: своего поля у торга в ядре нет, а
+     * подтверждение по нему уже ходит через `Confirm`. Пока ядро знает только
+     * долг, фокус по умолчанию стоит на нём — на том варианте, который
+     * действительно случится по нажатию.
+     */
+    const options: readonly [string, boolean][] = [
+      [t('haggle.bet'), true],
+      [hasUpgrades(s) ? t('haggle.sell') : t('haggle.none'), hasUpgrades(s)],
+      [t('house.debt'), true],
+    ];
+    const pick = s.meta[Meta.DoorPick] >= 0 ? s.meta[Meta.DoorPick] : options.length - 1;
+    const gap = 360;
+    const row = y + 50;
+    for (let i = 0; i < options.length; i++) {
+      const [label, available] = options[i];
+      const x = w / 2 + (i - (options.length - 1) / 2) * gap;
+      const c = this.screenCard(x, row, 160, 52, i === pick, available);
+      this.text.push(label, x, row, 15, Face.Ui, c.r, c.g, c.b, available ? 1 : 0.7, 'center');
+    }
+    this.confirmHint(w, row + 100);
   }
 
   /**
@@ -1809,18 +2032,26 @@ export class Renderer {
     this.dim(w, h);
     const won = s.meta[Meta.Victory] !== 0;
 
-    this.screenTitle(won ? t('summary.victory') : t('summary.death'), w, h / 2 - 120, 34);
+    this.screenTitle(won ? t('summary.victory') : t('summary.death'), w, h / 2 - 240, 34);
 
-    this.screenLine(t('summary.floor'), w, h / 2 - 46);
-    drawNumber(this.batch, s.meta[Meta.Floor], w / 2, h / 2 - 12, 30, PALETTE.hudText);
+    // Ключи — крупнее всего остального: это единственное, что игрок уносит из
+    // забега (ECONOMY §12), и на скриншоте видно должно быть именно их.
+    let y = this.screenValue(
+      t('summary.floor'),
+      s.meta[Meta.Floor],
+      w,
+      h / 2 - 180,
+      22,
+      PALETTE.hudText,
+    );
+    y = this.screenValue(t('summary.keys'), s.meta[Meta.Keys], w, y, 36, PALETTE.accent);
+    y = this.screenValue(t('summary.paid'), s.meta[Meta.PaidToAce], w, y, 16, PALETTE.hudDim);
 
-    this.screenLine(t('summary.keys'), w, h / 2 + 40);
-    drawNumber(this.batch, s.meta[Meta.Keys], w / 2, h / 2 + 78, 42, PALETTE.accent);
-
-    this.screenLine(t('summary.paid'), w, h / 2 + 128, PALETTE.hudDim, 13);
-    drawNumber(this.batch, s.meta[Meta.PaidToAce], w / 2, h / 2 + 158, 20, PALETTE.hudDim);
-
-    this.screenLine(t('summary.again'), w, h / 2 + 206, PALETTE.accent, 18);
+    // «Ещё разок» доминирует на экране итогов — цикл «ещё разок» и есть то,
+    // ради чего игра существует (UX §6).
+    const c = this.screenCard(w / 2, y + 40, 190, 44, true);
+    this.text.push(t('summary.again'), w / 2, y + 40, 24, Face.Ui, c.r, c.g, c.b, 1, 'center');
+    this.confirmHint(w, y + 130);
   }
 
   /**
@@ -2020,8 +2251,16 @@ export class Renderer {
     if (rows === 0) return;
 
     const b = this.batch;
-    const c = PALETTE.background;
-    b.push(Shape.Box, w / 2, h / 2, w, h, 0, c.r, c.g, c.b, 0.72, 0, 0, 0, 0, 0);
+    /*
+     * Затемнение — общее с остальными экранами, а не своё.
+     *
+     * Своё здесь и было: 0.72 против 0.82 у двери, платы и итогов, — то есть
+     * пять экранов забега затемняли бой по-разному, и разница читалась как
+     * разное состояние игры. Расчёт верстался раньше остальных, и общего
+     * помощника на тот момент не существовало; теперь он есть, и держать
+     * четвёртое число незачем.
+     */
+    this.dim(w, h);
 
     /*
      * Туз — ПОВЕРХ затемнения, а не под ним.
@@ -2044,19 +2283,7 @@ export class Renderer {
      * титуле, а не в строке HUD. В бою она была бы хуже интерфейсной по
      * единственному критерию, который в бою важен, — скорости опознания.
      */
-    const title = PALETTE.hudText;
-    this.text.push(
-      t('settlement.title'),
-      w / 2,
-      h / 2 - rows * 34 - 46,
-      38,
-      Face.Display,
-      title.r,
-      title.g,
-      title.b,
-      0.95,
-      'center',
-    );
+    this.screenTitle(t('settlement.title'), w, h / 2 - rows * 34 - 46);
 
     // Плашки те же, что в бою, только крупнее и по центру: игрок узнаёт их
     // мгновенно, потому что весь бой смотрел ровно на эти формы.
@@ -2079,7 +2306,9 @@ export class Renderer {
         // пари должно читаться без счёта строк. Тот же шестиугольник, что и в
         // боевом HUD, и в том же языке — иначе своя метка выглядела бы на
         // расчёте чужой.
-        entity(b, Shape.Hexagon, w / 2 - 190, y, 10, 10, 0, colour, 1, 3);
+        // Левее плашки, а не на её кромке: полуширина строки — ровно 190, и
+        // метка стояла под собственным контуром строки.
+        entity(b, Shape.Hexagon, w / 2 - 215, y, 10, 10, 0, colour, 1, 3);
         // Строка — та же плашка, что в бою: тёмное поле, рамка цветом
         // категории, у взятого куша — золотая.
         entity(b, Shape.Box, w / 2, y, 190, 26, 0, won ? PALETTE.chip : cat, lost ? 0.4 : 1, 3);
@@ -2117,7 +2346,24 @@ export class Renderer {
         // Выплата: у обналиченного и выигранного она разная, и берётся та,
         // что игроку действительно заплатили (снята в момент перехода).
         // Золотом — это фишки, и на тёмной строке им есть где светиться.
-        drawNumber(b, fb.betPayout[k], w / 2 + 110, y, 18, lost ? PALETTE.hudDim : PALETTE.chip);
+        /*
+         * У неразрешённого пари выплаты ещё нет, и показывается «Забрать».
+         *
+         * Пауза между волнами — это тот же экран расчёта, но пари в нём живые:
+         * `fb.betPayout` у них ноль, и строка сообщала «выплата 0» рядом с
+         * перечёркнутым исходом, то есть объявляла проигранным то, что игрок
+         * ещё держит. Число живого пари — его текущий куш, приглушённый: он
+         * ещё не в кошельке.
+         */
+        const active = state === BetState.Active;
+        drawNumber(
+          b,
+          active ? cashOutValue(s, p, i) : fb.betPayout[k],
+          w / 2 + 110,
+          y,
+          18,
+          lost || active ? PALETTE.hudDim : PALETTE.chip,
+        );
 
         if (!lost) continue;
 
@@ -2223,6 +2469,19 @@ export class Renderer {
       b.push(Shape.Ring, x, y, 11, 11, 0, 0, 0, 0, 0, 4, c.r, c.g, c.b, 1);
       return;
     }
+    if (state === BetState.Active) {
+      /*
+       * Пари ещё в игре — пустой шестиугольник приглушённым.
+       *
+       * Раньше сюда проваливалось всё, кроме выигранного и обналиченного, и
+       * живое пари на паузе между волнами рисовалось ПЕРЕЧЁРКНУТЫМ: экран
+       * объявлял проигранным то, что игрок держит и может забрать. Форма та
+       * же, что у сердца и у выигрыша, но без ядра — «решится позже».
+       */
+      const c = PALETTE.hudDim;
+      entity(b, Shape.Hexagon, x, y, 11, 11, 0, c, 0.8, 3);
+      return;
+    }
     const d = PALETTE.danger;
     for (const angle of [Math.PI / 4, -Math.PI / 4]) {
       b.push(Shape.Box, x, y, 12, 2.5, angle, d.r, d.g, d.b, 1, 0, 0, 0, 0, 0);
@@ -2256,6 +2515,27 @@ export class Renderer {
  * разметку от чужого пари. Ищется один раз на загрузку модуля.
  */
 const RED_ZONE_BET = BETS.findIndex((spec) => String(spec.id) === 'no_red_zone');
+
+/**
+ * Сколько фишек у стола всего.
+ *
+ * Плата и цены в лавке считаются от общего кошелька: доля заведения общая, а
+ * кошельки раздельные (GDD §14). Одна функция на оба экрана — иначе они
+ * разошлись бы в первой же правке состава.
+ */
+function walletOf(s: SimState): number {
+  let total = 0;
+  for (let i = 0; i < s.playerCount; i++) total += s.pChips[i];
+  return total;
+}
+
+/** Есть ли у стола хоть один купленный апгрейд: без него торг продавать нечего. */
+function hasUpgrades(s: SimState): boolean {
+  for (let i = 0; i < s.playerCount * MAX_UPGRADE_SLOTS; i++) {
+    if (s.pUpgrades[i] !== 0) return true;
+  }
+  return false;
+}
 
 /** Есть ли красная зона в этой комнате: карта на полу или активное пари. */
 function redZoneInPlay(s: SimState): boolean {
