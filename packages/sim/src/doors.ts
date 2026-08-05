@@ -15,6 +15,7 @@
 import { APPETITE_DEFAULT, DOORS, ROOMS_PER_FLOOR } from './config';
 import { Btn, appetiteOf, type InputFrame } from './input';
 import { Stream, nextInt } from './rng';
+import { freezeArena } from './run';
 import { DoorType, MAX_DOORS, Meta, RunPhase, type SimState } from './state';
 
 /**
@@ -28,6 +29,8 @@ import { DoorType, MAX_DOORS, Meta, RunPhase, type SimState } from './state';
  * потоков и защищает (TECH §2.3).
  */
 export function offerDoors(s: SimState): void {
+  // Комната кончена — гасим то, что от неё осталось лететь (см. freezeArena).
+  freezeArena(s);
   s.meta[Meta.Phase] = RunPhase.Door;
   s.meta[Meta.PhaseUntil] = 0;
   s.meta[Meta.DoorPick] = -1;

@@ -158,8 +158,27 @@ function checkRun(s: SimState): void {
   const room = s.meta[Meta.RoomType];
   if (room < DoorType.Fight || room > DoorType.DebtPit) fail(`тип комнаты ${room}`, s.tick);
 
+  /*
+   * Слот выбора делят дверь и лавка, и это единственное поле в состоянии со
+   * смыслом, зависящим от фазы.
+   *
+   * Свободных слотов в `Meta` не осталось, а лавке фокус нужен по-настоящему:
+   * товаров три, их листают и подтверждают. Дверь и лавка при этом никогда не
+   * открыты одновременно, так что поле физически одно.
+   *
+   * Опасность у такого совмещения ровно одна, и она тихая: фокус, не погашенный
+   * на выходе из лавки, доживает до следующей двери и читается как уже
+   * сделанный выбор — игрок получает комнату, которую не выбирал, и понять это
+   * по кадру невозможно. Гашение делается руками, поэтому здесь оно и
+   * проверяется: вне двух своих фаз слот обязан быть пуст.
+   */
   const pick = s.meta[Meta.DoorPick];
-  if (pick < -1 || pick >= MAX_DOORS) fail(`выбрана дверь ${pick} из ${MAX_DOORS}`, s.tick);
+  const focused = phase === RunPhase.Door || phase === RunPhase.Reward;
+  const slots = phase === RunPhase.Reward ? SHOP_SLOTS : MAX_DOORS;
+  if (pick < -1 || pick >= slots) fail(`выбран пункт ${pick} из ${slots}`, s.tick);
+  if (!focused && pick !== -1) {
+    fail(`фокус ${pick} пережил свой экран: фаза ${phase}`, s.tick);
+  }
   for (let i = 0; i < MAX_DOORS; i++) {
     const d = s.doorType[i];
     if (d < DoorType.Fight || d > DoorType.DebtPit) fail(`дверь ${i} предлагает тип ${d}`, s.tick);

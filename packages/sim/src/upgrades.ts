@@ -24,6 +24,7 @@ import { CHIP, PISTOL, PLAYER, UPGRADE } from './config';
 import { type Fx, fromInt } from './fixed';
 import { Btn, type InputFrame } from './input';
 import { Stream, nextInt } from './rng';
+import { freezeArena } from './run';
 import { MAX_UPGRADE_SLOTS, Meta, RunPhase, SHOP_SLOTS, type SimState } from './state';
 import { UPGRADES, UPGRADE_COUNT, UpgradeEffect, type UpgradeSpec } from './upgrades.generated';
 
@@ -227,6 +228,8 @@ function ownedByAll(s: SimState, upgrade: number): boolean {
  * два одинаковых ценника на одном прилавке невозможны.
  */
 export function openShop(s: SimState): void {
+  // Комната кончена — гасим летящее (см. freezeArena в run.ts).
+  freezeArena(s);
   s.meta[Meta.Phase] = RunPhase.Reward;
   s.meta[Meta.PhaseUntil] = 0;
   s.shopItem.fill(0);

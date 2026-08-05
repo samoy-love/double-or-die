@@ -15,6 +15,7 @@
 import { APPETITE, HOUSE, LEG_UP, MAX_ACTIVE_BETS } from './config';
 import { Btn, type InputFrame } from './input';
 import { Stream, nextInt } from './rng';
+import { freezeArena } from './run';
 import { BetState, Curse, Meta, Obligation, RunPhase, type SimState } from './state';
 
 /**
@@ -45,6 +46,8 @@ function purse(s: SimState): number {
  * относится к пройденному этажу, а не к будущему.
  */
 export function enterHouseCut(s: SimState): void {
+  // Этаж кончен — гасим летящее, иначе оно протухнет по абсолютному сроку.
+  freezeArena(s);
   s.meta[Meta.Phase] = RunPhase.HouseCut;
   s.meta[Meta.PhaseUntil] = 0;
   s.meta[Meta.HouseCut] = houseCut(s.meta[Meta.Floor], s.playerCount);
