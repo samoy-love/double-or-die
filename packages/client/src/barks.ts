@@ -8,10 +8,9 @@
  * подписывается под ним.
  *
  * Отсюда и разделение: выбор реплики — чистая функция от жеста и номера
- * повода, и он здесь; вывод её на экран приезжает вместе с типографикой и
- * словарём в стадии F2 (PRODUCTION §4). Писать текст в кадр раньше шрифта
- * значит переписать и то, и другое. Пока строку видно в отладочном
- * интерфейсе и слышно жестом.
+ * повода, и он здесь; сам текст живёт словарём (UX §8), а на экран его кладёт
+ * рендер под Тузом. Здесь остаются только КЛЮЧИ: список реплик — это порядок
+ * дозировки, а не перевод, и правка перевода не имеет права трогать код.
  *
  * Границы (GDD §17А): Туз смеётся над ситуацией и над собой, но не над
  * игроком, и чем сильнее игрок пострадал, тем мягче реплика. Первая строка
@@ -19,46 +18,27 @@
  */
 
 import { AceGesture } from '@dod/sim';
+import { t, type StringKey } from './i18n';
 
 /**
  * Реплики по жестам, внутри — от мягкой к дерзкой.
  *
- * Список не пуст ни у одного жеста намеренно: молчащий жест невозможно
- * отличить от несработавшего, и дефект «Туз перестал реагировать» нашёлся бы
- * только по жалобе.
+ * Список не пуст ни у одного настоящего жеста намеренно: молчащий жест
+ * невозможно отличить от несработавшего, и дефект «Туз перестал реагировать»
+ * нашёлся бы только по жалобе.
  */
-const LINES: Record<AceGesture, readonly string[]> = {
-  [AceGesture.None]: [''],
-  [AceGesture.Yawn]: [
-    'Я подожду. Мне спешить некуда.',
-    'Карты, между прочим, не бесплатные. Хотя нет, бесплатные.',
-    'Третья комната. Я уже начал полировать перчатки.',
-  ],
-  [AceGesture.Applaud]: [
-    'Бывает. Со всеми бывает.',
-    'Заведение благодарит за доверие.',
-    'Я бы сказал «не повезло», но мы оба знаем, что это не так.',
-  ],
-  [AceGesture.TurnAway]: [
-    'Ничего не вижу. Совершенно ничем не занят.',
-    'Кажется, у меня срочное дело в другом конце арены.',
-    'Не смотрю. И вам не советую.',
-  ],
-  [AceGesture.Fidget]: [
-    'Хороший вечер. У вас.',
-    'Это временно. Это всегда временно.',
-    'Кто-то же должен выигрывать. Иногда.',
-  ],
+const LINES: Record<AceGesture, readonly StringKey[]> = {
+  [AceGesture.None]: [],
+  [AceGesture.Yawn]: ['ace.bark.yawn.1', 'ace.bark.yawn.2', 'ace.bark.yawn.3'],
+  [AceGesture.Applaud]: ['ace.bark.applaud.1', 'ace.bark.applaud.2', 'ace.bark.applaud.3'],
+  [AceGesture.TurnAway]: ['ace.bark.turn_away.1', 'ace.bark.turn_away.2', 'ace.bark.turn_away.3'],
+  [AceGesture.Fidget]: ['ace.bark.fidget.1', 'ace.bark.fidget.2', 'ace.bark.fidget.3'],
   [AceGesture.ThumbsDown]: [
-    'Осторожность — тоже стратегия.',
-    'Ещё шаг оставался. Один.',
-    'Соскочил. Так и запишем.',
+    'ace.bark.thumbs_down.1',
+    'ace.bark.thumbs_down.2',
+    'ace.bark.thumbs_down.3',
   ],
-  [AceGesture.Ovation]: [
-    'Достойно. Правда.',
-    'Такое не отрепетируешь.',
-    'Браво. Стоя. Я даже встал.',
-  ],
+  [AceGesture.Ovation]: ['ace.bark.ovation.1', 'ace.bark.ovation.2', 'ace.bark.ovation.3'],
 };
 
 /**
@@ -75,10 +55,11 @@ const LINES: Record<AceGesture, readonly string[]> = {
  */
 export function pickBark(gesture: AceGesture, occasion: number, severity = 0): string {
   const lines = LINES[gesture];
+  if (lines.length === 0) return '';
   // Верхняя доступная дерзость: при severity = 1 остаётся только первая,
   // самая мягкая строка.
   const ceiling = Math.max(1, Math.round(lines.length * (1 - clamp01(severity))));
-  return lines[mod(occasion, ceiling)];
+  return t(lines[mod(occasion, ceiling)]);
 }
 
 /** Насколько игроку сейчас плохо: 0 — всё хорошо, 1 — хуже некуда. */

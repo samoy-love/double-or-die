@@ -18,6 +18,13 @@
  *     капсула отличаются одним числом в инстансе, поэтому и попадают в один
  *     батч. Разные наборы вершин означали бы разные вызовы отрисовки.
  *
+ * Буква — такой же инстанс, как круг, и это решение того же порядка. Текст
+ * приехал в F2 (PRODUCTION §4), и рисовать его вторым проходом поверх кадра
+ * означало бы разменять «весь кадр одним вызовом» на удобство: HUD, карты и
+ * подписи перемешаны по глубине, поэтому проходов вышло бы не два, а столько,
+ * сколько раз текст чередуется с фигурами. Вместо этого глиф — фигура
+ * `Shape.Glyph` с прямоугольником в атласе вместо поля расстояния.
+ *
  * Цвета сюда приходят готовыми: палитра живёт в одном месте (PRODUCTION §8),
  * и знать о ней рендеру незачем.
  */
@@ -31,10 +38,12 @@ export const enum Shape {
   Ring = 4,
   /** Капсула вдоль X: снаряды, коридоры телеграфов, лучи. */
   Capsule = 5,
+  /** Буква из атласа глифов: форму задаёт текстура, а не поле расстояния. */
+  Glyph = 6,
 }
 
 /** Сколько чисел занимает один инстанс. */
-const STRIDE = 16;
+const STRIDE = 20;
 /** Потолок фигур в кадре: 2000 частиц, 200 болванок, HUD и запас. */
 const CAPACITY = 8192;
 
@@ -46,6 +55,7 @@ layout(location = 1) in vec4 iPosSize;   // xy — центр, zw — полур
 layout(location = 2) in vec4 iRotShape;  // x — поворот, y — фигура, z — обводка
 layout(location = 3) in vec4 iFill;
 layout(location = 4) in vec4 iStroke;
+layout(location = 5) in vec4 iUv;        // xy — левый верх в атласе, zw — правый низ
 
 /** xy — масштаб единиц арены в клип-пространство, zw — сдвиг. */
 uniform vec4 uView;
@@ -56,6 +66,7 @@ flat out float vShape;
 flat out float vStroke;
 out vec4 vFill;
 out vec4 vStrokeColor;
+flat out vec4 vUv;
 
 void main() {
   vec2 half_ = iPosSize.zw;
@@ -77,6 +88,7 @@ void main() {
   vStroke = stroke;
   vFill = iFill;
   vStrokeColor = iStroke;
+  vUv = iUv;
 
   gl_Position = vec4(world * uView.xy + uView.zw, 0.0, 1.0);
 }
@@ -91,6 +103,9 @@ flat in float vShape;
 flat in float vStroke;
 in vec4 vFill;
 in vec4 vStrokeColor;
+flat in vec4 vUv;
+
+uniform sampler2D uAtlas;
 
 out vec4 outColor;
 
@@ -130,6 +145,25 @@ void main() {
   vec2 p = vLocal;
   vec2 h = max(vHalf, vec2(0.001));
   float d;
+
+  /*
+   * Выборка из атласа считается ВСЕГДА, а не внутри ветки глифа.
+   *
+   * Выборка в неоднородном ветвлении берёт производные от соседних
+   * фрагментов, часть которых в эту ветку не зашла, — то есть уровень
+   * детализации там не определён. Стоит это одной выборки на фигуру;
+   * альтернатива — буквы, мылящиеся на одних драйверах и чёткие на других.
+   */
+  vec2 uvT = clamp(p / (2.0 * h) + 0.5, 0.0, 1.0);
+  float glyph = texture(uAtlas, mix(vUv.xy, vUv.zw, uvT)).a;
+
+  if (vShape > 5.5) {
+    // Буква: форму несёт альфа атласа, сглаживание — билинейная фильтрация.
+    // Цвет приходит предумноженным, как и у всех остальных фигур.
+    outColor = vFill * glyph;
+    if (outColor.a < 0.002) discard;
+    return;
+  }
 
   if (vShape < 0.5 || (vShape > 3.5 && vShape < 4.5)) {
     // Круг и кольцо: неравные полуразмеры дают squash-and-stretch —
@@ -178,6 +212,14 @@ export class ShapeBatch {
   private readonly vao: WebGLVertexArrayObject;
   private readonly instanceBuffer: WebGLBuffer;
   private readonly viewLocation: WebGLUniformLocation;
+  /**
+   * Атлас глифов. До его готовности — прозрачный пиксель.
+   *
+   * Заглушка нужна не для красоты: шрифт грузится асинхронно, а первый кадр
+   * рисуется раньше. Непривязанная текстура читается как чёрный непрозрачный
+   * пиксель, то есть каждый глиф в этом кадре был бы чёрным квадратом.
+   */
+  private atlas: WebGLTexture;
   /** Инстансы кадра. Предаллоцирован: рендер тоже не аллоцирует в кадре. */
   private readonly data = new Float32Array(CAPACITY * STRIDE);
   private count = 0;
@@ -205,6 +247,24 @@ export class ShapeBatch {
     if (!view) throw new Error('нет uniform uView');
     this.viewLocation = view;
 
+    const stub = gl.createTexture();
+    if (!stub) throw new Error('не удалось создать текстуру атласа');
+    gl.bindTexture(gl.TEXTURE_2D, stub);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      1,
+      1,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      new Uint8Array([0, 0, 0, 0]),
+    );
+    this.atlas = stub;
+    gl.useProgram(program);
+    gl.uniform1i(gl.getUniformLocation(program, 'uAtlas'), 0);
+
     const vao = gl.createVertexArray();
     const corners = gl.createBuffer();
     const instances = gl.createBuffer();
@@ -227,7 +287,7 @@ export class ShapeBatch {
     gl.bindBuffer(gl.ARRAY_BUFFER, instances);
     gl.bufferData(gl.ARRAY_BUFFER, this.data.byteLength, gl.DYNAMIC_DRAW);
     const bytes = STRIDE * 4;
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 5; i++) {
       const loc = i + 1;
       gl.enableVertexAttribArray(loc);
       gl.vertexAttribPointer(loc, 4, gl.FLOAT, false, bytes, i * 16);
@@ -247,8 +307,22 @@ export class ShapeBatch {
   }
 
   /**
+   * Подставить атлас глифов. Владелец текстуры — тот, кто её собрал.
+   *
+   * Атлас один на кадр и на обе гарнитуры: две текстуры означали бы два вызова
+   * отрисовки, то есть ровно то, ради отказа от чего буква и стала фигурой.
+   */
+  setAtlas(texture: WebGLTexture): void {
+    this.atlas = texture;
+  }
+
+  /**
    * Добавить фигуру. Цвета — предумноженные на альфу, как того требует режим
    * смешивания: иначе полупрозрачные частицы дают тёмную кайму.
+   *
+   * `u0..v1` — прямоугольник в атласе, и он нужен только `Shape.Glyph`.
+   * Умолчания оставляют его нулевым: остальные полторы сотни вызовов про атлас
+   * не знают и знать не должны.
    */
   push(
     shape: Shape,
@@ -266,6 +340,10 @@ export class ShapeBatch {
     strokeG: number,
     strokeB: number,
     strokeA: number,
+    u0 = 0,
+    v0 = 0,
+    u1 = 0,
+    v1 = 0,
   ): void {
     if (this.count >= CAPACITY) {
       this.dropped++;
@@ -289,6 +367,10 @@ export class ShapeBatch {
     d[o + 13] = strokeG * strokeA;
     d[o + 14] = strokeB * strokeA;
     d[o + 15] = strokeA;
+    d[o + 16] = u0;
+    d[o + 17] = v0;
+    d[o + 18] = u1;
+    d[o + 19] = v1;
     this.count++;
   }
 
@@ -297,6 +379,8 @@ export class ShapeBatch {
     if (this.count === 0) return;
     const { gl } = this;
     gl.useProgram(this.program);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.atlas);
     gl.bindVertexArray(this.vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.data, 0, this.count * STRIDE);

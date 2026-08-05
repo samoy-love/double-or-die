@@ -1,6 +1,57 @@
 /* Интерфейс игры рисуется внутри canvas — здесь только страница вокруг него
    и отладочные элементы, которых в продакшене нет. */
 
+/*
+ * Гарнитуры игры: акцидентная Poiret One и интерфейсная Inter, обе OFL
+ * (PRODUCTION §2). Файлы лежат локально в assets/fonts — CDN означал бы, что
+ * первый кадр зависит от чужого домена, а офлайн-запуск из service worker
+ * остаётся без букв.
+ *
+ * Объявлены здесь, хотя ни одна надпись в DOM ими не набирается: браузер
+ * грузит шрифт по требованию, а требование создаёт `document.fonts.load` в
+ * gl/text.ts перед растрированием атласа.
+ *
+ * Подмножества по языку, а не один файл на всё (PRODUCTION §8): `unicode-range`
+ * даёт браузеру пропустить кириллицу в англоязычной сборке и наоборот. На двух
+ * языках это десятки килобайт, на семи с иероглифами — мегабайты.
+ */
+@font-face {
+  font-family: 'Poiret One';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../../../assets/fonts/poiret-one-latin.woff2') format('woff2');
+  unicode-range: u+0000-00ff, u+0131, u+0152-0153, u+02bb-02bc, u+2000-206f, u+2122;
+}
+
+@font-face {
+  font-family: 'Poiret One';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../../../assets/fonts/poiret-one-cyrillic.woff2') format('woff2');
+  unicode-range: u+0301, u+0400-045f, u+0490-0491, u+04b0-04b1, u+2116;
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  /* Файл вариативный: одно начертание закрывает весь диапазон весов. */
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('../../../assets/fonts/inter-latin.woff2') format('woff2');
+  unicode-range: u+0000-00ff, u+0131, u+0152-0153, u+02bb-02bc, u+2000-206f, u+2122;
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('../../../assets/fonts/inter-cyrillic.woff2') format('woff2');
+  unicode-range: u+0301, u+0400-045f, u+0490-0491, u+04b0-04b1, u+2116;
+}
+
 * {
   margin: 0;
   padding: 0;
