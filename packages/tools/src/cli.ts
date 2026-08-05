@@ -536,6 +536,46 @@ function doRecordGolden(a: Args, dir: string): never {
     );
     process.exit(2);
   }
+  /*
+   * Пересъёмка обязана накрыть весь корпус, а не часть его.
+   *
+   * Флаги `--runs`, `--bot` и `--ticks` имеют умолчания (1, `idle`, 3600), и
+   * забытый `--runs 20 --bot random` переписывает ОДИН эталон холостым ботом
+   * вместо двадцати боевых. Девятнадцать оставшихся ловит сверка версии
+   * конфига — они падают с внятным текстом, — а вот подменённый двадцатый не
+   * ловит никто: файл на месте, версия верная, тест зелёный, и вместо забега
+   * в нём стоящий на месте игрок. Ровно то, от чего защищает `--rebaseline`,
+   * только заходящее с другой стороны.
+   *
+   * Поэтому лежащий рядом корпус — это описание того, что снимать: имена
+   * задают набор, а `bot` первого эталона задаёт бота. Пересъёмка меньшего
+   * набора или другим ботом — отдельное решение, и принимается оно удалением
+   * старых эталонов руками, а не забытым флагом.
+   */
+  const existing = readdirSync(dir).filter((f) => f.endsWith('.json'));
+  if (existing.length > 0) {
+    const names = new Set<string>();
+    for (let i = 0; i < a.runs; i++) names.add(`seed-${a.seed + i}-p${(i % 4) + 1}`);
+    const orphans = existing.map((f) => f.slice(0, -5)).filter((n) => !names.has(n));
+    if (orphans.length > 0) {
+      console.error(
+        `отказ: пересъёмка накрывает ${names.size} эталонов, а в ${dir} их ${existing.length}.\n` +
+          `Осталось бы нетронутыми: ${orphans.slice(0, 5).join(', ')}${orphans.length > 5 ? ` и ещё ${orphans.length - 5}` : ''}.\n` +
+          `Нужен весь корпус — добавьте --runs ${existing.length} --seed 1; нужен другой — удалите старый руками.`,
+      );
+      process.exit(2);
+    }
+
+    const sample = JSON.parse(readFileSync(join(dir, existing[0]), 'utf8')) as { bot?: string };
+    if (sample.bot !== undefined && sample.bot !== a.bot) {
+      console.error(
+        `отказ: корпус записан ботом «${sample.bot}», а снимается ботом «${a.bot}».\n` +
+          `Эталон, переснятый другим ботом, проверяет уже другой забег, продолжая называться тем же именем.`,
+      );
+      process.exit(2);
+    }
+  }
+
   const written: string[] = [];
   for (let i = 0; i < a.runs; i++) {
     const seed = a.seed + i;

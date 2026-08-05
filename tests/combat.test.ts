@@ -19,10 +19,13 @@ import {
   Meta,
   PISTOL,
   PLAYER,
+  RunPhase,
+  createSnapshot,
   createState,
   dropChip,
   fromInt,
   makeFrame,
+  saveSnapshot,
   setSpawning,
   spawnBullet,
   spawnEnemy,
@@ -220,8 +223,17 @@ describe('фишки', () => {
   });
 });
 
-describe('гибель и перезапуск', () => {
-  it('после гибели забег начинается заново, а не зависает', () => {
+describe('гибель и конец забега', () => {
+  /**
+   * Смерть кончает забег, а не начинает его заново.
+   *
+   * До 0.4.0 здесь проверялось обратное — что через три секунды игрок снова
+   * жив, — и для версии без структуры это было верно: играть было не во что,
+   * кроме бесконечной череды комнат. Забег, начинающийся сам, не имеет ни
+   * итогов, ни ключей, ни причины вернуться, а ворота версии меряют именно
+   * добровольность второго забега.
+   */
+  it('после гибели забег кончается итогами', () => {
     const s = arena();
     for (let n = 0; n < 3; n++) {
       incoming(s);
@@ -229,12 +241,46 @@ describe('гибель и перезапуск', () => {
     }
     expect(s.pFlags[0] & EntityFlag.Alive).toBeFalsy();
     expect(s.meta[Meta.RestartAt]).toBeGreaterThan(s.tick);
+    // Пауза перед итогами осталась: мгновенный переход читается как сбой.
+    expect(s.meta[Meta.Phase]).toBe(RunPhase.Fight);
 
     run(s, 200);
-    expect(s.pFlags[0] & EntityFlag.Alive).toBeTruthy();
-    expect(s.pHearts[0]).toBe(PLAYER.startHearts);
+    expect(s.meta[Meta.Phase]).toBe(RunPhase.Summary);
+    expect(s.meta[Meta.Victory]).toBe(0);
     expect(s.meta[Meta.Deaths]).toBe(1);
-    expect(s.meta[Meta.Room]).toBe(1);
+    // Любой завершённый забег даёт минимум один ключ (ECONOMY §12).
+    expect(s.meta[Meta.Keys]).toBeGreaterThanOrEqual(1);
+  });
+
+  it('после итогов мир стоит, а тик идёт', () => {
+    const s = arena();
+    for (let n = 0; n < 3; n++) {
+      incoming(s);
+      run(s, PLAYER.hurtInvulTicks + 30);
+    }
+    run(s, 200);
+    expect(s.meta[Meta.Phase]).toBe(RunPhase.Summary);
+
+    /*
+     * Мир после конца обязан быть неподвижным: враги не доигрывают бой с
+     * трупом, снаряды не летят, фишки не тлеют.
+     *
+     * Сравниваются буферы, а не `hashState`: в хеш входит номер тика, а тик
+     * идёт и на экране итогов — время там тоже время. Хеш разошёлся бы
+     * заведомо, ничего не сказав о самом мире.
+     */
+    const snap = createSnapshot(s);
+    saveSnapshot(s, snap);
+    const tick = s.tick;
+
+    run(s, 120);
+
+    expect(s.tick).toBe(tick + 120);
+    const after = createSnapshot(s);
+    saveSnapshot(s, after);
+    for (let i = 0; i < snap.data.length; i++) {
+      expect(Array.from(after.data[i])).toEqual(Array.from(snap.data[i]));
+    }
   });
 });
 

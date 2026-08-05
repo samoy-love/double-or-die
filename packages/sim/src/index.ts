@@ -23,6 +23,7 @@ export * from './combat';
 export * from './nav';
 export * from './enemies';
 export * from './bets';
+export * from './run';
 export * from './sim';
 export * from './replay';
 export * from './invariants';

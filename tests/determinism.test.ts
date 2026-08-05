@@ -170,3 +170,42 @@ describe('реплеи', () => {
     expect(Array.from(restored.frames)).toEqual(Array.from(original.frames));
   });
 });
+
+describe('полнота списка буферов', () => {
+  /*
+   * Буфер, забытый в `collectBuffers`, — это десинк, который невозможно найти
+   * по симптому.
+   *
+   * Он не входит ни в снимок, ни в хеш: состояние восстанавливается частично,
+   * сверка пиров молчит, а расхождение проявляется через полчаса игры и ни на
+   * что не похоже. Проверка обходится в один проход по полям и ловит ошибку в
+   * тот же коммит, в котором её сделали.
+   */
+  it('в views попадает каждый типизированный массив состояния', () => {
+    const s = createState(1);
+    const listed = new Set<object>(s.views);
+
+    const missing: string[] = [];
+    for (const [name, value] of Object.entries(s)) {
+      if (name === 'views') continue;
+      if (!ArrayBuffer.isView(value)) continue;
+      if (!listed.has(value)) missing.push(name);
+    }
+
+    expect(missing).toEqual([]);
+  });
+
+  it('в views не попадает ничего лишнего', () => {
+    const s = createState(1);
+    const own = new Set<object>(
+      Object.entries(s)
+        .filter(([name, v]) => name !== 'views' && ArrayBuffer.isView(v))
+        .map(([, v]) => v as object),
+    );
+
+    // Дубль в списке удвоил бы вклад буфера в хеш и удвоил бы работу снимка,
+    // не сломав при этом ни одного теста — кроме этого.
+    expect(s.views.length).toBe(own.size);
+    for (const buf of s.views) expect(own.has(buf)).toBe(true);
+  });
+});
