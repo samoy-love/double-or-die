@@ -127,7 +127,7 @@ export class Overlay {
    */
   showReport(file: string): void {
     this.toast.hidden = false;
-    this.toast.textContent = `Баг-репорт сохранён: ${file}`;
+    this.toast.textContent = t('overlay.halt.report', { file });
     clearTimeout(this.toastTimer);
     this.toastTimer = window.setTimeout(() => (this.toast.hidden = true), 6000);
   }

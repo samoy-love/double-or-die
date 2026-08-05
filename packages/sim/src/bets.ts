@@ -12,7 +12,16 @@
  * кредит не принимает, и поэтому провал пари не создаёт долга (GDD §11).
  */
 
-import { RED_ZONE_RADIUS, clampX, clampY, isFreeSpot, maxX, maxY, redZoneX, redZoneY } from './arena';
+import {
+  RED_ZONE_RADIUS,
+  clampX,
+  clampY,
+  isFreeSpot,
+  maxX,
+  maxY,
+  redZoneX,
+  redZoneY,
+} from './arena';
 import { BET_COUNT, BETS, BetId, BetProgress, type BetSpec } from './bets.generated';
 import { APPETITE, ARENA_PAD, CARD, MAX_ACTIVE_BETS, PLAYER } from './config';
 import { add, div, FX_ONE, type Fx, mul, sub } from './fixed';

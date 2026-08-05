@@ -933,5 +933,3 @@ export const START_CHIPS = 30;
  * имеет права стоить ему пятидесяти фишек за карту.
  */
 export const APPETITE_DEFAULT = 0;
-
-

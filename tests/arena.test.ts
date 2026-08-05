@@ -121,7 +121,8 @@ describe('гарантии на всех сорока восьми раскла�
         const r = toFloat(RED_ZONE_RADIUS);
         for (const [x, y] of startPoints(s)) {
           const d = Math.hypot(toFloat(x) - rx, toFloat(y) - ry);
-          if (d <= r) bad.push(`${name}, ${players} игр.: старт внутри зоны (${d.toFixed(0)} ≤ ${r})`);
+          if (d <= r)
+            bad.push(`${name}, ${players} игр.: старт внутри зоны (${d.toFixed(0)} ≤ ${r})`);
         }
       }
     }
@@ -228,7 +229,8 @@ describe('гарантии на всех сорока восьми раскла�
         dealCards(s);
         let n = 0;
         for (let i = 0; i < MAX_CARDS; i++) if (s.kActive[i]) n++;
-        if (n < players + 2) bad.push(`${name}, ${players} игр.: карт ${n}, ожидалось ${players + 2}`);
+        if (n < players + 2)
+          bad.push(`${name}, ${players} игр.: карт ${n}, ожидалось ${players + 2}`);
       }
     }
     expect(bad).toEqual([]);
@@ -250,8 +252,7 @@ describe('отражения', () => {
         });
         // Сравниваем не сами колонны шаблона (они одни и те же), а их
         // положение на арене — оно и есть результат отражения.
-        const moved =
-          redZoneX(base) !== redZoneX(flipped) || redZoneY(base) !== redZoneY(flipped);
+        const moved = redZoneX(base) !== redZoneX(flipped) || redZoneY(base) !== redZoneY(flipped);
         if (!same || moved) differing++;
       }
     }
