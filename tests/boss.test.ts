@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BALL,
   BOSS,
+  Btn,
   FLOORS_PER_RUN,
   MAX_BALLS,
   Meta,
@@ -66,6 +67,12 @@ function bringTo(s: SimState, pct: number): void {
   const want = Math.trunc((s.meta[Meta.BossMaxHP] * pct) / 100);
   damageBoss(s, s.meta[Meta.BossHP] - want);
   tick(s);
+}
+
+/** Пройти экран платы: заплатить, если хватает, иначе уйти в долг. */
+function payUp(s: SimState): void {
+  step(s, [{ ...makeFrame(), buttons: Btn.Confirm }]);
+  step(s, [makeFrame()]);
 }
 
 describe('запас прочности', () => {
@@ -280,11 +287,17 @@ describe('победа', () => {
     expect(s.pChips[0]).toBe(chips + BOSS.rewardPerFloor * 2);
   });
 
-  it('после босса идёт следующий этаж', () => {
+  /**
+   * Между смертью босса и следующим этажом встал экран платы: заведение берёт
+   * своё за пройденный этаж. Экран ждёт игрока, поэтому его надо пройти.
+   */
+  it('после босса идёт плата, а за ней следующий этаж', () => {
     const s = atBoss(1, 1);
     setSpawning(s, true);
     damageBoss(s, s.meta[Meta.BossHP]);
     tick(s, 3);
+    expect(s.meta[Meta.Phase]).toBe(RunPhase.HouseCut);
+    payUp(s);
 
     expect(s.meta[Meta.Floor]).toBe(2);
     expect(s.meta[Meta.Room]).toBe(1);
@@ -296,6 +309,9 @@ describe('победа', () => {
     setSpawning(s, true);
     damageBoss(s, s.meta[Meta.BossHP]);
     tick(s, 3);
+    // Рассчитаться с заведением обязан и победитель.
+    expect(s.meta[Meta.Phase]).toBe(RunPhase.HouseCut);
+    payUp(s);
 
     expect(s.meta[Meta.Phase]).toBe(RunPhase.Summary);
     expect(s.meta[Meta.Victory]).toBe(1);
