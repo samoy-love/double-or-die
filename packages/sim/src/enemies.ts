@@ -47,6 +47,7 @@ import {
 import { flowTo, flowX, flowY, updateNav } from './nav';
 import { offerDoors } from './doors';
 import { enterHouseCut, expireCurse } from './floor';
+import { closeShop, openShop } from './upgrades';
 import { endRun } from './run';
 import { damagePlayer, explode, fireEnemy, killEnemy, statsOf } from './combat';
 import { add, type Fx, fromInt, mul, sub } from './fixed';
@@ -523,6 +524,36 @@ function advanceRoom(s: SimState): void {
   // комнате идут наравне с ним, а конец ей ставит его смерть.
   if (s.meta[Meta.Phase] === RunPhase.Boss && s.meta[Meta.BossMaxHP] !== 0) return;
 
+  /*
+   * Дверь «Лавка» обещала бой И магазин после него (GDD §5) — вот он.
+   *
+   * Второй раз сюда с тем же типом комнаты не попасть: из лавки выходят через
+   * `leaveShop`, а он идёт в `nextRoom` мимо этой развилки, и следующий вход
+   * случится уже после `startRoom`, который тип комнаты переназначит.
+   */
+  if (s.meta[Meta.RoomType] === DoorType.Shop) {
+    openShop(s);
+    return;
+  }
+
+  nextRoom(s);
+}
+
+/**
+ * Лавка закрылась — забег идёт дальше ровно туда, куда шёл бы без неё.
+ *
+ * Отдельно от `advanceRoom` по той же причине, что и `leaveFloor`: экран ждёт
+ * игрока, и переход случается в тот тик, когда он ушёл, а не когда кончилась
+ * комната.
+ */
+export function leaveShop(s: SimState): void {
+  closeShop(s);
+  s.meta[Meta.Phase] = RunPhase.Fight;
+  nextRoom(s);
+}
+
+/** Что идёт после комнаты: следующая дверь, босс или расчёт с заведением. */
+function nextRoom(s: SimState): void {
   if (s.meta[Meta.Room] < ROOMS_PER_FLOOR) {
     /*
      * Между комнатами встаёт экран двери, а не следующая комната сразу.

@@ -1,0 +1,23 @@
+{
+  "name": "Не хватило — не продано: кошелёк не уходит в минус",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "chips": { "amount": 5 } },
+    { "shop": true },
+    { "input": { "buttons": ["navright"] } },
+    { "tick": 1 },
+    { "input": { "buttons": ["confirm"] } },
+    { "tick": 1 },
+    { "clearInput": {} },
+    { "tick": 1 },
+    { "input": { "buttons": ["confirm"] } },
+    { "tick": 1 },
+    {
+      "expect": {
+        "shop": { "owned": { "min": 0, "max": 0 }, "offers": { "min": 3, "max": 3 } },
+        "chips": { "min": 5, "max": 5 }
+      }
+    }
+  ]
+}

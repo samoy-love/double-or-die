@@ -1,0 +1,10 @@
+{
+  "name": "«+1 сердце» работает в той же комнате, в которой куплено",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "expect": { "hearts": { "min": 3, "max": 3 } } },
+    { "upgrade": { "id": "extra_heart" } },
+    { "expect": { "hearts": { "min": 4, "max": 4 }, "shop": { "owned": { "min": 1, "max": 1 } } } }
+  ]
+}

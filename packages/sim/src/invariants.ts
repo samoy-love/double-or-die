@@ -12,6 +12,7 @@
 
 import { ACE } from './bets';
 import { BET_COUNT, InputScheme } from './bets.generated';
+import { UPGRADE_COUNT } from './upgrades.generated';
 import {
   ACE_BET,
   APPETITE,
@@ -39,6 +40,7 @@ import {
   Meta,
   RunPhase,
   SECTOR_COUNT,
+  SHOP_SLOTS,
   type SimState,
 } from './state';
 
@@ -217,12 +219,37 @@ function checkRun(s: SimState): void {
   }
   if (fallen > 1) fail(`провалено секторов ${fallen}, а их бывает один`, s.tick);
 
-  // Апгрейды: индекс со сдвигом на единицу, ноль — пустой слот.
+  /*
+   * Апгрейды: индекс со сдвигом на единицу, ноль — пустой слот.
+   *
+   * Повтор проверяется здесь, а не только в лавке: второй экземпляр удвоил бы
+   * эффект и занял бы слот, а увидеть это можно было бы только в деньгах и во
+   * времени убийства — то есть нигде.
+   */
   for (let p = 0; p < s.playerCount; p++) {
     for (let i = 0; i < MAX_UPGRADE_SLOTS; i++) {
       const u = s.pUpgrades[p * MAX_UPGRADE_SLOTS + i];
-      if (u < 0) fail(`у игрока ${p} в слоте ${i} апгрейд ${u}`, s.tick);
+      if (u < 0 || u > UPGRADE_COUNT) fail(`у игрока ${p} в слоте ${i} апгрейд ${u}`, s.tick);
+      if (u === 0) continue;
+      for (let j = 0; j < i; j++) {
+        if (s.pUpgrades[p * MAX_UPGRADE_SLOTS + j] === u) {
+          fail(`у игрока ${p} апгрейд ${u} куплен дважды`, s.tick);
+        }
+      }
     }
+  }
+
+  /*
+   * Прилавок: товар из каталога, цена неотрицательная, пустой слот без цены.
+   *
+   * Цена без товара — не мелочь: интерфейс подписывает ею кнопку, и игрок
+   * увидел бы ценник на пустом месте, а покупка сняла бы деньги ни за что.
+   */
+  for (let i = 0; i < SHOP_SLOTS; i++) {
+    const item = s.shopItem[i];
+    if (item < 0 || item > UPGRADE_COUNT) fail(`в лавке слот ${i} с товаром ${item}`, s.tick);
+    if (s.shopPrice[i] < 0) fail(`в лавке слот ${i} с ценой ${s.shopPrice[i]}`, s.tick);
+    if (item === 0 && s.shopPrice[i] !== 0) fail(`в лавке слот ${i} с ценой без товара`, s.tick);
   }
 
   if (s.meta[Meta.Earned] < 0) fail('заработано за забег ушло в минус', s.tick);

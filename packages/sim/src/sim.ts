@@ -33,7 +33,8 @@ import { stepBoss } from './boss';
 import { fire, stepBullets, stepChips } from './combat';
 import { stepDoors } from './doors';
 import { stepHouseCut } from './floor';
-import { clearArena, leaveFloor, startRoom, stepEnemies } from './enemies';
+import { dashCooldownOf, moveSpeedOf, stepShop } from './upgrades';
+import { clearArena, leaveFloor, leaveShop, startRoom, stepEnemies } from './enemies';
 import { add, FX_ONE, mul, sub } from './fixed';
 import { endRun } from './run';
 import { normalize, normX, normY, within } from './trig';
@@ -171,6 +172,26 @@ export function step(s: SimState, inputs: readonly InputFrame[]): void {
       // тика — иначе пауза перед первой волной короче на кадр.
       s.tick++;
       startRoom(s, s.meta[Meta.Room] + 1);
+      s.tick--;
+    }
+    s.tick++;
+    return;
+  }
+
+  /*
+   * Лавка — тоже не бой, и стоит она ПОСЛЕ него: дверь обещала магазин после
+   * комнаты, а не вместо неё (GDD §5).
+   *
+   * Мир на ней стоит по той же причине, что на двери: игрок сравнивает три
+   * ценника с тем, что через комнату-другую попросит заведение, и решение
+   * «апгрейд или плата» — единственное, ради чего лавка вообще стоит на пути.
+   * Принимать его под тающие карты и набегающую волну означало бы не принимать
+   * его вовсе.
+   */
+  if (s.meta[Meta.Phase] === RunPhase.Reward) {
+    if (stepShop(s, inputs)) {
+      s.tick++;
+      leaveShop(s);
       s.tick--;
     }
     s.tick++;
@@ -408,7 +429,9 @@ function tryDash(s: SimState, i: number, inp: InputFrame): boolean {
   s.pVX[i] = mul(nx, perTick);
   s.pVY[i] = mul(ny, perTick);
   s.pDashUntil[i] = s.tick + PLAYER.dashTicks;
-  s.pDashReady[i] = s.tick + PLAYER.dashCooldownTicks;
+  // Откат спрашивается у апгрейдов: «Кулдаун рывка −30%» — единственное, что
+  // его двигает, и без покупки он равен базовому (ECONOMY §5).
+  s.pDashReady[i] = s.tick + dashCooldownOf(s, i);
   // «Без рывка» дорого стоит именно потому, что рывок — главный инструмент
   // выживания: отказ от него меняет то, КАК играешь (GDD §9).
   failBetId(s, i, BetId.NoDash);
@@ -426,17 +449,21 @@ function applyMovement(s: SimState, i: number, inp: InputFrame): void {
     s.pVX[i] = add(s.pVX[i], mul(nx, PLAYER.accel));
     s.pVY[i] = add(s.pVY[i], mul(ny, PLAYER.accel));
 
-    // Ограничение по модулю: без него диагональ быстрее прямой.
+    // Ограничение по модулю: без него диагональ быстрее прямой. Потолок
+    // спрашивается у апгрейдов — «Скорость +15%» двигает именно его, а разгон
+    // и трение оставляет как есть: меняется дистанция за секунду, а не
+    // ощущение управления.
     const vx = s.pVX[i];
     const vy = s.pVY[i];
     normalize(vx, vy);
     const cx = normX;
     const cy = normY;
+    const speed = moveSpeedOf(s, i);
     const speed2 = mul(vx, vx) + mul(vy, vy);
-    const cap2 = mul(PLAYER.speed, PLAYER.speed);
+    const cap2 = mul(speed, speed);
     if (speed2 > cap2) {
-      s.pVX[i] = mul(cx, PLAYER.speed);
-      s.pVY[i] = mul(cy, PLAYER.speed);
+      s.pVX[i] = mul(cx, speed);
+      s.pVY[i] = mul(cy, speed);
     }
   } else {
     s.pVX[i] = sub(s.pVX[i], mul(s.pVX[i], PLAYER.friction));

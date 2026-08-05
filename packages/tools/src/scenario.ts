@@ -53,6 +53,13 @@ import {
   ROOMS_PER_FLOOR,
   RunPhase,
   SECTOR_COUNT,
+  SHOP_SLOTS,
+  UPGRADES,
+  FLOORS_PER_RUN,
+  grantUpgrade,
+  hasUpgrade,
+  openShop,
+  upgradeCount,
   bossRoomBudget,
   bossStunned,
   clearArena,
@@ -103,7 +110,9 @@ const BUTTONS: Record<string, Btn> = {
   decline: Btn.Decline,
   revive: Btn.Revive,
   ping: Btn.Ping,
-  /** Экранные: ими принимают и отклоняют Ставку Туза (GDD §12А.1). */
+  /** Экранные: ими водят фокус, принимают и отказываются на двери и в лавке. */
+  navleft: Btn.NavLeft,
+  navright: Btn.NavRight,
   confirm: Btn.Confirm,
   cancel: Btn.Cancel,
 };
@@ -247,6 +256,29 @@ export interface AceExpectation {
   paid?: Range;
 }
 
+/**
+ * Лавка: что лежит на прилавке, почём и что из этого куплено.
+ *
+ * Цена проверяется числом, а не формулой: формула живёт в одном месте
+ * (`priceOf`), и сценарий, повторяющий её, зеленел бы вместе с ошибкой в ней.
+ * Здесь записан ОТВЕТ — «на третьем этаже ценник от 67 до 135», — и правка
+ * формулы обязана этот ответ уронить.
+ */
+export interface ShopExpectation {
+  /** Сколько товаров лежит на прилавке. */
+  offers?: Range;
+  /** Сколько апгрейдов уже у игрока. */
+  owned?: Range;
+  /** Идентификатор апгрейда, о котором идёт речь. */
+  id?: string;
+  /** Лежит ли названный на прилавке. */
+  onSale?: boolean;
+  /** Есть ли названный у игрока. */
+  bought?: boolean;
+  /** Цена: названного, а без `id` — каждого выложенного. */
+  price?: Range;
+}
+
 export interface Expectation {
   player?: number;
   /** Сколько врагов на арене. */
@@ -272,6 +304,7 @@ export interface Expectation {
   bets?: BetsExpectation;
   boss?: BossExpectation;
   ace?: AceExpectation;
+  shop?: ShopExpectation;
 }
 
 export type Step =
@@ -311,6 +344,23 @@ export type Step =
   | { cashOut: { id: string; player?: number } }
   /** Разложить карты так же, как это делает начало комнаты. */
   | { deal: true }
+  /**
+   * Открыть лавку: то же, что делает конец боя за дверью «Лавка».
+   *
+   * Не обход правил забега, а другой предмет проверки: то, что лавка стоит
+   * именно за своей дверью, проверяется тестом на раскладку комнат, а торговля
+   * — этим шагом, без похода через восемь комнат до неё.
+   */
+  | { shop: true }
+  /**
+   * Выдать апгрейд напрямую, не беря денег.
+   *
+   * Эффект в бою и покупка — разные предметы: проверять первый через второй
+   * значит писать сценарий про кошелёк там, где спрашивают про радиус подбора.
+   */
+  | { upgrade: { id: string; player?: number } }
+  /** Перевести забег на названный этаж: цены и плата считаются от него. */
+  | { floor: number }
   /**
    * Туз выкладывает свою карту.
    *
@@ -463,6 +513,19 @@ const ACE_FIELDS: Record<keyof AceExpectation, Node> = {
   paid: RANGE,
 };
 
+/** Апгрейды называются идентификаторами каталога: опечатка обязана валить разбор. */
+const UPGRADE_IDS: readonly string[] = UPGRADES.map((u) => u.id);
+const UPGRADE_ID: Node = { t: 'enum', values: UPGRADE_IDS };
+
+const SHOP_FIELDS: Record<keyof ShopExpectation, Node> = {
+  offers: RANGE,
+  owned: RANGE,
+  id: UPGRADE_ID,
+  onSale: bool(),
+  bought: bool(),
+  price: RANGE,
+};
+
 const EXPECT_FIELDS: Record<keyof Expectation, Node> = {
   player: PLAYER_IDX(),
   enemies: RANGE,
@@ -482,6 +545,7 @@ const EXPECT_FIELDS: Record<keyof Expectation, Node> = {
   bets: obj(BETS_FIELDS),
   boss: obj(BOSS_FIELDS),
   ace: obj(ACE_FIELDS),
+  shop: obj(SHOP_FIELDS),
 };
 
 /** Ключи всех вариантов шага: по одному на вариант объединения. */
@@ -511,6 +575,9 @@ const STEP_SCHEMA: Record<StepKey, Node> = {
   explode: obj({ x: num(), y: num() }, ['x', 'y']),
   cashOut: obj({ id: BET_ID, player: PLAYER_IDX() }, ['id']),
   deal: TRUE,
+  shop: TRUE,
+  upgrade: obj({ id: UPGRADE_ID, player: PLAYER_IDX() }, ['id']),
+  floor: int(1, FLOORS_PER_RUN),
   aceBet: obj({ id: BET_ID }, ['id']),
   settle: TRUE,
   clear: TRUE,
@@ -926,6 +993,65 @@ function checkAce(s: SimState, e: AceExpectation, player: number): string[] {
   return out;
 }
 
+/** Номер апгрейда по идентификатору: сценарий называет товар, а не индекс слота. */
+function upgradeIndex(id: string): number {
+  const n = UPGRADES.findIndex((u) => u.id === id);
+  if (n < 0) throw new Error(`неизвестный апгрейд «${id}»`);
+  return n;
+}
+
+/**
+ * Лавка.
+ *
+ * Цена без `id` проверяется у КАЖДОГО выложенного товара, а не у первого:
+ * ассортимент случаен, и проверка одного слота зеленела бы ровно в той мере, в
+ * какой повезло с броском.
+ */
+function checkShop(s: SimState, e: ShopExpectation, player: number): string[] {
+  const out: string[] = [];
+
+  if (e.offers) {
+    let n = 0;
+    for (let i = 0; i < SHOP_SLOTS; i++) if (s.shopItem[i] !== 0) n++;
+    push(out, checkRange('товаров на прилавке', n, e.offers));
+  }
+  if (e.owned)
+    push(out, checkRange(`апгрейдов у игрока ${player}`, upgradeCount(s, player), e.owned));
+
+  if (e.id === undefined) {
+    if (e.price) {
+      for (let i = 0; i < SHOP_SLOTS; i++) {
+        if (s.shopItem[i] === 0) continue;
+        const name = UPGRADES[s.shopItem[i] - 1].id;
+        push(out, checkRange(`цена «${name}»`, s.shopPrice[i], e.price));
+      }
+    }
+    if (e.onSale !== undefined || e.bought !== undefined) {
+      out.push('спрошено про товар без «id»: непонятно, о каком речь');
+    }
+    return out;
+  }
+
+  const upgrade = upgradeIndex(e.id);
+  let at = -1;
+  for (let i = 0; i < SHOP_SLOTS; i++) if (s.shopItem[i] === upgrade + 1) at = i;
+
+  if (e.onSale !== undefined && at >= 0 !== e.onSale) {
+    out.push(`«${e.id}» на прилавке = ${at >= 0}, ожидалось ${e.onSale}`);
+  }
+  if (e.bought !== undefined) {
+    const owned = hasUpgrade(s, player, upgrade);
+    if (owned !== e.bought) {
+      out.push(`«${e.id}» у игрока ${player} = ${owned}, ожидалось ${e.bought}`);
+    }
+  }
+  if (e.price) {
+    if (at < 0) out.push(`цена «${e.id}» спрошена, а его на прилавке нет`);
+    else push(out, checkRange(`цена «${e.id}»`, s.shopPrice[at], e.price));
+  }
+  return out;
+}
+
 function checkExpectation(
   s: SimState,
   e: Expectation,
@@ -945,6 +1071,7 @@ function checkExpectation(
   if (e.bets) out.push(...checkBets(s, e.bets, e.player ?? 0));
   if (e.boss) out.push(...checkBoss(s, e.boss));
   if (e.ace) out.push(...checkAce(s, e.ace, e.player ?? 0));
+  if (e.shop) out.push(...checkShop(s, e.shop, e.player ?? 0));
 
   const i = e.player ?? 0;
   if (i >= s.playerCount) return [`игрока ${i} нет: в забеге ${s.playerCount}`];
@@ -1087,6 +1214,15 @@ export function runScenario(sc: Scenario): ScenarioResult {
         cashOut(s, p, n);
       } else if ('deal' in st) {
         dealCards(s);
+      } else if ('shop' in st) {
+        openShop(s);
+      } else if ('upgrade' in st) {
+        const p = st.upgrade.player ?? 0;
+        if (!grantUpgrade(s, p, upgradeIndex(st.upgrade.id))) {
+          throw new Error(`апгрейд «${st.upgrade.id}» не выдался: уже есть или слоты кончились`);
+        }
+      } else if ('floor' in st) {
+        s.meta[Meta.Floor] = st.floor;
       } else if ('aceBet' in st) {
         // Срок тот же, что у обычной карты: в игре предложение живёт до первой
         // волны, а сценарий волн по умолчанию не пускает — и часы паузы,
