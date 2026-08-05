@@ -10,6 +10,27 @@ on:
 permissions:
   contents: read
 
+# Получение зависимостей повторяется, всё остальное — нет.
+#
+# Чужие серверы отвечают 403, 502 и обрывом соединения независимо от нашего
+# кода: так уже падал `playwright install-deps`, когда зеркало Microsoft
+# отдало 403 на `apt-get update`. Красный прогон на этом месте ничего не
+# сообщает о PR, но стоит ручного перезапуска, а CI, который врёт через раз,
+# перестают читать — и он пропускает настоящую поломку.
+#
+# Два уровня, потому что ломается на двух уровнях. Переменные ниже — про
+# ОТДЕЛЬНЫЙ запрос: npm сам переспросит подвисший тарбол, не переустанавливая
+# всё дерево. `scripts/retry.sh` — про команду целиком: она падает и после
+# внутренних повторов, а у apt и playwright своих повторов нет вовсе.
+#
+# Повторять тесты, линтеры и проверки детерминизма запрещено: там повтор
+# превращает плавающий баг — самый дорогой класс в этом проекте — в зелёную
+# галочку.
+env:
+  NPM_CONFIG_FETCH_RETRIES: '5'
+  NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: '10000'
+  NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: '60000'
+
 # Сторонние actions запиннены по полному коммит-SHA, тег — комментарием рядом
 # (SECURITY §7).
 #
@@ -67,7 +88,8 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-      - run: npm ci
+      - name: Зависимости
+        run: sh scripts/retry.sh npm ci
 
       # Линтеры идут до сборки: падают за секунды, сборка дольше.
       #
@@ -156,7 +178,8 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-      - run: npm ci
+      - name: Зависимости
+        run: sh scripts/retry.sh npm ci
 
       # Порог строгости выбран в самом скрипте и объяснён там же: high и
       # critical валят, moderate и low печатаются. Коротко — всё, что стоит в
@@ -168,8 +191,12 @@ jobs:
       # Лицензии читаются из lockfile, а не из node_modules: часть пакетов
       # ставится только под свою платформу, и проверка по диску врала бы
       # по-разному на разных ОС.
+      #
+      # Повтор здесь по той же причине, что и у установки: `npm audit` — это
+      # запрос к реестру, и его пятисотка означает недоступный реестр, а не
+      # найденную уязвимость.
       - name: Аудит и лицензии
-        run: npm run check:deps
+        run: sh scripts/retry.sh npm run check:deps
 
   # Детерминизм на трёх ОС — главный гейт этого проекта.
   #
@@ -189,7 +216,11 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-      - run: npm ci
+      # `shell: bash` обязателен: на windows-latest шаги идут в PowerShell, где
+      # `sh` не команда, а неизвестное имя.
+      - name: Зависимости
+        shell: bash
+        run: sh scripts/retry.sh npm ci
 
       # Golden-реплеи и сценарии идут внутри `npm test`, а значит — на всех
       # трёх ОС. Отдельная задача им не нужна: они проверяют ядро, а ядро
@@ -284,7 +315,8 @@ jobs:
 
       - name: shellcheck
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          sh scripts/retry.sh sudo apt-get update -qq
+          sh scripts/retry.sh sudo apt-get install -y -qq shellcheck
           shellcheck -S warning .githooks/* scripts/*.sh
 
   # Workflow — тоже код, и ломается он ровно так же: опечатка в имени поля,
@@ -299,7 +331,10 @@ jobs:
 
       - name: actionlint
         run: |
-          bash <(curl -sSf https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          # Скачивание отделено от запуска: повторять надо поход в сеть, а не
+          # разбор workflow — иначе настоящая ошибка в yml повторится трижды и
+          # утонет в собственном выводе.
+          sh scripts/retry.sh sh -c 'curl -sSfo download-actionlint.bash https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash && bash download-actionlint.bash'
           ./actionlint -color
 
   # Сквозные тесты: единственная проверка, которая видит РЕНДЕР.
@@ -318,7 +353,8 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-      - run: npm ci
+      - name: Зависимости
+        run: sh scripts/retry.sh npm ci
 
       # Кэшируем ровно ту версию браузера, что просит установленный Playwright:
       # иначе после обновления пакета в кэше останется несовместимый бинарник.
@@ -334,13 +370,17 @@ jobs:
 
       # Только Chromium: прогон идёт в нём одном, остальные браузеры — лишние
       # сотни мегабайт на каждый PR.
+      # Оба шага ниже тянут пакеты apt и бинарник браузера, и оба уже падали
+      # так: зеркало `packages.microsoft.com` ответило 403 на `apt-get update`,
+      # playwright вышел с кодом 100, PR остался красным ни за что. Попыток
+      # пять, а не три: недоступность зеркала измеряется минутами.
       - name: Поставить Chromium
         if: steps.pw-cache.outputs.cache-hit != 'true'
-        run: npx playwright install --with-deps chromium
+        run: sh scripts/retry.sh --attempts 5 npx playwright install --with-deps chromium
 
       - name: Системные зависимости Chromium
         if: steps.pw-cache.outputs.cache-hit == 'true'
-        run: npx playwright install-deps chromium
+        run: sh scripts/retry.sh --attempts 5 npx playwright install-deps chromium
 
       - name: Прогон
         run: npm run e2e
@@ -363,7 +403,8 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-      - run: npm ci
+      - name: Зависимости
+        run: sh scripts/retry.sh npm ci
       - run: npm run build
 
       # Отладочный интерфейс даёт полный контроль над симуляцией — в релизе
