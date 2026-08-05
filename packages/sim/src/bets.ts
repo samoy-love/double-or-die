@@ -12,9 +12,9 @@
  * кредит не принимает, и поэтому провал пари не создаёт долга (GDD §11).
  */
 
-import { clampX, clampY, isFreeSpot, maxX, maxY } from './arena';
+import { RED_ZONE_RADIUS, clampX, clampY, isFreeSpot, maxX, maxY, redZoneX, redZoneY } from './arena';
 import { BET_COUNT, BETS, BetId, BetProgress, type BetSpec } from './bets.generated';
-import { APPETITE, ARENA_PAD, CARD, MAX_ACTIVE_BETS, PLAYER, RED_ZONE } from './config';
+import { APPETITE, ARENA_PAD, CARD, MAX_ACTIVE_BETS, PLAYER } from './config';
 import { add, div, FX_ONE, type Fx, mul, sub } from './fixed';
 import { Stream, nextInt } from './rng';
 import { AceGesture, BetState, EntityFlag, MAX_CARDS, Meta, type SimState } from './state';
@@ -927,7 +927,7 @@ export function stepBets(s: SimState): void {
 }
 
 export const inRedZone = (s: SimState, player: number): boolean =>
-  within(sub(s.pX[player], RED_ZONE.x), sub(s.pY[player], RED_ZONE.y), RED_ZONE.radius);
+  within(sub(s.pX[player], redZoneX(s)), sub(s.pY[player], redZoneY(s)), RED_ZONE_RADIUS);
 
 /** Карты тают. Луч гаснет за три секунды до конца — предупреждение без HUD. */
 function stepCards(s: SimState): void {
