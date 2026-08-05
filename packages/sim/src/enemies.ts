@@ -24,20 +24,31 @@ import {
   ENEMY_BULLET,
   ENEMY_TYPE_COUNT,
   EnemyPhase,
+  FLOORS_PER_RUN,
   EnemyType,
   FAIRNESS,
   FUSE,
   PLAYER,
+  ROOMS_PER_FLOOR,
   WAVE,
   WEDGE,
   roomGapTicksFor,
 } from './config';
 import { aceAtSettlement, clearSettled, dealCards, resetAce, settleBets } from './bets';
 import { flowTo, flowX, flowY, updateNav } from './nav';
+import { endRun } from './run';
 import { damagePlayer, explode, fireEnemy, killEnemy, statsOf } from './combat';
 import { add, type Fx, fromInt, mul, sub } from './fixed';
 import { Stream, nextInt } from './rng';
-import { EntityFlag, MAX_ENEMIES, MAX_PLAYERS, MAX_SPAWNS, Meta, type SimState } from './state';
+import {
+  EntityFlag,
+  MAX_ENEMIES,
+  MAX_PLAYERS,
+  MAX_SPAWNS,
+  Meta,
+  RunPhase,
+  type SimState,
+} from './state';
 import { ANGLE_FULL, cos, length, normalize, normX, normY, sin, within } from './trig';
 
 /**
@@ -63,17 +74,36 @@ const targeting = new Int32Array(MAX_PLAYERS);
 // ---------------------------------------------------------------------------
 
 /**
- * Бюджет угрозы комнаты: `300 × (1 + 0.08(R−1)) × 2^(F−1) × (1 + 0.8(N−1))`.
+ * Бюджет угрозы комнаты: `300 × (1 + 0.08(R−1)) × 2^(F−1) × (1 + 0.8(N−1))`
+ * (DIFFICULTY §4).
  *
- * Этаж в версии 0.2.0 всегда первый — этажи приезжают в 0.4.0, — поэтому
- * множитель `2^(F−1)` равен единице и в формулу не входит. Когда появятся
- * этажи, он добавится здесь, а не в трёх местах.
+ * Множитель этажа — удвоение, и оно намеренно круглое: его легко держать в
+ * голове и легко объяснить, почему третий этаж вчетверо страшнее первого.
+ * Комната `R` считается ВНУТРИ этажа, с единицы до восьми: сквозная нумерация
+ * по забегу дала бы на первой комнате второго этажа множитель девятой
+ * комнаты, то есть двойной рост в одном шаге вместо двух раздельных.
+ *
+ * Порядок множителей важен для целых чисел: этаж применяется последним и
+ * сдвигом, поэтому деление на 10000 не съедает младшие разряды дважды.
  */
-export function roomBudget(room: number, players: number): number {
+export function roomBudget(room: number, players: number, floor = 1): number {
   const roomFactor = 100 + WAVE.roomGrowthPct * (room - 1);
   const playerFactor = 100 + WAVE.playerGrowthPct * (players - 1);
-  return Math.trunc((WAVE.baseBudget * roomFactor * playerFactor) / 10000);
+  const base = Math.trunc((WAVE.baseBudget * roomFactor * playerFactor) / 10000);
+  return base << (floor - 1);
 }
+
+/**
+ * Бюджет боссовой комнаты — половина бюджета восьмой комнаты этажа.
+ *
+ * Рядовые враги в бою с боссом есть, и запас прочности самого босса в бюджет
+ * не входит (DIFFICULTY §8). Причина ставочная, а не боевая: прогресс четырёх
+ * из шести стартовых пари считается долей зачищенной угрозы, и нулевой бюджет
+ * означал бы, что в боссовой комнате они не двигаются вовсе, а Туз не
+ * приходит с картой ни разу — порог подброса считается оттуда же.
+ */
+export const bossRoomBudget = (floor: number, players: number): number =>
+  Math.trunc(roomBudget(ROOMS_PER_FLOOR, players, floor) / 2);
 
 /** Потолок одновременных врагов на экране: ограничитель D9. */
 export const onScreenCap = (players: number): number =>
@@ -123,7 +153,7 @@ export function startRoom(s: SimState, room: number): void {
 
   // Бюджет комнаты целиком — знаменатель прогресса удержаний. Считается один
   // раз при входе: волны берут из него, а пари меряют по нему пройденный путь.
-  s.meta[Meta.RoomThreat] = roomBudget(room, s.playerCount);
+  s.meta[Meta.RoomThreat] = roomBudget(room, s.playerCount, s.meta[Meta.Floor]);
   s.meta[Meta.ThreatCleared] = 0;
   dealCards(s);
 }
@@ -135,7 +165,7 @@ function startWave(s: SimState, wave: number): void {
   // уже там, и взятое на них — живое.
   if (wave === 1) clearSettled(s);
 
-  const budget = roomBudget(s.meta[Meta.Room], s.playerCount);
+  const budget = roomBudget(s.meta[Meta.Room], s.playerCount, s.meta[Meta.Floor]);
   s.meta[Meta.Wave] = wave;
   s.meta[Meta.WaveBudget] = Math.trunc(budget / WAVE.wavesPerRoom);
   s.meta[Meta.NextWaveAt] = 0;
@@ -166,13 +196,27 @@ function noviceInPlay(s: SimState): boolean {
  * игрок один раз видит Фитиль в упор и понимает, что круг с фитилём взрывается
  * (DIFFICULTY §7).
  */
+/**
+ * Открыт ли тип врага на этом этаже и в этой комнате.
+ *
+ * Пара «этаж и комната», а не сквозной номер: комната считается ВНУТРИ этажа,
+ * и сравнение по одному числу выпускало бы врага второго этажа ещё на первом.
+ * Расписание — DIFFICULTY §7, и правило «не чаще одного нового типа за две
+ * комнаты» проверяется тестом по нему, а не по коду.
+ */
+function unlocked(t: number, floor: number, room: number): boolean {
+  const e = ENEMIES[t];
+  return floor > e.unlockFloor || (floor === e.unlockFloor && room >= e.unlockRoom);
+}
+
 function pickType(s: SimState, budget: number): number {
   const room = s.meta[Meta.Room];
+  const floor = s.meta[Meta.Floor];
   let unseen = -1;
   let affordable = 0;
 
   for (let t = 0; t < ENEMY_TYPE_COUNT; t++) {
-    if (ENEMIES[t].unlockRoom > room) continue;
+    if (!unlocked(t, floor, room)) continue;
     if ((s.meta[Meta.SeenTypes] & (1 << t)) === 0) {
       // Бюджет проверяется и для нового типа. Вызывающий вычитает угрозу
       // безусловно, и знакомство, выданное в кредит, уводило остаток волны в
@@ -192,7 +236,7 @@ function pickType(s: SimState, budget: number): number {
   // дешёвых врагов сделал бы поздние комнаты толпой Фитилей.
   let n = nextInt(s.rng, Stream.Waves, affordable);
   for (let t = 0; t < ENEMY_TYPE_COUNT; t++) {
-    if (ENEMIES[t].unlockRoom > room) continue;
+    if (!unlocked(t, floor, room)) continue;
     if ((s.meta[Meta.SeenTypes] & (1 << t)) === 0) continue;
     if (ENEMIES[t].threat > budget) continue;
     if (n === 0) return t;
@@ -397,10 +441,34 @@ function stepWaves(s: SimState): void {
   if (alive > 0 || pending > 0) return;
 
   if (s.meta[Meta.Wave] >= WAVE.wavesPerRoom) {
-    startRoom(s, s.meta[Meta.Room] + 1);
+    advanceRoom(s);
   } else {
     s.meta[Meta.NextWaveAt] = s.tick + WAVE.waveGapTicks;
   }
+}
+
+/**
+ * Комната зачищена: дальше следующая, следующий этаж или конец забега.
+ *
+ * До 0.4.0 здесь стоял безусловный `startRoom(room + 1)`, и забег был
+ * бесконечным счётчиком комнат: ни этажа, ни конца, ни победы. Ворота версии
+ * требуют забега на 12–18 минут — то есть чего-то, что кончается.
+ *
+ * Босс между восьмой комнатой и концом этажа встанет своим PR: он вставляется
+ * ровно сюда и ничего вокруг не переписывает.
+ */
+function advanceRoom(s: SimState): void {
+  if (s.meta[Meta.Phase] === RunPhase.Summary) return;
+  if (s.meta[Meta.Room] < ROOMS_PER_FLOOR) {
+    startRoom(s, s.meta[Meta.Room] + 1);
+    return;
+  }
+  if (s.meta[Meta.Floor] < FLOORS_PER_RUN) {
+    s.meta[Meta.Floor]++;
+    startRoom(s, 1);
+    return;
+  }
+  endRun(s, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -1021,4 +1089,10 @@ export function clearArena(s: SimState): void {
   // точку, и раскладка начала забега, оставшаяся лежать, превращает счёт
   // карт в счёт чужих карт.
   s.kActive.fill(0);
+  // Шары и провалы колеса — тоже арена, и уезжают вместе с ней. Сектор,
+  // оставшийся проваленным после боссовой комнаты, вырезал бы дыру в обычной,
+  // где никакого колеса нет вовсе.
+  s.ballActive.fill(0);
+  s.sectorFallAt.fill(0);
+  s.sectorRestoreAt.fill(0);
 }

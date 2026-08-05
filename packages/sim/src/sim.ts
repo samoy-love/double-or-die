@@ -5,9 +5,9 @@
  * выход на любой платформе. Ни `window`, ни `Date.now()`, ни `Math.random()`
  * здесь быть не может — это ловит линтер, а не совесть.
  *
- * Версия 0.2.0 «Тир» — это бой и ничего кроме боя: игрок, три врага, волны,
- * фишки. Пари приезжают в 0.3.0 и лягут поверх, ничего здесь не переписывая:
- * карта пари — это ещё одна сущность на арене, а не другой бой.
+ * Здесь же — рамка забега: он кончается победой на третьем этаже или смертью,
+ * и в обоих случаях кончается ЯВНО. До 0.4.0 смерть тихо начинала забег
+ * заново, и у забега не было ни итогов, ни ключей, ни причины вернуться.
  */
 
 import { pushOutOfColumns, pushedX, pushedY } from './arena';
@@ -24,9 +24,10 @@ import { BetId, cashOutBest, failBetId, stepBets, tryTakeCard } from './bets';
 import { fire, stepBullets, stepChips } from './combat';
 import { clearArena, startRoom, stepEnemies } from './enemies';
 import { add, FX_ONE, mul, sub } from './fixed';
+import { endRun } from './run';
 import { normalize, normX, normY, within } from './trig';
 import { type InputFrame, Btn, appetiteOf, isDown, schemeOf } from './input';
-import { EntityFlag, Meta, type SimState } from './state';
+import { Curse, DoorType, EntityFlag, Meta, RunPhase, type SimState } from './state';
 
 /** Поставить игроков в стартовые позиции и начать первую комнату. */
 export function spawnPlayers(s: SimState): void {
@@ -63,6 +64,48 @@ export function spawnPlayers(s: SimState): void {
   s.meta[Meta.SeenTypes] = 0;
   s.meta[Meta.Kills] = 0;
   s.meta[Meta.RestartAt] = 0;
+
+  /*
+   * Забег как целое: этаж, фаза, экономика и босс.
+   *
+   * Обнуляется здесь, а не при создании состояния, по той же причине, что и
+   * кошелёк: эта функция ещё и перезапускает забег после гибели всех. Долг,
+   * проклятие и купленные апгрейды, пережившие смерть, означали бы, что новый
+   * забег начинается с чужого хвоста, — а забег обязан начинаться с нуля,
+   * иначе ни сид, ни реплей не описывают его целиком.
+   *
+   * Большая часть этих полей в 0.4.0 ещё никем не читается: раскладка
+   * заведена разом, чтобы ре-бейзлайн эталонов случился один раз, а не по
+   * разу на каждую доехавшую механику.
+   */
+  s.meta[Meta.Floor] = 1;
+  s.meta[Meta.Phase] = RunPhase.Fight;
+  s.meta[Meta.PhaseUntil] = 0;
+  s.meta[Meta.RoomType] = DoorType.Fight;
+  s.meta[Meta.DoorPick] = -1;
+  s.meta[Meta.Debt] = 0;
+  s.meta[Meta.Curse] = Curse.None;
+  s.meta[Meta.CurseRoom] = 0;
+  s.meta[Meta.HouseCut] = 0;
+  s.meta[Meta.LegUp] = 0;
+  s.meta[Meta.Template] = 0;
+  s.meta[Meta.Flip] = 0;
+  s.meta[Meta.BossHP] = 0;
+  s.meta[Meta.BossMaxHP] = 0;
+  s.meta[Meta.BossPhase] = 0;
+  s.meta[Meta.BossPhaseUntil] = 0;
+  s.meta[Meta.CounterBetUntil] = 0;
+  s.meta[Meta.CounterBetBroken] = 0;
+  s.meta[Meta.Earned] = 0;
+  s.meta[Meta.PaidToAce] = 0;
+  s.meta[Meta.Keys] = 0;
+  s.meta[Meta.Victory] = 0;
+  s.meta[Meta.BossesBeaten] = 0;
+  s.pUpgrades.fill(0);
+  s.doorType.fill(DoorType.Fight);
+  s.shopItem.fill(0);
+  s.shopPrice.fill(0);
+
   clearArena(s);
   startRoom(s, 1);
 }
@@ -78,6 +121,22 @@ export function spawnPlayers(s: SimState): void {
  * где игрок его видел. Обратный порядок дал бы попадания «до нажатия».
  */
 export function step(s: SimState, inputs: readonly InputFrame[]): void {
+  /*
+   * Забег кончился — мир останавливается.
+   *
+   * Не «продолжает считаться в фоне под экраном итогов»: враги доигрывали бы
+   * бой с трупом, снаряды летели бы, фишки тлели, а хеш состояния менялся бы
+   * каждый тик после конца. Реплей от этого перестаёт сходиться на длинных
+   * прогонах по причине, к самому забегу отношения не имеющей.
+   *
+   * Тик при этом продолжает идти: время на экране итогов — тоже время, и
+   * клиент отсчитывает по нему свои паузы.
+   */
+  if (s.meta[Meta.Phase] === RunPhase.Summary) {
+    s.tick++;
+    return;
+  }
+
   stepPlayers(s, inputs);
   stepEnemies(s);
   stepBullets(s);
@@ -88,21 +147,30 @@ export function step(s: SimState, inputs: readonly InputFrame[]): void {
 }
 
 /**
- * Гибель всех игроков и перезапуск.
+ * Гибель всех игроков — конец забега.
  *
  * Живёт в симуляции, а не в клиенте: реплей обязан переигрываться целиком,
- * включая то, что было после смерти. Последняя сделка (GDD §12А.3) заменит
- * этот перезапуск в 0.6.0 — до неё смерть означает «сначала».
+ * включая то, что было после смерти.
+ *
+ * До 0.4.0 здесь стоял тихий перезапуск: через три секунды `spawnPlayers`
+ * начинал забег заново. Для версии без структуры это было честно — играть
+ * было не во что, кроме бесконечной череды комнат, — но забег, начинающийся
+ * сам, не имеет ни итогов, ни ключей, ни причины вернуться. Ворота 0.4.0
+ * требуют, чтобы больше шестидесяти процентов плейтестеров начинали второй
+ * забег ДОБРОВОЛЬНО, а добровольность того, что случается само, измерить
+ * нечем.
+ *
+ * Пауза перед итогами осталась и осталась по прежней причине: мгновенный
+ * переход читается как сбой, а не как смерть. «Последняя сделка» (GDD §12А.3)
+ * встанет ровно в эту паузу в 0.6.0.
  */
 function stepRunEnd(s: SimState): void {
+  if (s.meta[Meta.Phase] === RunPhase.Summary) return;
+
   if (s.meta[Meta.RestartAt] !== 0) {
     if (s.tick < s.meta[Meta.RestartAt]) return;
-    // tick++ произойдёт после нас, поэтому старт комнаты считается от
-    // следующего тика — иначе пауза перед первой волной короче на кадр.
-    s.tick++;
-    spawnPlayers(s);
-    s.tick--;
     s.meta[Meta.Deaths]++;
+    endRun(s, false);
     return;
   }
 
