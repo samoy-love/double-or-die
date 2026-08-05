@@ -13,7 +13,9 @@ export class Overlay {
   private readonly el: HTMLElement;
   private readonly update: HTMLElement;
   private readonly halt: HTMLElement;
+  private readonly toast: HTMLElement;
   private timer = 0;
+  private toastTimer = 0;
 
   constructor(
     private readonly loop: GameLoop,
@@ -31,7 +33,11 @@ export class Overlay {
     this.halt.className = 'halt';
     this.halt.hidden = true;
 
-    document.body.append(this.el, this.update, this.halt);
+    this.toast = document.createElement('div');
+    this.toast.className = 'toast';
+    this.toast.hidden = true;
+
+    document.body.append(this.el, this.update, this.halt, this.toast);
   }
 
   start(): void {
@@ -92,13 +98,29 @@ export class Overlay {
    * Живёт только в dev-сборке — там же, где живут сами инварианты
    * (`loop.ts`): в релизе проверка вырезана, и останавливаться нечему.
    */
-  showHalt(message: string, seed: number, tick: number): void {
+  showHalt(message: string, seed: number, tick: number, reportFile?: string): void {
     this.halt.hidden = false;
     this.halt.innerHTML =
       '<b>Симуляция остановлена: нарушен инвариант</b>\n\n' +
       `${escapeHtml(message)}\n\n` +
       `сид ${seed} · тик ${tick} · сборка ${BUILD}\n` +
+      // Файл уже скачан, и сказать об этом надо здесь: игрок, который его не
+      // заметил, не приложит к жалобе ровно то, по чему дефект и ищется.
+      (reportFile ? `Баг-репорт сохранён: ${escapeHtml(reportFile)}\n` : '') +
       'Это дефект ядра, а не ваш ход. P или Esc — продолжить, F5 — начать заново.';
+  }
+
+  /**
+   * Отчёт собран по F8 — короткая отметка внизу экрана.
+   *
+   * Без неё нажатие выглядит как ничего не сделавшее: файл уходит в
+   * «Загрузки» браузера молча, и игрок жмёт ещё пять раз.
+   */
+  showReport(file: string): void {
+    this.toast.hidden = false;
+    this.toast.textContent = `Баг-репорт сохранён: ${file}`;
+    clearTimeout(this.toastTimer);
+    this.toastTimer = window.setTimeout(() => (this.toast.hidden = true), 6000);
   }
 }
 

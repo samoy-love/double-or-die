@@ -336,6 +336,18 @@ export class Audio {
     if (this.master) this.master.gain.value = muted ? 0 : this.volume;
   }
 
+  /**
+   * Громкость из настроек игрока (`save.ts`).
+   *
+   * Через метод, а не записью в поле: шина уже может существовать, и её
+   * усиление надо менять вместе со значением. Присвоение в `volume` тихо
+   * не сделало бы ничего до следующего пересоздания контекста.
+   */
+  setVolume(v: number): void {
+    this.volume = Math.min(1, Math.max(0, v));
+    if (this.master && !this.muted) this.master.gain.value = this.volume;
+  }
+
   get isMuted(): boolean {
     return this.muted;
   }

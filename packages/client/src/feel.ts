@@ -44,6 +44,16 @@ export class Feel {
   /** Стабильный кадр: тряска, вспышки и хитстоп выключены для скриншотов. */
   stable = false;
 
+  /**
+   * Интенсивность вспышек, 0..1. Приезжает из сейва игрока (`save.ts`).
+   *
+   * Множитель, а не «выключено/включено»: у чувствительности к мерцанию нет
+   * двух состояний, и игрок, которому больно от полной вспышки, обычно
+   * доволен четвертью. Ноль остаётся честным нулём — вспышки не случается
+   * вовсе, а не случается незаметная.
+   */
+  flashScale = 1;
+
   /** Остановить картинку на `seconds`. Значения — из таблицы GDD §6. */
   freeze(seconds: number): void {
     if (this.stable) return;
@@ -66,11 +76,11 @@ export class Feel {
    * это и есть ограничение частоты, а не пожелание в документе.
    */
   flash(colour: Rgb, alpha: number): void {
-    if (this.stable) return;
+    if (this.stable || this.flashScale <= 0) return;
     if (this.sinceFlash < MIN_FLASH_INTERVAL) return;
     this.sinceFlash = 0;
     this.flashColour = colour;
-    this.flashAlpha = Math.min(MAX_FLASH_ALPHA, alpha);
+    this.flashAlpha = Math.min(MAX_FLASH_ALPHA, alpha) * this.flashScale;
     this.flashDecay = this.flashAlpha / 0.25;
   }
 
