@@ -21,6 +21,7 @@ import {
   roomGapTicksFor,
 } from './config';
 import { BetId, cashOutBest, failBetId, stepBets, tryTakeCard } from './bets';
+import { stepBoss } from './boss';
 import { fire, stepBullets, stepChips } from './combat';
 import { clearArena, startRoom, stepEnemies } from './enemies';
 import { add, FX_ONE, mul, sub } from './fixed';
@@ -139,6 +140,7 @@ export function step(s: SimState, inputs: readonly InputFrame[]): void {
 
   stepPlayers(s, inputs);
   stepEnemies(s);
+  stepBoss(s);
   stepBullets(s);
   stepChips(s);
   stepBets(s);

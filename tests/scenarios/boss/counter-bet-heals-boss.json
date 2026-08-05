@@ -1,0 +1,15 @@
+{
+  "name": "Не попал по боссу десять секунд — он лечится на 15% запаса",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "boss": true },
+    { "damageBoss": { "amount": 800 } },
+    { "tick": 1 },
+    { "expect": { "boss": { "phase": { "min": 2, "max": 2 }, "counterBet": true } } },
+    { "expect": { "boss": { "hpPct": { "min": 50, "max": 50 } } } },
+    { "tick": 601 },
+    { "expect": { "boss": { "counterBet": false, "stunned": false } } },
+    { "expect": { "boss": { "hpPct": { "min": 65, "max": 65 } } } }
+  ]
+}

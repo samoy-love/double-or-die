@@ -466,21 +466,37 @@ function stepWaves(s: SimState): void {
 }
 
 /**
- * Комната зачищена: дальше следующая, следующий этаж или конец забега.
+ * Комната зачищена: дальше следующая, босс, следующий этаж или конец забега.
  *
  * До 0.4.0 здесь стоял безусловный `startRoom(room + 1)`, и забег был
  * бесконечным счётчиком комнат: ни этажа, ни конца, ни победы. Ворота версии
  * требуют забега на 12–18 минут — то есть чего-то, что кончается.
  *
- * Босс между восьмой комнатой и концом этажа встанет своим PR: он вставляется
- * ровно сюда и ничего вокруг не переписывает.
+ * Босс стоит между восьмой комнатой и концом этажа (GDD §8.1), и шов с ним
+ * здесь ровно один — признак «бой с боссом идёт». Сам бой живёт в `boss.ts`,
+ * и импорта оттуда тут нет намеренно: волны зовут эту функцию, а босс зовёт
+ * волны, — встречный импорт замкнул бы модули в цикл.
  */
 function advanceRoom(s: SimState): void {
   if (s.meta[Meta.Phase] === RunPhase.Summary) return;
+  // Пока босс жив, комнату не кончает даже пустая арена: волны в боссовой
+  // комнате идут наравне с ним, а конец ей ставит его смерть.
+  if (s.meta[Meta.Phase] === RunPhase.Boss && s.meta[Meta.BossMaxHP] !== 0) return;
+
   if (s.meta[Meta.Room] < ROOMS_PER_FLOOR) {
     startRoom(s, s.meta[Meta.Room] + 1);
     return;
   }
+  if (s.meta[Meta.Phase] !== RunPhase.Boss) {
+    // Восьмая комната кончилась — выходит босс. Комната остаётся восьмой: у
+    // боссовой свой бюджет угрозы, половина восьмой (DIFFICULTY §8).
+    s.meta[Meta.Phase] = RunPhase.Boss;
+    startRoom(s, ROOMS_PER_FLOOR);
+    s.meta[Meta.RoomThreat] = bossRoomBudget(s.meta[Meta.Floor], s.playerCount);
+    return;
+  }
+
+  s.meta[Meta.Phase] = RunPhase.Fight;
   if (s.meta[Meta.Floor] < FLOORS_PER_RUN) {
     s.meta[Meta.Floor]++;
     startRoom(s, 1);

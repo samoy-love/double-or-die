@@ -45,13 +45,22 @@ import {
   MAX_CHIPS,
   MAX_ENEMIES,
   MAX_BULLETS,
+  MAX_BALLS,
   Meta,
+  ROOMS_PER_FLOOR,
+  RunPhase,
+  SECTOR_COUNT,
+  bossRoomBudget,
+  bossStunned,
   clearArena,
+  counterBetRunning,
+  damageBoss,
   fromFloat,
   hashHex,
   type InputFrame,
   makeFrame,
   setSpawning,
+  startBoss,
   type SimState,
   spawnEnemy,
   spawnPlayers,
@@ -189,6 +198,29 @@ export interface BetsExpectation {
   cashed?: Range;
 }
 
+/**
+ * Босс: полоса прочности, фаза, колесо и встречная ставка.
+ *
+ * Проценты, а не очки: запас прочности растёт с составом и с этажом, и
+ * сценарий, записанный в очках, проверял бы соло-число, а не переход фазы.
+ */
+export interface BossExpectation {
+  /** Запас прочности в процентах от потолка. */
+  hpPct?: Range;
+  /** Номер фазы, 1..3. Ноль — боя нет. */
+  phase?: Range;
+  /** Шаров на арене. */
+  balls?: Range;
+  /** Провалившихся секторов: их бывает не больше одного. */
+  fallenSectors?: Range;
+  /** Идёт ли встречная ставка прямо сейчас. */
+  counterBet?: boolean;
+  /** Оглушён ли босс. */
+  stunned?: boolean;
+  /** Побеждённых боссов за забег. */
+  beaten?: Range;
+}
+
 export interface Expectation {
   player?: number;
   /** Сколько врагов на арене. */
@@ -212,6 +244,7 @@ export interface Expectation {
   /** Хеш состояния целиком: точная привязка к моменту. */
   hash?: string;
   bets?: BetsExpectation;
+  boss?: BossExpectation;
 }
 
 export type Step =
@@ -255,6 +288,20 @@ export type Step =
   | { settle: true }
   /** Убрать с арены всё, кроме игроков. */
   | { clear: true }
+  /**
+   * Вывести босса: восьмая комната кончилась.
+   *
+   * Не дубль обычного хода забега, а способ начать проверку с боя, а не с
+   * двадцати четырёх комнат до него.
+   */
+  | { boss: true }
+  /**
+   * Снять с босса прочности напрямую.
+   *
+   * Пороги фаз — это проценты запаса, и добираться до них стрельбой значило бы
+   * писать сценарий про меткость, а не про фазы.
+   */
+  | { damageBoss: { amount: number } }
   | { expect: Expectation };
 
 export interface Scenario {
@@ -365,6 +412,16 @@ const BETS_FIELDS: Record<keyof BetsExpectation, Node> = {
   cashed: RANGE,
 };
 
+const BOSS_FIELDS: Record<keyof BossExpectation, Node> = {
+  hpPct: RANGE,
+  phase: RANGE,
+  balls: RANGE,
+  fallenSectors: RANGE,
+  counterBet: bool(),
+  stunned: bool(),
+  beaten: RANGE,
+};
+
 const EXPECT_FIELDS: Record<keyof Expectation, Node> = {
   player: PLAYER_IDX(),
   enemies: RANGE,
@@ -382,6 +439,7 @@ const EXPECT_FIELDS: Record<keyof Expectation, Node> = {
   invulnerable: bool(),
   hash: str(),
   bets: obj(BETS_FIELDS),
+  boss: obj(BOSS_FIELDS),
 };
 
 /** Ключи всех вариантов шага: по одному на вариант объединения. */
@@ -413,6 +471,8 @@ const STEP_SCHEMA: Record<StepKey, Node> = {
   deal: TRUE,
   settle: TRUE,
   clear: TRUE,
+  boss: TRUE,
+  damageBoss: obj({ amount: int(0) }, ['amount']),
   expect: obj(EXPECT_FIELDS),
 };
 
@@ -737,6 +797,53 @@ function checkBets(s: SimState, e: BetsExpectation, player: number): string[] {
   return out;
 }
 
+/**
+ * Вывести босса, минуя двадцать четыре комнаты до него.
+ *
+ * Не обход правил забега, а другой предмет проверки: комнаты и двери
+ * проверяются своими сценариями, а бой с боссом — этим.
+ */
+function startBossRoom(s: SimState): void {
+  s.meta[Meta.Phase] = RunPhase.Boss;
+  s.meta[Meta.Room] = ROOMS_PER_FLOOR;
+  s.meta[Meta.RoomThreat] = bossRoomBudget(s.meta[Meta.Floor], s.playerCount);
+  s.meta[Meta.ThreatCleared] = 0;
+  startBoss(s);
+}
+
+function checkBoss(s: SimState, e: BossExpectation): string[] {
+  const out: string[] = [];
+  const max = s.meta[Meta.BossMaxHP];
+
+  if (e.hpPct) {
+    if (max === 0) out.push('прочность босса спрошена, а босса на арене нет');
+    else push(out, checkRange('прочность босса, %', (s.meta[Meta.BossHP] * 100) / max, e.hpPct));
+  }
+  if (e.phase) push(out, checkRange('фаза босса', s.meta[Meta.BossPhase], e.phase));
+  if (e.balls) {
+    push(out, checkRange('шаров на арене', countActive(s.ballActive, MAX_BALLS), e.balls));
+  }
+  if (e.fallenSectors) {
+    let n = 0;
+    for (let i = 0; i < SECTOR_COUNT; i++) {
+      if (s.sectorFallAt[i] !== 0 && s.tick >= s.sectorFallAt[i] && s.tick < s.sectorRestoreAt[i]) {
+        n++;
+      }
+    }
+    push(out, checkRange('провалившихся секторов', n, e.fallenSectors));
+  }
+  if (e.counterBet !== undefined) {
+    const on = counterBetRunning(s);
+    if (on !== e.counterBet) out.push(`встречная ставка идёт = ${on}, ожидалось ${e.counterBet}`);
+  }
+  if (e.stunned !== undefined) {
+    const on = bossStunned(s);
+    if (on !== e.stunned) out.push(`босс оглушён = ${on}, ожидалось ${e.stunned}`);
+  }
+  if (e.beaten) push(out, checkRange('побеждено боссов', s.meta[Meta.BossesBeaten], e.beaten));
+  return out;
+}
+
 function checkExpectation(
   s: SimState,
   e: Expectation,
@@ -754,6 +861,7 @@ function checkExpectation(
   if (e.enemy) out.push(...checkEnemy(s, e.enemy));
   if (e.cards) out.push(...checkCards(s, e.cards));
   if (e.bets) out.push(...checkBets(s, e.bets, e.player ?? 0));
+  if (e.boss) out.push(...checkBoss(s, e.boss));
 
   const i = e.player ?? 0;
   if (i >= s.playerCount) return [`игрока ${i} нет: в забеге ${s.playerCount}`];
@@ -900,6 +1008,10 @@ export function runScenario(sc: Scenario): ScenarioResult {
         settleBets(s);
       } else if ('clear' in st) {
         clearArena(s);
+      } else if ('boss' in st) {
+        startBossRoom(s);
+      } else if ('damageBoss' in st) {
+        damageBoss(s, st.damageBoss.amount);
       } else {
         for (const msg of checkExpectation(s, st.expect, spawn)) {
           failures.push(`${where} (тик ${s.tick}): ${msg}`);

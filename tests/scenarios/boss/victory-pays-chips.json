@@ -1,0 +1,14 @@
+{
+  "name": "Побеждённый босс платит 40 × этаж фишек и идёт в счёт забега",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "boss": true },
+    { "chips": { "amount": 0 } },
+    { "expect": { "boss": { "beaten": { "max": 0 } } } },
+    { "damageBoss": { "amount": 1600 } },
+    { "tick": 1 },
+    { "expect": { "boss": { "beaten": { "min": 1, "max": 1 }, "balls": { "max": 0 } } } },
+    { "expect": { "chips": { "min": 40, "max": 40 } } }
+  ]
+}

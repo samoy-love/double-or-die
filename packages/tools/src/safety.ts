@@ -19,19 +19,31 @@
  */
 
 import {
+  ANGLE_FULL,
+  BALL,
+  BOSS,
   ENEMIES,
   ENEMY_BULLET,
   EnemyPhase,
   EnemyType,
   FUSE,
+  MAX_BALLS,
   MAX_BULLETS,
   MAX_ENEMIES,
+  Meta,
   PLAYER,
+  SECTOR_COUNT,
   WEDGE,
   EntityFlag,
+  cos,
   isFreeSpot,
   fromFloat,
+  sectorAngle,
+  sin,
   toFloat,
+  wheelRadius,
+  wheelX,
+  wheelY,
   type SimState,
 } from '@dod/sim';
 
@@ -144,6 +156,8 @@ function collectThreats(s: SimState): void {
     });
   }
 
+  collectBossThreats(s, pr);
+
   for (let i = 0; i < MAX_BULLETS; i++) {
     if (!s.bActive[i] || s.bOwner[i] >= 0) continue;
     const left = Math.max(0, s.bDeadline[i] - s.tick);
@@ -160,6 +174,61 @@ function collectThreats(s: SimState): void {
       // Предупреждением о снаряде был телеграф выстрелившего Кирпича.
       warmup: ENEMIES[EnemyType.Brick].telegraphTicks,
       frontSpeed: Math.sqrt(vx * vx + vy * vy),
+    });
+  }
+}
+
+/**
+ * Атаки босса — такие же объявленные угрозы, как таран (DIFFICULTY §8).
+ *
+ * Считаются по объявленной ОБЛАСТИ, а не по телу: у шара это круг ударной
+ * волны вокруг сектора приземления, у проваливающегося сектора — сам сектор
+ * целиком. Непроходимая фаза босса обязана быть падающим тестом ровно на том
+ * же основании, что и непроходимая волна.
+ *
+ * Сектор приближается капсулой от оси колеса до обода, а не точным клином:
+ * капсула клин ПОКРЫВАЕТ (её полуширина равна половине хорды на ободе), а
+ * лишняя тревога у центра дешевле пропущенной дыры в полу.
+ */
+function collectBossThreats(s: SimState, pr: number): void {
+  if (s.meta[Meta.BossMaxHP] === 0) return;
+
+  const cx = toFloat(wheelX(s));
+  const cy = toFloat(wheelY(s));
+  const rim = toFloat(wheelRadius(s));
+
+  for (let i = 0; i < MAX_BALLS; i++) {
+    if (!s.ballActive[i]) continue;
+    if (s.tick < s.ballLandAt[i] - BALL.telegraphTicks) continue;
+    const a = sectorAngle(s, s.ballSector[i]);
+    const r = rim - toFloat(BALL.radius);
+    const x = cx + toFloat(cos(a)) * r;
+    const y = cy + toFloat(sin(a)) * r;
+    threats.push({
+      x0: x,
+      y0: y,
+      x1: x,
+      y1: y,
+      radius: toFloat(BALL.blastRadius) + pr,
+      warmup: BALL.telegraphTicks,
+      frontSpeed: 0,
+    });
+  }
+
+  for (let i = 0; i < SECTOR_COUNT; i++) {
+    if (s.sectorFallAt[i] === 0 || s.tick >= s.sectorRestoreAt[i]) continue;
+    const a = sectorAngle(s, i);
+    // Половина хорды сектора на ободе: клин целиком укладывается в капсулу
+    // такой полуширины, проведённую по его оси.
+    const half = rim * toFloat(sin(Math.round(ANGLE_FULL / (2 * SECTOR_COUNT))));
+    threats.push({
+      x0: cx,
+      y0: cy,
+      x1: cx + toFloat(cos(a)) * rim,
+      y1: cy + toFloat(sin(a)) * rim,
+      radius: half + pr,
+      warmup: BOSS.sectorTelegraphTicks,
+      frontSpeed: 0,
     });
   }
 }

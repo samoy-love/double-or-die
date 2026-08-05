@@ -26,7 +26,15 @@ import { BET_COUNT, BETS, BetId, BetProgress, type BetSpec } from './bets.genera
 import { APPETITE, ARENA_PAD, CARD, MAX_ACTIVE_BETS, PLAYER } from './config';
 import { add, div, FX_ONE, type Fx, mul, sub } from './fixed';
 import { Stream, nextInt } from './rng';
-import { AceGesture, BetState, EntityFlag, MAX_CARDS, Meta, type SimState } from './state';
+import {
+  AceGesture,
+  BetState,
+  EntityFlag,
+  MAX_CARDS,
+  Meta,
+  RunPhase,
+  type SimState,
+} from './state';
 import { within } from './trig';
 
 export {
@@ -358,6 +366,9 @@ function pickBet(s: SimState, owner: number): number {
  */
 function betAvailable(s: SimState, bet: number, owner: number): boolean {
   if (schemeBlocked(s, bet, owner)) return false;
+  // Красной зоны на боссовой арене нет — значит нет и пари на неё (GDD §8.1).
+  // Пари, условие которого выполняется само собой, — это не выбор, а подарок.
+  if (bet === BetId.NoRedZone && s.meta[Meta.Phase] === RunPhase.Boss) return false;
   // Конфликты взаимны — это проверяет схема, — поэтому одной маски хватает.
   const mask = BETS[bet].conflictMask;
 
@@ -935,7 +946,15 @@ export function stepBets(s: SimState): void {
   stepGestures(s);
 }
 
+/**
+ * Стоит ли игрок в красной зоне.
+ *
+ * На боссовой арене её нет вовсе (GDD §8.1), и «нет зоны» обязано означать
+ * «в неё нельзя войти», а не «круг не нарисован»: иначе пари срывалось бы о
+ * разметку, которой на полу не существует.
+ */
 export const inRedZone = (s: SimState, player: number): boolean =>
+  s.meta[Meta.Phase] !== RunPhase.Boss &&
   within(sub(s.pX[player], redZoneX(s)), sub(s.pY[player], redZoneY(s)), RED_ZONE_RADIUS);
 
 /** Карты тают. Луч гаснет за три секунды до конца — предупреждение без HUD. */
