@@ -26,7 +26,7 @@ import {
   arenaScale,
 } from './config';
 import { abs, add, clamp, type Fx, sub } from './fixed';
-import { ARENA_H, ARENA_W, Meta, type SimState } from './state';
+import { ARENA_H, ARENA_W, Meta, RunPhase, type SimState } from './state';
 
 export { type Column };
 
@@ -40,8 +40,6 @@ export { type Column };
  */
 export const templateOf = (s: SimState): ArenaTemplate =>
   ARENA_TEMPLATES[s.meta[Meta.Template] % ARENA_TEMPLATES.length];
-
-export const columnCount = (s: SimState): number => templateOf(s).columns.length;
 
 /**
  * Закрепить раскладку арены. Только для тестов и сценариев.
@@ -77,6 +75,20 @@ export const redZoneY = (s: SimState): Fx =>
   Math.trunc((mirrorY(s, templateOf(s).redY) * arenaScale(s.playerCount)) / 100) | 0;
 export { RED_ZONE_RADIUS };
 
+/**
+ * Сколько колонн стоит на этой арене.
+ *
+ * Боссовая арена — тринадцатый шаблон, не входящий в раскладку обычных комнат:
+ * колонн на колесе нет, их роль играют секторы (GDD §8.1). Признак берётся из
+ * фазы забега, а не из отдельного поля: «идёт бой с боссом» уже описано, и
+ * второй признак того же разошёлся бы с первым.
+ *
+ * Раскладку остальных двенадцати шаблонов подключит отдельное изменение —
+ * здесь ему хватит той же функции.
+ */
+export const columnCount = (s: SimState): number =>
+  s.meta[Meta.Phase] === RunPhase.Boss ? 0 : templateOf(s).columns.length;
+
 export const maxX = (s: SimState): Fx => sub(s.arenaW, ARENA_PAD);
 export const maxY = (s: SimState): Fx => sub(s.arenaH, ARENA_PAD);
 
@@ -103,7 +115,8 @@ export function columnY(c: Column, s: SimState): Fx {
 /** Пересекает ли круг колонну. */
 export function hitsColumn(s: SimState, x: Fx, y: Fx, r: Fx): boolean {
   const cols = templateOf(s).columns;
-  for (let i = 0; i < cols.length; i++) {
+  const n = columnCount(s);
+  for (let i = 0; i < n; i++) {
     const c = cols[i];
     if (
       abs(sub(x, columnX(c, s))) < add(c.halfW, r) &&
@@ -134,7 +147,8 @@ export function pushOutOfColumns(s: SimState, x: Fx, y: Fx, r: Fx): void {
   pushedY = y;
 
   const cols = templateOf(s).columns;
-  for (let i = 0; i < cols.length; i++) {
+  const n = columnCount(s);
+  for (let i = 0; i < n; i++) {
     const c = cols[i];
     const dx = sub(pushedX, columnX(c, s));
     const dy = sub(pushedY, columnY(c, s));

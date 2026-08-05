@@ -18,6 +18,8 @@ import {
   WAVE,
   createState,
   makeFrame,
+  damageBoss,
+  endRun,
   roomBudget,
   setSpawning,
   spawnPlayers,
@@ -110,19 +112,44 @@ describe('расписание врагов', () => {
   });
 });
 
+/**
+ * Довести забег от конца восьмой комнаты до конца боссовой.
+ *
+ * Этаж кончается боссом, а не восьмой комнатой (GDD §8.1), поэтому проверки
+ * рамки забега обязаны идти через него: раньше они шагали из восьмой прямо на
+ * следующий этаж, и такой забег больше не существует.
+ */
+function beatBoss(s: SimState): void {
+  step(s, idle);
+  expect(s.meta[Meta.Phase]).toBe(RunPhase.Boss);
+  // Пауза расчёта, выход босса, добивание.
+  for (let i = 0; i < WAVE.roomGapTicks + 2; i++) step(s, idle);
+  damageBoss(s, s.meta[Meta.BossHP]);
+  for (let i = 0; i < 3; i++) step(s, idle);
+}
+
 describe('конец забега', () => {
-  it('восьмая комната ведёт на следующий этаж, а не в девятую', () => {
+  it('восьмая комната ведёт к боссу, а не в девятую и не на этаж', () => {
     const s = fresh();
     atRoomEnd(s, 1, ROOMS_PER_FLOOR);
     step(s, idle);
+    expect(s.meta[Meta.Phase]).toBe(RunPhase.Boss);
+    expect(s.meta[Meta.Room]).toBe(ROOMS_PER_FLOOR);
+    expect(s.meta[Meta.Floor]).toBe(1);
+  });
+
+  it('следующий этаж начинается после смерти босса', () => {
+    const s = fresh();
+    atRoomEnd(s, 1, ROOMS_PER_FLOOR);
+    beatBoss(s);
     expect(s.meta[Meta.Floor]).toBe(2);
     expect(s.meta[Meta.Room]).toBe(1);
   });
 
-  it('восьмая комната последнего этажа кончает забег победой', () => {
+  it('босс последнего этажа кончает забег победой', () => {
     const s = fresh();
     atRoomEnd(s, FLOORS_PER_RUN, ROOMS_PER_FLOOR);
-    step(s, idle);
+    beatBoss(s);
     expect(s.meta[Meta.Phase]).toBe(RunPhase.Summary);
     expect(s.meta[Meta.Victory]).toBe(1);
   });
@@ -134,7 +161,13 @@ describe('конец забега', () => {
     s.pChips.fill(0);
     s.meta[Meta.BetsWon] = 0;
     atRoomEnd(s, FLOORS_PER_RUN, ROOMS_PER_FLOOR);
-    step(s, idle);
+    beatBoss(s);
+    // Три ключа за побеждённого босса перевешивают пол, поэтому кошелёк
+    // обнуляется ПОСЛЕ боя: проверяется именно пол формулы.
+    s.pChips.fill(0);
+    s.meta[Meta.BossesBeaten] = 0;
+    s.meta[Meta.Phase] = RunPhase.Fight;
+    endRun(s, true);
     expect(s.meta[Meta.Keys]).toBe(KEYS.floor);
   });
 
@@ -142,8 +175,7 @@ describe('конец забега', () => {
     const s = fresh();
     s.pChips[0] = KEYS.chipsPerKey * 3;
     s.meta[Meta.BetsWon] = 0;
-    atRoomEnd(s, FLOORS_PER_RUN, ROOMS_PER_FLOOR);
-    step(s, idle);
+    endRun(s, true);
     expect(s.meta[Meta.Keys]).toBe(3);
   });
 

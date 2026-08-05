@@ -22,6 +22,7 @@ export * from './arena';
 export * from './combat';
 export * from './nav';
 export * from './enemies';
+export * from './boss';
 export * from './bets';
 export * from './run';
 export * from './sim';

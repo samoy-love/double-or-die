@@ -1,0 +1,14 @@
+{
+  "name": "Встречная ставка не занимает слот пари и не идёт в статистику",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "boss": true },
+    { "damageBoss": { "amount": 800 } },
+    { "tick": 1 },
+    { "expect": { "boss": { "counterBet": true } } },
+    { "expect": { "bets": { "active": { "max": 0 }, "taken": { "max": 0 } } } },
+    { "tick": 601 },
+    { "expect": { "bets": { "taken": { "max": 0 }, "won": { "max": 0 }, "lost": { "max": 0 } } } }
+  ]
+}

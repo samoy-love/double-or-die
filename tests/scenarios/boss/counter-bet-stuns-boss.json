@@ -1,0 +1,19 @@
+{
+  "name": "Попал по боссу во время встречной ставки — оглушение на четыре секунды",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "boss": true },
+    { "damageBoss": { "amount": 800 } },
+    { "tick": 1 },
+    { "expect": { "boss": { "counterBet": true, "stunned": false } } },
+    { "damageBoss": { "amount": 10 } },
+    { "tick": 1 },
+    { "expect": { "boss": { "counterBet": false, "stunned": true } } },
+    { "tick": 238 },
+    { "expect": { "boss": { "stunned": true } } },
+    { "tick": 2 },
+    { "expect": { "boss": { "stunned": false } } },
+    { "expect": { "boss": { "hpPct": { "min": 49, "max": 50 } } } }
+  ]
+}

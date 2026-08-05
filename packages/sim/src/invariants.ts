@@ -11,7 +11,7 @@
  */
 
 import { BET_COUNT, InputScheme } from './bets.generated';
-import { APPETITE, FLOORS_PER_RUN, MAX_ACTIVE_BETS, ROOMS_PER_FLOOR } from './config';
+import { APPETITE, BOSS, FLOORS_PER_RUN, MAX_ACTIVE_BETS, ROOMS_PER_FLOOR } from './config';
 import { onScreenCap } from './enemies';
 import {
   AceGesture,
@@ -174,11 +174,39 @@ function checkRun(s: SimState): void {
   if (hp > maxHp) fail(`у босса ${hp} прочности при потолке ${maxHp}`, s.tick);
   if (maxHp === 0 && hp !== 0) fail('босс жив, не будучи выпущенным', s.tick);
 
+  const bossPhase = s.meta[Meta.BossPhase];
+  if (bossPhase < 0 || bossPhase > BOSS.phases) fail(`фаза босса ${bossPhase}`, s.tick);
+  // Фаза без тела и тело без фазы — разные поломки, но обе означают босса,
+  // которого невозможно ни убить, ни увидеть.
+  if ((bossPhase === 0) !== (maxHp === 0)) {
+    fail(`фаза босса ${bossPhase} при потолке прочности ${maxHp}`, s.tick);
+  }
+
+  const bet = s.meta[Meta.CounterBetBroken];
+  if (bet < 0 || bet > 2) fail(`исход встречной ставки ${bet}`, s.tick);
+  if (bet !== 0 && maxHp === 0) fail('встречная ставка без босса', s.tick);
+
   for (let i = 0; i < MAX_BALLS; i++) {
     if (!s.ballActive[i]) continue;
+    // Шар, переживший бой, — это снаряд в комнате, где стрелять некому.
+    if (maxHp === 0) fail(`шар ${i} на арене без босса`, s.tick);
     const sector = s.ballSector[i];
     if (sector < 0 || sector >= SECTOR_COUNT) fail(`шар ${i} метит в сектор ${sector}`, s.tick);
   }
+
+  // Провал всегда один: два одновременных вырезают из колеса четверть
+  // (GDD §8.1). Сектор, который возвращается раньше, чем проваливается, —
+  // дыра в полу навсегда.
+  let fallen = 0;
+  for (let i = 0; i < SECTOR_COUNT; i++) {
+    if (s.sectorFallAt[i] === 0) continue;
+    if (maxHp === 0) fail(`сектор ${i} провален без босса`, s.tick);
+    if (s.sectorRestoreAt[i] <= s.sectorFallAt[i]) {
+      fail(`сектор ${i} возвращается раньше, чем проваливается`, s.tick);
+    }
+    fallen++;
+  }
+  if (fallen > 1) fail(`провалено секторов ${fallen}, а их бывает один`, s.tick);
 
   // Апгрейды: индекс со сдвигом на единицу, ноль — пустой слот.
   for (let p = 0; p < s.playerCount; p++) {

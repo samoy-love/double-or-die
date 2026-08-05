@@ -17,7 +17,10 @@
 
 import {
   AceGesture,
+  ANGLE_FULL,
+  BALL,
   BETS,
+  BOSS,
   BetCategory,
   BetId,
   BetProgress,
@@ -46,9 +49,19 @@ import {
   MAX_ENEMIES,
   MAX_PLAYERS,
   MAX_SPAWNS,
+  MAX_BALLS,
   Meta,
   PLAYER,
+  RunPhase,
+  SECTOR_COUNT,
   WEDGE,
+  bossStunned,
+  counterBetRunning,
+  sectorAngle,
+  wheelAngle,
+  wheelRadius,
+  wheelX,
+  wheelY,
   stakeFor,
   type SimState,
   toFloat,
@@ -335,6 +348,7 @@ export class Renderer {
 
     batch.begin();
     this.drawFloor(arenaW, arenaH, s);
+    this.drawWheel(s);
     this.drawCards(s);
     // На расчёте Туз рисуется не здесь, а поверх затемнения (`drawSettlement`):
     // под ним от него остаётся четверть непрозрачности и ничего больше.
@@ -343,6 +357,7 @@ export class Renderer {
     this.drawTelegraphs(s, alpha);
     this.drawChips(s);
     this.drawEnemies(s, alpha, fb);
+    this.drawBoss(s);
     this.drawPlayers(s, alpha, fb);
     this.drawDeals(s, fb);
     this.drawBullets(s, alpha);
@@ -435,6 +450,191 @@ export class Renderer {
     const y = toFloat(redZoneY(s));
     const r = toFloat(RED_ZONE_RADIUS);
     this.batch.push(Shape.Circle, x, y, r, r, 0, c.r, c.g, c.b, 0.14, 3, c.r, c.g, c.b, 0.55);
+  }
+
+  /**
+   * Колесо: обод, разметка секторов и провалившийся сектор.
+   *
+   * Отрисовка нарочно скупая — колесо обязано ЧИТАТЬСЯ, а не выглядеть.
+   * Вращается разметка (GDD §8.1), поэтому спицы едут, а обод стоит: если
+   * когда-нибудь поедет обод, значит вращать начали геометрию, и это будет
+   * видно глазом раньше, чем упадёт тест.
+   *
+   * Визуал доводится отдельным изменением: здесь ровно столько, чтобы бой
+   * можно было играть.
+   */
+  private drawWheel(s: SimState): void {
+    if (s.meta[Meta.Phase] !== RunPhase.Boss) return;
+    const b = this.batch;
+    const cx = toFloat(wheelX(s));
+    const cy = toFloat(wheelY(s));
+    const r = toFloat(wheelRadius(s));
+    const g = PALETTE.grid;
+
+    b.push(Shape.Ring, cx, cy, r, r, 0, 0, 0, 0, 0, STROKE, g.r, g.g, g.b, 1);
+
+    const turn = (Math.PI * 2) / SECTOR_COUNT;
+    const base = (wheelAngle(s) * Math.PI * 2) / ANGLE_FULL;
+    for (let i = 0; i < SECTOR_COUNT; i++) {
+      const a = base + turn * i;
+      b.push(
+        Shape.Capsule,
+        cx + (Math.cos(a) * r) / 2,
+        cy + (Math.sin(a) * r) / 2,
+        r / 2,
+        1.5,
+        a,
+        g.r,
+        g.g,
+        g.b,
+        0.8,
+        0,
+        0,
+        0,
+        0,
+        0,
+      );
+    }
+
+    for (let i = 0; i < SECTOR_COUNT; i++) {
+      if (s.sectorFallAt[i] === 0 || s.tick >= s.sectorRestoreAt[i]) continue;
+      const a = base + turn * i + turn / 2;
+      // Телеграф алый и пульсирующий — это язык «сейчас ударит» (GDD §21).
+      // Провалившийся сектор уже не угроза, а дыра: он рисуется фоном.
+      const falling = s.tick < s.sectorFallAt[i];
+      const c = falling ? PALETTE.danger : PALETTE.background;
+      const alpha = falling ? 0.25 + 0.25 * Math.sin(s.tick / 4) : 1;
+      const half = r * Math.sin(Math.PI / SECTOR_COUNT);
+      b.push(
+        Shape.Capsule,
+        cx + (Math.cos(a) * r) / 2,
+        cy + (Math.sin(a) * r) / 2,
+        r / 2,
+        half,
+        a,
+        c.r,
+        c.g,
+        c.b,
+        alpha,
+        0,
+        0,
+        0,
+        0,
+        0,
+      );
+    }
+  }
+
+  /**
+   * Босс, шары и полоса прочности.
+   *
+   * Метка приземления рисуется кругом ударной волны, а не точкой: игрок обязан
+   * видеть ОБЛАСТЬ, из которой надо уйти, — ровно ту, по которой считается
+   * достижимость безопасной точки (DIFFICULTY §8).
+   */
+  private drawBoss(s: SimState): void {
+    if (s.meta[Meta.BossMaxHP] === 0) return;
+    const b = this.batch;
+    const cx = toFloat(wheelX(s));
+    const cy = toFloat(wheelY(s));
+    const body = PALETTE.enemyAlt;
+    const stunned = bossStunned(s);
+
+    b.push(
+      Shape.Circle,
+      cx,
+      cy,
+      toFloat(BOSS.radius),
+      toFloat(BOSS.radius),
+      0,
+      body.r,
+      body.g,
+      body.b,
+      stunned ? 0.4 : 1,
+      STROKE,
+      ...channels(PALETTE.hudText),
+      1,
+    );
+
+    for (let i = 0; i < MAX_BALLS; i++) {
+      if (!s.ballActive[i]) continue;
+      const left = s.ballLandAt[i] - s.tick;
+      if (left <= BALL.telegraphTicks && !stunned) {
+        const a = (sectorAngle(s, s.ballSector[i]) * Math.PI * 2) / ANGLE_FULL;
+        const rim = toFloat(wheelRadius(s)) - toFloat(BALL.radius);
+        const blast = toFloat(BALL.blastRadius);
+        const d = PALETTE.danger;
+        const urgency = clamp01(1 - left / BALL.telegraphTicks);
+        b.push(
+          Shape.Circle,
+          cx + Math.cos(a) * rim,
+          cy + Math.sin(a) * rim,
+          blast,
+          blast,
+          0,
+          d.r,
+          d.g,
+          d.b,
+          0.08 + 0.14 * urgency,
+          2,
+          d.r,
+          d.g,
+          d.b,
+          0.3 + 0.5 * urgency,
+        );
+      }
+      const c = PALETTE.bullet;
+      b.push(
+        Shape.Circle,
+        toFloat(s.ballX[i]),
+        toFloat(s.ballY[i]),
+        toFloat(BALL.radius),
+        toFloat(BALL.radius),
+        0,
+        c.r,
+        c.g,
+        c.b,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+      );
+    }
+
+    // Полоса прочности: одна на всех, потому что босс один на всех.
+    const width = 600;
+    const share = s.meta[Meta.BossHP] / s.meta[Meta.BossMaxHP];
+    const x = toFloat(s.arenaW) / 2;
+    b.push(
+      Shape.Box,
+      x,
+      46,
+      width / 2,
+      9,
+      0,
+      ...channels(PALETTE.background),
+      0.7,
+      2,
+      ...channels(PALETTE.hudDim),
+      1,
+    );
+    b.push(
+      Shape.Box,
+      x - (width / 2) * (1 - share),
+      46,
+      (width / 2) * share,
+      9,
+      0,
+      ...channels(counterBetRunning(s) ? PALETTE.hudDim : PALETTE.enemy),
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+    );
   }
 
   /**
