@@ -67,7 +67,13 @@ export type StringKey =
   | 'summary.floor'
   | 'summary.keys'
   | 'summary.paid'
-  | 'summary.victory';
+  | 'summary.victory'
+  | 'upgrade.damage_up.name'
+  | 'upgrade.dash_cooldown.name'
+  | 'upgrade.drop_up.name'
+  | 'upgrade.extra_heart.name'
+  | 'upgrade.magnet.name'
+  | 'upgrade.speed_up.name';
 
 export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
   ru: {
@@ -128,6 +134,12 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
     'summary.keys': 'Ключи за забег',
     'summary.paid': 'Отдано заведению',
     'summary.victory': 'Вы ушли своими ногами',
+    'upgrade.damage_up.name': 'Урон +25%',
+    'upgrade.dash_cooldown.name': 'Кулдаун рывка −30%',
+    'upgrade.drop_up.name': 'Дроп +50%',
+    'upgrade.extra_heart.name': '+1 сердце',
+    'upgrade.magnet.name': 'Магнит',
+    'upgrade.speed_up.name': 'Скорость +15%',
   },
   en: {
     'ace.bark.applaud.1': 'It happens. It happens to everyone.',
@@ -187,5 +199,11 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
     'summary.keys': 'Keys earned',
     'summary.paid': 'Paid to the house',
     'summary.victory': 'You walked out on your own',
+    'upgrade.damage_up.name': 'Damage +25%',
+    'upgrade.dash_cooldown.name': 'Dash Cooldown −30%',
+    'upgrade.drop_up.name': 'Chip Drop +50%',
+    'upgrade.extra_heart.name': '+1 Heart',
+    'upgrade.magnet.name': 'Magnet',
+    'upgrade.speed_up.name': 'Speed +15%',
   },
 };

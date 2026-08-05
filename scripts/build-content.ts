@@ -1,11 +1,15 @@
 /**
- * Пари и строки — данные, а не код (TECH §11), но ядру симуляции нельзя ни
- * файлов, ни зависимостей. Отсюда этот генератор.
+ * Пари, апгрейды и строки — данные, а не код (TECH §11), но ядру симуляции
+ * нельзя ни файлов, ни зависимостей. Отсюда этот генератор.
  *
  * `content/bets.json` — источник правды: его правит балансировщик, его читает
  * будущий редактор в админке, он же уедет в remote config. Схема на Zod
  * проверяет его в CI. А ядро получает те же числа готовым модулем, который
  * генерируется отсюда и лежит в репозитории рядом с кодом.
+ *
+ * `content/upgrades.json` живёт по тем же правилам: чем торгует Лавка и почём
+ * — это баланс, а не логика, и трогать его обязано быть можно, не открывая
+ * ядра.
  *
  * Почему не импортировать JSON прямо в ядро: `sim` не импортирует ничего, и
  * это правило дороже удобства — на нём стоят реплеи, античит и порт на
@@ -28,6 +32,8 @@ import { z } from 'zod';
 const ROOT = join(import.meta.dirname, '..');
 const SOURCE = join(ROOT, 'content', 'bets.json');
 const TARGET = join(ROOT, 'packages', 'sim', 'src', 'bets.generated.ts');
+const UPGRADES_SOURCE = join(ROOT, 'content', 'upgrades.json');
+const UPGRADES_TARGET = join(ROOT, 'packages', 'sim', 'src', 'upgrades.generated.ts');
 const STRINGS_SOURCE = join(ROOT, 'content', 'strings.json');
 const STRINGS_TARGET = join(ROOT, 'packages', 'client', 'src', 'strings.generated.ts');
 
@@ -246,6 +252,123 @@ export const BET_COUNT = BETS.length;
 }
 
 // ---------------------------------------------------------------------------
+// Каталог апгрейдов
+// ---------------------------------------------------------------------------
+
+/**
+ * Что именно меняет апгрейд.
+ *
+ * Порядок значим ровно так же, как у схем ввода: он становится номером в
+ * `UpgradeEffect`, поэтому новый эффект дописывается В КОНЕЦ. Строкой, а не
+ * числом, по той же причине, что и прогресс пари: данные обязаны читаться
+ * человеком, а не сверяться с перечислением в чужом файле.
+ */
+const EFFECTS = ['damage', 'heart', 'dash_cooldown', 'magnet', 'drop', 'speed'] as const;
+const Effect = z.enum(EFFECTS);
+
+const Upgrade = z.object({
+  id: z.string().regex(/^[a-z][a-z0-9_]*$/),
+  /** Служебное имя: отчёты, сценарии, логи. На экран идёт строка словаря. */
+  name: z.string().min(1).max(28),
+  /** Базовая цена первого этажа; дальше — `база × 1.5^(F−1)` (ECONOMY §5). */
+  base: z.number().int().positive(),
+  effect: Effect,
+  /** Величина эффекта: процент или единицы арены, смысл задаёт `effect`. */
+  value: z.number().int().positive(),
+});
+
+const Upgrades = z
+  .object({
+    $schema: z.string().optional(),
+    version: z.literal(1),
+    upgrades: z.array(Upgrade).min(1),
+  })
+  .refine((c) => new Set(c.upgrades.map((u) => u.id)).size === c.upgrades.length, {
+    message: 'идентификаторы апгрейдов повторяются',
+  })
+  // Два апгрейда на одну величину складывались бы в разгон, которого в
+  // экономике нет, а «без повторов уже купленного» перестало бы что-то значить.
+  .refine((c) => new Set(c.upgrades.map((u) => u.effect)).size === c.upgrades.length, {
+    message: 'два апгрейда меняют одно и то же',
+  });
+
+type Upgrades = z.infer<typeof Upgrades>;
+
+/**
+ * Среднее по каталогу обязано быть 45 (ECONOMY §5).
+ *
+ * Не украшение таблицы: из среднего ценника посчитан бюджет игрока и все
+ * четыре профиля сдавливания. Каталог, съехавший со среднего, делает
+ * посчитанным не ту игру — и заметить это по отдельным ценникам невозможно.
+ */
+const MEAN_PRICE = 45;
+
+function checkMeanPrice(catalog: Upgrades): string[] {
+  const sum = catalog.upgrades.reduce((acc, u) => acc + u.base, 0);
+  if (sum === MEAN_PRICE * catalog.upgrades.length) return [];
+  return [
+    `среднее по каталогу ${sum / catalog.upgrades.length}, а ECONOMY §5 считает бюджет по ${MEAN_PRICE}`,
+  ];
+}
+
+function generateUpgrades(catalog: Upgrades): string {
+  const ids = catalog.upgrades.map((u, i) => `  ${pascal(u.id)} = ${i},`).join('\n');
+  const effects = EFFECTS.map((e, i) => `  ${pascal(e)} = ${i},`).join('\n');
+
+  const lines = catalog.upgrades.map((u) => {
+    const parts = [
+      `    id: '${u.id}'`,
+      `    name: '${u.name}'`,
+      `    base: ${u.base}`,
+      `    effect: UpgradeEffect.${pascal(u.effect)}`,
+      `    value: ${u.value}`,
+    ];
+    return `  {\n${parts.join(',\n')},\n  },`;
+  });
+
+  return `/**
+ * СГЕНЕРИРОВАННЫЙ ФАЙЛ. Правьте content/upgrades.json и запускайте npm run content.
+ *
+ * Апгрейды живут данными (TECH §11), а ядро симуляции не читает файлов и не
+ * имеет зависимостей — поэтому каталог приезжает сюда генератором. Расхождение
+ * источника и этого файла ловит CI.
+ */
+
+/** Что именно меняет апгрейд. Номер значения — позиция в списке эффектов. */
+export const enum UpgradeEffect {
+${effects}
+}
+
+/**
+ * Номер апгрейда в каталоге.
+ *
+ * Он же уезжает в слоты купленного (\`pUpgrades\`) со сдвигом на единицу: ноль
+ * там означает пустой слот, иначе первый апгрейд каталога оказался бы у всех
+ * и всегда.
+ */
+export const enum UpgradeId {
+${ids}
+}
+
+export interface UpgradeSpec {
+  readonly id: string;
+  readonly name: string;
+  /** Базовая цена первого этажа. Цена этажа F — \`база × 1.5^(F−1)\`. */
+  readonly base: number;
+  readonly effect: UpgradeEffect;
+  /** Величина эффекта: процент или единицы арены, смысл задаёт \`effect\`. */
+  readonly value: number;
+}
+
+export const UPGRADES: readonly UpgradeSpec[] = [
+${lines.join('\n')}
+];
+
+export const UPGRADE_COUNT = UPGRADES.length;
+`;
+}
+
+// ---------------------------------------------------------------------------
 // Словарь строк
 // ---------------------------------------------------------------------------
 
@@ -325,27 +448,30 @@ function placeholders(value: string): string[] {
 }
 
 /**
- * Имена пари — тоже строки словаря, а не поле каталога.
+ * Имена каталога — тоже строки словаря, а не поле данных.
  *
- * `name` в `content/bets.json` остаётся, но он служебный: по нему пари ищут в
- * сценариях, отчётах балансировщика и логах, и переводить его незачем. На
- * карту же попадает `bet.<id>.name` из словаря — иначе английская сборка
- * показывала бы русское условие, а каталог пришлось бы держать в семи копиях.
+ * `name` в `content/bets.json` и `content/upgrades.json` остаётся, но он
+ * служебный: по нему запись ищут в сценариях, отчётах балансировщика и логах,
+ * и переводить его незачем. На экран же попадает `<область>.<id>.name` из
+ * словаря — иначе английская сборка показывала бы русское условие, а каталог
+ * пришлось бы держать в семи копиях.
  */
-function checkBetNames(strings: Strings, catalog: Catalog): string[] {
+function checkNames(strings: Strings, area: string, ids: readonly string[]): string[] {
   const problems: string[] = [];
-  const expected = catalog.bets.map((b) => `bet.${b.id}.name`);
-  const have = Object.keys(strings.languages[LANGS[0]]).filter((k) => /^bet\..+\.name$/.test(k));
+  const expected = ids.map((id) => `${area}.${id}.name`);
+  const re = new RegExp(`^${area}\\..+\\.name$`);
+  const have = Object.keys(strings.languages[LANGS[0]]).filter((k) => re.test(k));
 
   for (const key of expected) {
-    if (!have.includes(key)) problems.push(`в словаре нет имени пари: ${key}`);
+    if (!have.includes(key)) problems.push(`в словаре нет имени: ${key}`);
   }
   for (const key of have) {
-    if (!expected.includes(key)) problems.push(`имя пари без пари в каталоге: ${key}`);
+    if (!expected.includes(key)) problems.push(`имя без записи в каталоге: ${key}`);
   }
   // Условие на карте — не длиннее 28 знаков (GLOSSARY, п. 7). Английское
   // держим в тех же 28: макет, перекроенный под первый же перевод, придётся
-  // кроить и под остальные шесть.
+  // кроить и под остальные шесть. Ценник лавки живёт в той же ширине по той же
+  // причине — это карточка товара, а не строка списка.
   for (const lang of LANGS) {
     for (const key of expected) {
       const value = strings.languages[lang][key];
@@ -419,6 +545,23 @@ function main(): void {
     process.exit(1);
   }
 
+  const rawUpgrades = JSON.parse(readFileSync(UPGRADES_SOURCE, 'utf8')) as unknown;
+  const parsedUpgrades = Upgrades.safeParse(rawUpgrades);
+  if (!parsedUpgrades.success) {
+    console.error('✗ content/upgrades.json не проходит схему:\n');
+    for (const issue of parsedUpgrades.error.issues) {
+      console.error(`  ${issue.path.join('.') || '(корень)'}: ${issue.message}`);
+    }
+    process.exit(1);
+  }
+
+  const meanProblems = checkMeanPrice(parsedUpgrades.data);
+  if (meanProblems.length > 0) {
+    console.error('✗ каталог апгрейдов разошёлся с экономикой:\n');
+    for (const p of meanProblems) console.error(`  ${p}`);
+    process.exit(1);
+  }
+
   const rawStrings = JSON.parse(readFileSync(STRINGS_SOURCE, 'utf8')) as unknown;
   const parsedStrings = Strings.safeParse(rawStrings);
   if (!parsedStrings.success) {
@@ -429,14 +572,26 @@ function main(): void {
     process.exit(1);
   }
 
-  const betNameProblems = checkBetNames(parsedStrings.data, parsed.data);
-  if (betNameProblems.length > 0) {
-    console.error('✗ словарь и каталог пари разошлись:\n');
-    for (const p of betNameProblems) console.error(`  ${p}`);
+  const nameProblems = [
+    ...checkNames(
+      parsedStrings.data,
+      'bet',
+      parsed.data.bets.map((b) => b.id),
+    ),
+    ...checkNames(
+      parsedStrings.data,
+      'upgrade',
+      parsedUpgrades.data.upgrades.map((u) => u.id),
+    ),
+  ];
+  if (nameProblems.length > 0) {
+    console.error('✗ словарь и каталоги разошлись:\n');
+    for (const p of nameProblems) console.error(`  ${p}`);
     process.exit(1);
   }
 
   const generated = generate(parsed.data);
+  const generatedUpgrades = generateUpgrades(parsedUpgrades.data);
   const generatedStrings = generateStrings(parsedStrings.data);
   const keyCount = Object.keys(parsedStrings.data.languages[LANGS[0]]).length;
 
@@ -444,6 +599,9 @@ function main(): void {
     const drift: string[] = [];
     if (readFileSync(TARGET, 'utf8') !== generated) {
       drift.push('packages/sim/src/bets.generated.ts ↔ content/bets.json');
+    }
+    if (readFileSync(UPGRADES_TARGET, 'utf8') !== generatedUpgrades) {
+      drift.push('packages/sim/src/upgrades.generated.ts ↔ content/upgrades.json');
     }
     if (readFileSync(STRINGS_TARGET, 'utf8') !== generatedStrings) {
       drift.push('packages/client/src/strings.generated.ts ↔ content/strings.json');
@@ -455,14 +613,16 @@ function main(): void {
       process.exit(1);
     }
     console.log(
-      `каталог пари: ${parsed.data.bets.length}, словарь: ${keyCount} ключей × ${LANGS.length} языка, сгенерированное совпадает`,
+      `каталог пари: ${parsed.data.bets.length}, апгрейдов: ${parsedUpgrades.data.upgrades.length}, словарь: ${keyCount} ключей × ${LANGS.length} языка, сгенерированное совпадает`,
     );
     return;
   }
 
   writeFileSync(TARGET, generated);
+  writeFileSync(UPGRADES_TARGET, generatedUpgrades);
   writeFileSync(STRINGS_TARGET, generatedStrings);
   console.log(`каталог пари: ${parsed.data.bets.length} → ${TARGET}`);
+  console.log(`каталог апгрейдов: ${parsedUpgrades.data.upgrades.length} → ${UPGRADES_TARGET}`);
   console.log(`словарь: ${keyCount} ключей × ${LANGS.length} языка → ${STRINGS_TARGET}`);
 }
 

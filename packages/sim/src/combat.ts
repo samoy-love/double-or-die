@@ -25,7 +25,16 @@ import {
 } from './config';
 import { add, type Fx, mul, sub } from './fixed';
 import { Stream, nextInt } from './rng';
-import { EntityFlag, MAX_BULLETS, MAX_CHIPS, MAX_ENEMIES, Meta, type SimState } from './state';
+import { damageOf, dropChancePctOf, pickupRadiusOf } from './upgrades';
+import {
+  EntityFlag,
+  MAX_BULLETS,
+  MAX_CHIPS,
+  MAX_ENEMIES,
+  MAX_PLAYERS,
+  Meta,
+  type SimState,
+} from './state';
 import { cos, sin, within, ANGLE_FULL, normalize, normX, normY } from './trig';
 
 /** Владелец снаряда, когда стрелял враг. */
@@ -144,7 +153,7 @@ export function stepBullets(s: SimState): void {
 
     if (s.bOwner[i] === ENEMY_OWNER) {
       if (hitAnyPlayer(s, x, y, radius)) s.bActive[i] = 0;
-    } else if (hitAnyEnemy(s, x, y, radius)) {
+    } else if (hitAnyEnemy(s, x, y, radius, s.bOwner[i])) {
       s.bActive[i] = 0;
     }
   }
@@ -189,12 +198,15 @@ export function stepBullets(s: SimState): void {
  * начнут слипаться (боссы, толпа Мошек в 0.7.0), замер это покажет, и тогда
  * выбор ближайшего вернётся вместе с буфером.
  */
-function hitAnyEnemy(s: SimState, x: Fx, y: Fx, radius: Fx): boolean {
+function hitAnyEnemy(s: SimState, x: Fx, y: Fx, radius: Fx, owner: number): boolean {
   for (let e = 0; e < MAX_ENEMIES; e++) {
     if (!s.eActive[e]) continue;
     const r = add(statsOf(s.eType[e]).radius, radius);
     if (!within(sub(s.eX[e], x), sub(s.eY[e], y), r)) continue;
-    damageEnemy(s, e, PISTOL.damage);
+    // Урон спрашивается у ВЛАДЕЛЬЦА снаряда, а не у первого игрока: апгрейд
+    // «Урон +25%» куплен кем-то одним, и в коопе пуля напарника обязана бить
+    // так, как бьёт его пистоль.
+    damageEnemy(s, e, damageOf(s, owner));
     return true;
   }
   return false;
@@ -246,7 +258,10 @@ export function killEnemy(s: SimState, e: number, byBlast = false): void {
   s.ePhase[e] = EnemyPhase.Idle;
   s.meta[Meta.Kills]++;
 
-  if (nextInt(s.rng, Stream.Loot, 100) < CHIP.dropChancePct) dropChip(s, x, y);
+  // Бросок по сотне и без апгрейда, и с ним: «Дроп +50%» двигает порог, а не
+  // размер броска — иначе каждое обращение к потоку `loot` дало бы другое
+  // число, и все записанные реплеи разошлись бы разом.
+  if (nextInt(s.rng, Stream.Loot, 100) < dropChancePctOf(s)) dropChip(s, x, y);
 
   // Цепь: Фитиль, погибший от чужой волны, взрывается сам (см. explode).
   if (byBlast && fuse) chainDetonate(s, e, x, y);
@@ -380,8 +395,20 @@ export function dropChip(s: SimState, x: Fx, y: Fx): void {
   }
 }
 
+/**
+ * Радиус подбора каждого игрока на этот тик.
+ *
+ * Модульный буфер и один проход по игрокам вместо поиска апгрейда на каждую
+ * пару «фишка × игрок»: фишек на полу бывает под три сотни, и двенадцать
+ * сравнений на каждую — это заметная доля тика, потраченная на ответ, который
+ * за тик не меняется.
+ */
+const pickupRadii = new Int32Array(MAX_PLAYERS);
+
 /** Фишки разлетаются, тормозят и подбираются наездом — кнопки они не требуют. */
 export function stepChips(s: SimState): void {
+  for (let p = 0; p < s.playerCount; p++) pickupRadii[p] = pickupRadiusOf(s, p);
+
   for (let i = 0; i < MAX_CHIPS; i++) {
     if (!s.cActive[i]) continue;
 
@@ -401,7 +428,7 @@ export function stepChips(s: SimState): void {
 
     for (let p = 0; p < s.playerCount; p++) {
       if ((s.pFlags[p] & EntityFlag.Alive) === 0) continue;
-      if (!within(sub(s.cX[i], s.pX[p]), sub(s.cY[i], s.pY[p]), CHIP.pickupRadius)) continue;
+      if (!within(sub(s.cX[i], s.pX[p]), sub(s.cY[i], s.pY[p]), pickupRadii[p])) continue;
       s.pChips[p] += s.cValue[i];
       s.cActive[i] = 0;
       break;

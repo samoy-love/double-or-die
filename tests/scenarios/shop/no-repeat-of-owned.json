@@ -1,0 +1,24 @@
+{
+  "name": "Купленное на прилавок не возвращается",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "upgrade": { "id": "damage_up" } },
+    { "upgrade": { "id": "extra_heart" } },
+    { "upgrade": { "id": "dash_cooldown" } },
+    { "upgrade": { "id": "magnet" } },
+    { "upgrade": { "id": "drop_up" } },
+    { "shop": true },
+    {
+      "expect": {
+        "shop": {
+          "offers": { "min": 1, "max": 1 },
+          "id": "speed_up",
+          "onSale": true,
+          "bought": false
+        }
+      }
+    },
+    { "expect": { "shop": { "id": "magnet", "onSale": false, "bought": true } } }
+  ]
+}

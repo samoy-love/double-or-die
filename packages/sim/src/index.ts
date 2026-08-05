@@ -24,6 +24,7 @@ export * from './nav';
 export * from './enemies';
 export * from './boss';
 export * from './bets';
+export * from './upgrades';
 export * from './doors';
 export * from './floor';
 export * from './run';

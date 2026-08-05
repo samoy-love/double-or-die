@@ -1,0 +1,9 @@
+{
+  "name": "Лавка предлагает три апгрейда, а не весь прайс-лист",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "shop": true },
+    { "expect": { "shop": { "offers": { "min": 3, "max": 3 }, "owned": { "min": 0, "max": 0 } } } }
+  ]
+}

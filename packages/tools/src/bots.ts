@@ -49,6 +49,8 @@ import {
   MAX_CHIPS,
   MAX_ENEMIES,
   SHARED,
+  SHOP_SLOTS,
+  canBuy,
   toFloat,
   type RngState,
 } from '@dod/sim';
@@ -762,7 +764,7 @@ export function makeBot(name: BotName, seed: number, players: number): Bot {
   // не продублирован в шести реализациях `inputs`. Профиль пробрасывается как
   // есть: обёртка не меняет того, кем сыгран забег, а отчёт спрашивает именно
   // это.
-  return { profile: bot.profile, inputs: (s) => passDoors(s, bot.inputs(s)) };
+  return { profile: bot.profile, inputs: (s) => passShop(s, passDoors(s, bot.inputs(s))) };
 }
 
 function makeRawBot(name: BotName, seed: number, players: number): Bot {
@@ -811,5 +813,43 @@ export function passDoors(s: SimState, frames: readonly InputFrame[]): readonly 
   // Фокус ставится нажатием вправо, подтверждение — следующим кадром: оба
   // действия читаются по фронту, и слить их в один кадр нельзя.
   out[0].buttons |= s.meta[Meta.DoorPick] < 0 ? Btn.NavRight : Btn.Confirm;
+  return out;
+}
+
+/**
+ * Лавка: бот обязан её пройти по той же причине, что и дверь.
+ *
+ * Экран ждёт игрока (ECONOMY §5: покупка конкурирует с долей заведения, а
+ * такое решение не принимают по таймеру), и прогон, которому некому нажать
+ * кнопку, встаёт на нём навсегда — молча и до конца отведённых тиков.
+ *
+ * Поведение простейшее и намеренно жадное: слева направо купить всё, на что
+ * хватает, и уйти. Осмысленный выбор («сначала сердце, потом урон») — предмет
+ * стратегии и приедет вместе с абстрактной моделью; до неё любая эвристика
+ * была бы выдумкой, влияющей на все балансные замеры. Но НЕ покупать нельзя:
+ * ограничители G2 и G3 считают купленное за забег, и бот, уходящий с полным
+ * кошельком, обнулял бы оба.
+ *
+ * Кнопка отпускается через тик, и это не стиль, а условие работоспособности:
+ * экран читает нажатия по фронту, а удержанная кнопка срабатывает ровно
+ * однажды. Двум подряд «вправо» нужен зазор, иначе фокус встаёт на первом
+ * товаре навсегда — и прогон вместе с ним. `canBuy` при этом спрашивается тот
+ * же самый, что и в покупке: разъедься они, бот жал бы «купить» вечно.
+ */
+export function passShop(s: SimState, frames: readonly InputFrame[]): readonly InputFrame[] {
+  if (s.meta[Meta.Phase] !== RunPhase.Reward) return frames;
+
+  const focus = s.meta[Meta.DoorPick];
+  let button: number;
+  if (focus < 0) button = Btn.NavRight;
+  else if (canBuy(s, 0, focus)) button = Btn.Confirm;
+  else if (focus < SHOP_SLOTS - 1) button = Btn.NavRight;
+  else button = Btn.Cancel;
+
+  // Кадр собирается с нуля, а не поверх боевого: зажатый огонь и биты аппетита
+  // на экране лавки не значат ничего, а вот `Confirm` от Ставки Туза значил бы
+  // покупку, которой бот не решал.
+  const out = frames.map((f) => ({ ...f, buttons: 0 }));
+  if (s.tick % 2 === 0) out[0].buttons = button;
   return out;
 }

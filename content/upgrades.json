@@ -1,0 +1,48 @@
+{
+  "$schema": "./upgrades.schema.md",
+  "version": 1,
+  "upgrades": [
+    {
+      "id": "damage_up",
+      "name": "Урон +25%",
+      "base": 60,
+      "effect": "damage",
+      "value": 125
+    },
+    {
+      "id": "extra_heart",
+      "name": "+1 сердце",
+      "base": 55,
+      "effect": "heart",
+      "value": 1
+    },
+    {
+      "id": "dash_cooldown",
+      "name": "Кулдаун рывка −30%",
+      "base": 45,
+      "effect": "dash_cooldown",
+      "value": 70
+    },
+    {
+      "id": "magnet",
+      "name": "Магнит",
+      "base": 40,
+      "effect": "magnet",
+      "value": 250
+    },
+    {
+      "id": "drop_up",
+      "name": "Дроп +50%",
+      "base": 40,
+      "effect": "drop",
+      "value": 150
+    },
+    {
+      "id": "speed_up",
+      "name": "Скорость +15%",
+      "base": 30,
+      "effect": "speed",
+      "value": 115
+    }
+  ]
+}
