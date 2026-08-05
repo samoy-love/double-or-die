@@ -68,11 +68,13 @@ export type StringKey =
   | 'overlay.paused'
   | 'overlay.stats'
   | 'overlay.update'
+  | 'screen.cancel.key'
+  | 'screen.cancel.pad'
   | 'screen.confirm.key'
   | 'screen.confirm.pad'
   | 'settlement.title'
   | 'shop.hint'
-  | 'shop.item'
+  | 'shop.leave'
   | 'shop.sold'
   | 'shop.title'
   | 'summary.again'
@@ -125,7 +127,7 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
     'error.webgl2':
       'WebGL2 недоступен: без него игра не рисуется. Обновите браузер или включите аппаратное ускорение.',
     'haggle.bet': 'Взять пари в следующей комнате',
-    'haggle.none': 'Продавать нечего',
+    'haggle.none': 'Заведение пока не выкупает',
     'haggle.sell': 'Продать апгрейд',
     'haggle.title': 'Туз предлагает выбор',
     'house.cut': 'Доля заведения',
@@ -147,11 +149,13 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
     'overlay.stats':
       '{build}  ·  тик {tick}  ·  {fps} FPS  ·  сид {seed}  ·  игроков {players}  ·  {hash}',
     'overlay.update': 'Доступна новая версия ({build}) — обновите страницу',
+    'screen.cancel.key': 'Q — отказаться',
+    'screen.cancel.pad': 'B — отказаться',
     'screen.confirm.key': 'Enter — подтвердить',
     'screen.confirm.pad': 'RB — подтвердить',
     'settlement.title': 'Расчёт',
     'shop.hint': 'Заведение не торгуется',
-    'shop.item': 'Апгрейд',
+    'shop.leave': 'Уйти без покупки',
     'shop.sold': 'Продано',
     'shop.title': 'Лавка',
     'summary.again': 'Ещё разок',
@@ -203,7 +207,7 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
     'error.webgl2':
       'WebGL2 is unavailable: the game cannot draw without it. Update the browser or enable hardware acceleration.',
     'haggle.bet': 'Take a bet in the next room',
-    'haggle.none': 'Nothing to sell',
+    'haggle.none': 'The house does not buy back yet',
     'haggle.sell': 'Sell an upgrade',
     'haggle.title': 'The Ace offers a choice',
     'house.cut': 'House cut',
@@ -225,11 +229,13 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
     'overlay.stats':
       '{build}  ·  tick {tick}  ·  {fps} FPS  ·  seed {seed}  ·  players {players}  ·  {hash}',
     'overlay.update': 'A new build ({build}) is available — reload the page',
+    'screen.cancel.key': 'Q to decline',
+    'screen.cancel.pad': 'B to decline',
     'screen.confirm.key': 'Enter to confirm',
     'screen.confirm.pad': 'RB to confirm',
     'settlement.title': 'Settlement',
     'shop.hint': 'The house does not haggle',
-    'shop.item': 'Upgrade',
+    'shop.leave': 'Leave empty-handed',
     'shop.sold': 'Sold',
     'shop.title': 'Shop',
     'summary.again': 'One more',

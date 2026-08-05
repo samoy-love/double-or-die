@@ -270,6 +270,31 @@ for (const money of [
   });
 }
 
+/**
+ * Витрина лавки рисуется по настоящему состоянию.
+ *
+ * Проверяется не красота, а то, что экран читает `shopItem`/`shopPrice`, а не
+ * собственную выдумку: фаза — награда, кадр не пуст и не одноцветен.
+ */
+test('экран лавки рисуется, а не оставляет пустой кадр', async ({ page }) => {
+  await page.goto('/?debug=1&autopause=1');
+  await page.waitForFunction(() => '__DOD__' in window, null, { timeout: 30_000 });
+
+  const shelf = await page.evaluate(() => {
+    const d = window.__DOD__!;
+    d.newRun({ seed: 3, players: 1 });
+    d.mute(true);
+    d.give({ chips: 200 });
+    d.shop();
+    return d.state().phase;
+  });
+
+  const frame = await screenFrame(page);
+  expect(shelf, 'фаза не награды — лавка не открылась').toBe(3);
+  expect(frame.shapes, 'экран пуст — рисовать было нечего').toBeGreaterThan(20);
+  expect(frame.colorCount, 'кадр почти одноцветный').toBeGreaterThan(6);
+});
+
 for (const screen of [{ name: 'итогов', phase: 6 }] as const) {
   test(`экран ${screen.name} рисуется, а не оставляет пустой кадр`, async ({ page }) => {
     await page.goto('/?debug=1&autopause=1');

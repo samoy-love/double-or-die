@@ -17,9 +17,10 @@
  *   2. этими путями фокус доходит до любого элемента и ниоткуда не застревает,
  *      причём одинаково с геймпада и с клавиатуры.
  *
- * Экраны лавки и торга сюда пока не попадают: своего фокуса в ядре у них нет
- * (`Meta` не знает ни слота лавки, ни варианта торга), и проверять было бы
- * нечего, кроме собственной выдумки клиента.
+ * Экран торга проверяется иначе, чем дверь и лавка, и это свойство ядра, а не
+ * поблажка тесту: варианта там выбирают КНОПКОЙ, а не курсором
+ * (`stepHouseCut`), поэтому «достижимость» для него означает, что у каждого
+ * живого варианта есть свой путь на обеих схемах.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -29,15 +30,19 @@ import {
   MAX_DOORS,
   Meta,
   RunPhase,
+  SHOP_SLOTS,
   type InputFrame,
   type SimState,
   canPay,
   createState,
+  debtOnBet,
   enterHouseCut,
   offerDoors,
+  openShop,
   spawnPlayers,
   stepDoors,
   stepHouseCut,
+  stepShop,
 } from '@dod/sim';
 import { SCREEN_BINDINGS } from '@dod/client/input';
 
@@ -158,6 +163,59 @@ describe.each(['pad', 'keys'] as const)('экран двери с «%s»', (sche
   });
 });
 
+describe.each(['pad', 'keys'] as const)('лавка с «%s»', (scheme) => {
+  const left = bits(scheme, Btn.NavLeft);
+  const right = bits(scheme, Btn.NavRight);
+  const confirm = bits(scheme, Btn.Confirm);
+  const cancel = bits(scheme, Btn.Cancel);
+
+  function atShop(chips: number): SimState {
+    const s = createState(7, 1);
+    spawnPlayers(s);
+    s.pChips[0] = chips;
+    openShop(s);
+    return s;
+  }
+
+  it('достижим каждый слот прилавка', () => {
+    const s = atShop(1000);
+    tap(s, right, stepShop);
+    expect(s.meta[Meta.DoorPick]).toBe(0);
+    for (let i = 1; i < SHOP_SLOTS; i++) {
+      tap(s, right, stepShop);
+      expect(s.meta[Meta.DoorPick]).toBe(i);
+    }
+    for (let i = SHOP_SLOTS - 2; i >= 0; i--) {
+      tap(s, left, stepShop);
+      expect(s.meta[Meta.DoorPick]).toBe(i);
+    }
+  });
+
+  it('упор в край не роняет выбор', () => {
+    const s = atShop(1000);
+    tap(s, right, stepShop);
+    for (let i = 0; i < 5; i++) tap(s, left, stepShop);
+    expect(s.meta[Meta.DoorPick]).toBe(0);
+    for (let i = 0; i < 5 + SHOP_SLOTS; i++) tap(s, right, stepShop);
+    expect(s.meta[Meta.DoorPick]).toBe(SHOP_SLOTS - 1);
+  });
+
+  it('покупка идёт по фокусу, а выход — отказом', () => {
+    const s = atShop(1000);
+    tap(s, right, stepShop);
+    const price = s.shopPrice[0];
+    const before = s.pChips[0];
+    stepShop(s, [frame(confirm)]);
+    stepShop(s, [frame(0)]);
+    expect(s.pChips[0], 'покупка не списала цену выбранного слота').toBe(before - price);
+    expect(s.shopItem[0], 'товар остался на прилавке').toBe(0);
+
+    // Уйти без покупки — законное решение, и оно обязано быть доступно с
+    // обеих схем: экран, из которого нельзя выйти, отнимает выбор «унести».
+    expect(stepShop(s, [frame(cancel)]), 'из лавки не выйти отказом').toBe(true);
+  });
+});
+
 describe.each(['pad', 'keys'] as const)('экран платы с «%s»', (scheme) => {
   const confirm = bits(scheme, Btn.Confirm);
   const cancel = bits(scheme, Btn.Cancel);
@@ -180,10 +238,23 @@ describe.each(['pad', 'keys'] as const)('экран платы с «%s»', (sche
     }
   });
 
-  it('нехватка не запирает игрока: экран закрывается долгом', () => {
+  /*
+   * Оба живых варианта торга проверяются по отдельности: экран рисует их
+   * разными карточками с разными кнопками, и перепутанные местами они означали
+   * бы, что игрок берёт проклятие, целясь в пари.
+   */
+  it('подтверждение при нехватке берёт пари, а не долг', () => {
     const s = atHouseCut(0);
     expect(canPay(s), 'кошелька хватило — проверяется не тот случай').toBe(false);
     expect(stepHouseCut(s, [frame(confirm)])).toBe(true);
-    expect(s.meta[Meta.Debt], 'долг не записан — плата пропала').toBeGreaterThan(0);
+    expect(s.meta[Meta.Debt], 'недостача не записана').toBeGreaterThan(0);
+    expect(debtOnBet(s), 'вместо пари выдано проклятие').toBe(true);
+  });
+
+  it('отказ при нехватке уводит в долг с проклятием', () => {
+    const s = atHouseCut(0);
+    expect(stepHouseCut(s, [frame(cancel)])).toBe(true);
+    expect(s.meta[Meta.Debt]).toBeGreaterThan(0);
+    expect(debtOnBet(s), 'долг оказался пари — экран назвал бы кнопку неверно').toBe(false);
   });
 });

@@ -30,6 +30,7 @@ import {
   enterHouseCut,
   fromFloat,
   nearMissOf,
+  openShop,
   progressOf,
   putCard,
   setSpawning,
@@ -259,6 +260,15 @@ export interface DebugApi {
    * ставит и фазу, и сумму по формуле этажа, как в настоящем забеге.
    */
   houseCut(): void;
+  /**
+   * Открыть лавку — входом ядра, а не подменой фазы.
+   *
+   * Нужна той же проверке отрисовки: лавка стоит за дверью «Лавка» и за
+   * зачищенной комнатой, а бот до неё доходит не всякий раз и не быстро.
+   * `openShop` раскладывает витрину из потока `shop` и назначает цены по
+   * этажу — то же самое, что увидит игрок.
+   */
+  shop(): void;
   /** Нарисовать кадр немедленно: в невидимой вкладке кадров не бывает. */
   render(): void;
   /** Нагрузить сцену для замера бюджета кадра: враги и частицы разом. */
@@ -554,6 +564,11 @@ export function installDebugApi(loop: GameLoop): void {
     houseCut() {
       enterHouseCut(loop.state);
       log('house_cut', { floor: loop.state.meta[Meta.Floor], cut: loop.state.meta[Meta.HouseCut] });
+    },
+
+    shop() {
+      openShop(loop.state);
+      log('shop', { items: [...loop.state.shopItem], prices: [...loop.state.shopPrice] });
     },
 
     render: () => loop.renderOnce(),

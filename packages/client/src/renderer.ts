@@ -53,9 +53,10 @@ import {
   BetId,
   BetProgress,
   BetState,
+  HOUSE,
   MAX_ACTIVE_BETS,
-  MAX_UPGRADE_SLOTS,
   SHOP_SLOTS,
+  UPGRADES,
   FX_ONE,
   cashOutValue,
   nearMissOf,
@@ -1836,6 +1837,63 @@ export class Renderer {
     this.screenLine(pad ? t('screen.confirm.pad') : t('screen.confirm.key'), w, y, PALETTE.hudDim);
   }
 
+  /** То же для отказа: на экранах, где отказ — это отдельный выход, а не «назад». */
+  private cancelHint(w: number, y: number): void {
+    const pad = this.scheme === InputScheme.Gamepad;
+    this.screenLine(pad ? t('screen.cancel.pad') : t('screen.cancel.key'), w, y, PALETTE.hudDim);
+  }
+
+  /**
+   * Строка, переносимая по словам в заданную ширину, по центру.
+   *
+   * Обрезки многоточием здесь нет намеренно: переносится ИМЯ — товара, пари,
+   * варианта торга, — и обрезанное имя не опознаётся вовсе, а макет держит
+   * +40% длины под немецкий (UX §4). Перенос по пробелам, без переносов внутри
+   * слова: слово длиннее карточки честнее выпустить за край, чем разорвать по
+   * незнакомым правилам чужого языка.
+   */
+  private wrapped(
+    text: string,
+    x: number,
+    y: number,
+    maxW: number,
+    size: number,
+    colour: Rgb,
+    alpha = 0.95,
+  ): void {
+    const words = text.split(' ');
+    const lines: string[] = [];
+    let line = '';
+    for (const word of words) {
+      const next = line === '' ? word : `${line} ${word}`;
+      // До готовности атласа ширина нулевая, и перенос не нужен: букв нет.
+      if (line !== '' && this.text.width(next, size, Face.Ui) > maxW) {
+        lines.push(line);
+        line = word;
+        continue;
+      }
+      line = next;
+    }
+    if (line !== '') lines.push(line);
+
+    const step = size * 1.35;
+    const top = y - (step * (lines.length - 1)) / 2;
+    for (let i = 0; i < lines.length; i++) {
+      this.text.push(
+        lines[i],
+        x,
+        top + i * step,
+        size,
+        Face.Ui,
+        colour.r,
+        colour.g,
+        colour.b,
+        alpha,
+        'center',
+      );
+    }
+  }
+
   /**
    * Карточка экрана: та же тёмная заливка и несущая обводка, что у арены.
    *
@@ -1925,15 +1983,27 @@ export class Renderer {
         continue;
       }
 
-      // Пиктограмма товара — «плюс в кольце»: апгрейд прибавляет, и это всё,
-      // что о нём сегодня известно. Форма, а не буква: на неё смотрят раньше,
-      // чем читают подпись.
+      // Пиктограмма товара — «плюс в кольце»: апгрейд прибавляет. Форма
+      // общая на все шесть намеренно: своих пиктограмм у апгрейдов нет, а
+      // выдуманная «на глаз» врала бы о том, что именно покупают, — имя под
+      // ней говорит это точно.
       const ring = 34;
-      this.batch.push(Shape.Ring, x, h / 2 - 40, ring, ring, 0, 0, 0, 0, 0, 4, c.r, c.g, c.b, 1);
-      this.batch.push(Shape.Box, x, h / 2 - 40, 16, 3, 0, c.r, c.g, c.b, 1, 0, 0, 0, 0, 0);
-      this.batch.push(Shape.Box, x, h / 2 - 40, 3, 16, 0, c.r, c.g, c.b, 1, 0, 0, 0, 0, 0);
+      this.batch.push(Shape.Ring, x, h / 2 - 46, ring, ring, 0, 0, 0, 0, 0, 4, c.r, c.g, c.b, 1);
+      this.batch.push(Shape.Box, x, h / 2 - 46, 16, 3, 0, c.r, c.g, c.b, 1, 0, 0, 0, 0, 0);
+      this.batch.push(Shape.Box, x, h / 2 - 46, 3, 16, 0, c.r, c.g, c.b, 1, 0, 0, 0, 0, 0);
 
-      this.text.push(t('shop.item'), x, h / 2 + 20, 15, Face.Ui, c.r, c.g, c.b, 0.9, 'center');
+      /*
+       * Имя товара — из словаря по идентификатору каталога, как у пари.
+       *
+       * `name` в `content/upgrades.json` служебный: он для отчётов
+       * балансировщика и сценариев и не переводится. Английская сборка,
+       * взявшая его на витрину, показала бы «Кулдаун рывка −30%».
+       *
+       * Строка переносится по словам: «Кулдаун рывка −30%» в карточку шириной
+       * 200 единиц не влезает ни в одном языке, а немецкий держит +40%
+       * (UX §4). Резать многоточием нечего — товар опознаётся именно именем.
+       */
+      this.wrapped(upgradeName(item - 1), x, h / 2 + 10, 190, 15, c);
       // Цена — фишками и в языке арены: золотой кружок слева от числа, ровно
       // как под картой пари, где называется кон.
       const money = afford ? PALETTE.chip : PALETTE.danger;
@@ -1959,6 +2029,11 @@ export class Renderer {
 
     const next = this.screenValue(t('house.purse'), purse, w, h / 2 + 190, 18, PALETTE.chip);
     this.confirmHint(w, next);
+    // Уйти без покупки — законное решение, и о нём надо сказать: фишки
+    // конвертируются в ключи в конце забега (ECONOMY §12), и «унести»
+    // конкурирует с «потратить» на равных.
+    this.screenLine(t('shop.leave'), w, next + 28);
+    this.cancelHint(w, next + 52);
   }
 
   /**
@@ -1993,31 +2068,65 @@ export class Renderer {
     y = this.screenValue(t('house.short'), cut - purse, w, y, 18, PALETTE.danger, PALETTE.danger);
 
     /*
-     * Три варианта торга — карточками в ряд, как двери.
+     * Три варианта торга — карточками в ряд, как двери, но БЕЗ бегающего
+     * фокуса, и это не упрощение вёрстки.
      *
-     * Форма повторяет экран двери намеренно: это то же самое решение — какой
-     * ценой идти дальше, — и второй язык выбора игроку заводить незачем.
+     * В ядре у торга своей навигации нет: подтверждение берёт пари, отказ
+     * уводит в долг (`stepHouseCut`), то есть вариант выбирается КНОПКОЙ, а не
+     * курсором. Нарисованный поверх этого фокус выбирал бы что-то одно, а
+     * нажатие делало бы своё — экран врал бы ровно там, где игрок расстаётся с
+     * этажом. Поэтому у каждой карточки написана своя кнопка, и написана она
+     * по текущей схеме ввода.
      *
-     * Фокус берётся из `DoorPick`: своего поля у торга в ядре нет, а
-     * подтверждение по нему уже ходит через `Confirm`. Пока ядро знает только
-     * долг, фокус по умолчанию стоит на нём — на том варианте, который
-     * действительно случится по нажатию.
+     * Продажа апгрейда — третий вариант GDD §12А.2 — гаснет всегда: в ядре её
+     * нет, и обещать её кнопкой нельзя (UX §2). Нарисована она всё равно:
+     * тусклая карточка говорит «такой выход у заведения есть», а пустое место
+     * не говорит ничего.
      */
-    const options: readonly [string, boolean][] = [
-      [t('haggle.bet'), true],
-      [hasUpgrades(s) ? t('haggle.sell') : t('haggle.none'), hasUpgrades(s)],
-      [t('house.debt'), true],
+    const pad = this.scheme === InputScheme.Gamepad;
+    /*
+     * Золотом — то, что случится по подтверждению, и это тот же язык, что на
+     * двери и на прилавке: «вот это возьмётся, если нажать». Пари здесь и есть
+     * лучший из трёх выходов — он оставляет игроку шанс рассчитаться, — а долг
+     * остаётся равноправной, но не подсвеченной кнопкой.
+     */
+    const options: readonly [string, string, boolean, boolean][] = [
+      [t('haggle.bet'), pad ? t('screen.confirm.pad') : t('screen.confirm.key'), true, true],
+      [t('haggle.sell'), t('haggle.none'), false, false],
+      [t('house.debt'), pad ? t('screen.cancel.pad') : t('screen.cancel.key'), true, false],
     ];
-    const pick = s.meta[Meta.DoorPick] >= 0 ? s.meta[Meta.DoorPick] : options.length - 1;
     const gap = 360;
-    const row = y + 50;
+    const row = y + 60;
     for (let i = 0; i < options.length; i++) {
-      const [label, available] = options[i];
+      const [label, button, available, primary] = options[i];
       const x = w / 2 + (i - (options.length - 1) / 2) * gap;
-      const c = this.screenCard(x, row, 160, 52, i === pick, available);
-      this.text.push(label, x, row, 15, Face.Ui, c.r, c.g, c.b, available ? 1 : 0.7, 'center');
+      const c = this.screenCard(x, row, 165, 62, primary, available);
+      this.wrapped(label, x, row - 14, 300, 15, c, available ? 1 : 0.7);
+      const dim = PALETTE.hudDim;
+      this.text.push(
+        button,
+        x,
+        row + 34,
+        13,
+        Face.Ui,
+        dim.r,
+        dim.g,
+        dim.b,
+        available ? 0.9 : 0.5,
+        'center',
+      );
     }
-    this.confirmHint(w, row + 100);
+
+    /*
+     * Кон принудительного пари — это НЕДОСТАЧА, а не тир аппетита
+     * (`takeForcedBet` в ядре), и назвать его обязан экран: игрок соглашается
+     * на пари, а не на «что-нибудь». Множитель рядом — вторая половина сделки,
+     * и берётся он у той же стороны, что его назначила, а не переписывается
+     * сюда числом.
+     */
+    const bet = w / 2 - gap;
+    drawNumber(this.batch, cut - purse, bet - 28, row + 76, 13, PALETTE.accent);
+    drawMultiplier(this.batch, HOUSE.forcedBetMultiplier, bet + 16, row + 76, 11, PALETTE.accent);
   }
 
   /**
@@ -2529,14 +2638,6 @@ function walletOf(s: SimState): number {
   return total;
 }
 
-/** Есть ли у стола хоть один купленный апгрейд: без него торг продавать нечего. */
-function hasUpgrades(s: SimState): boolean {
-  for (let i = 0; i < s.playerCount * MAX_UPGRADE_SLOTS; i++) {
-    if (s.pUpgrades[i] !== 0) return true;
-  }
-  return false;
-}
-
 /** Есть ли красная зона в этой комнате: карта на полу или активное пари. */
 function redZoneInPlay(s: SimState): boolean {
   if (RED_ZONE_BET < 0) return false;
@@ -2865,6 +2966,16 @@ function drawSlash(
  * данные ради приведения, которого всё равно не избежать.
  */
 const betName = (id: string): string => t(`bet.${id}.name` as StringKey);
+
+/**
+ * Имя апгрейда из словаря по идентификатору каталога.
+ *
+ * Ровно та же причина, что у `betName`: `name` в `content/upgrades.json`
+ * служебный и не переводится, а на витрину идёт `upgrade.<id>.name`. Паритет
+ * ключа и каталога держит генератор контента, а не это приведение.
+ */
+const upgradeName = (index: number): string =>
+  t(`upgrade.${String(UPGRADES[index].id)}.name` as StringKey);
 
 /**
  * Имя типа двери из словаря.
