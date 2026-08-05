@@ -7,10 +7,12 @@
  *   ?seed=1234&players=2&autopause=1
  */
 
+import { autoReport, downloadBugReport, reportFileName } from './bugreport';
 import { GameLoop } from './loop';
 import { BUILD, IS_DEV, registerServiceWorker, watchForUpdates } from './version';
 import { Overlay } from './overlay';
 import { log, logError } from './protocol';
+import { Profile } from './save';
 
 async function main(): Promise<void> {
   const params = new URLSearchParams(location.search);
@@ -34,10 +36,47 @@ async function main(): Promise<void> {
 
   const loop = new GameLoop(canvas, { seed, players, autopause });
   const overlay = new Overlay(loop, IS_DEV || debugOverlay);
+
+  /*
+   * Профиль игрока: язык, настройки, Ключи, счётчик забегов.
+   *
+   * Читается ДО первого кадра и никогда не роняет запуск: битый или чужой
+   * сейв даёт умолчания (`save.ts`). Молча, но не бесследно — запись в
+   * консоли остаётся, иначе потерянные настройки выглядят как случайность.
+   */
+  const profile = new Profile();
+  if (profile.problem) log('save_recovered', { source: profile.source, problem: profile.problem });
+  loop.audio.setVolume(profile.save.settings.volume);
+  loop.feel.flashScale = profile.save.settings.flash;
+  // Забег считается на старте, а не по итогам: до экрана итогов игрок может
+  // закрыть вкладку, и несчитанные забеги обесценили бы сам счётчик.
+  profile.countRun();
+
   // Остановка по инварианту обязана быть видна на экране, а не только в
   // консоли: замерший кадр без объяснения читается как поломка интерфейса, а
   // не как дефект ядра. В релизе инвариантов нет, и звать это некому.
-  loop.onHalt((message, s, tick) => overlay.showHalt(message, s, tick));
+  loop.onHalt((message, s, tick) => {
+    // Отчёт собирается САМ и до плашки: нарушенный инвариант — это дефект
+    // ядра, и лог инпутов к нему ценнее любого пересказа словами. Файл
+    // остаётся на машине игрока, никуда не уходит.
+    const report = autoReport(loop, message);
+    overlay.showHalt(message, s, tick, report ? reportFileName(report) : undefined);
+  });
+
+  /*
+   * Баг-репорт руками — одна клавиша.
+   *
+   * F8, а не кнопка в интерфейсе: интерфейс игры рисуется внутри канваса и
+   * до 0.4.0 меню не имеет вовсе, а репорт нужен ровно в тот момент, когда
+   * на экране происходит странное. Отдельная клавиша не пересекается ни с
+   * одной боевой (`input.ts`) и работает в любой фазе забега.
+   */
+  window.addEventListener('keydown', (e) => {
+    if (e.code !== 'F8') return;
+    e.preventDefault();
+    const report = downloadBugReport(loop, 'manual');
+    overlay.showReport(reportFileName(report));
+  });
   if (stable) {
     loop.feel.stable = true;
     document.documentElement.dataset.stable = '1';

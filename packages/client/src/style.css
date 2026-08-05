@@ -89,9 +89,26 @@ body {
   color: #ff3300;
 }
 
+/* Отметка о сохранённом баг-репорте: файл уходит в «Загрузки» молча, и без
+   неё нажатие F8 выглядит как ничего не сделавшее. */
+.toast {
+  position: fixed;
+  bottom: 12px;
+  left: 50%;
+  padding: 8px 14px;
+  transform: translateX(-50%);
+  font-size: 13px;
+  color: #f2e4c4;
+  background: rgb(26 16 51 / 0.92);
+  border: 1px solid #2f1f55;
+  border-radius: 8px;
+  pointer-events: none;
+}
+
 /* Режим стабильного кадра для сравнения скриншотов между версиями. */
 html[data-stable='1'] .overlay,
 html[data-stable='1'] .update,
-html[data-stable='1'] .halt {
+html[data-stable='1'] .halt,
+html[data-stable='1'] .toast {
   display: none;
 }
