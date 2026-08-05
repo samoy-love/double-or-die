@@ -24,7 +24,15 @@ import {
   spawnPlayers,
   step,
 } from '@dod/sim';
-import { BOT_NAMES, isBotName, makeBot, type BotName } from './bots';
+import {
+  BOT_NAMES,
+  LEGACY_BOT_NAMES,
+  SKILL_NAMES,
+  STRATEGY_NAMES,
+  isBotName,
+  makeBot,
+  type BotName,
+} from './bots';
 import {
   CONFIG_VERSION,
   type Golden,
@@ -33,6 +41,7 @@ import {
   verifyGolden,
 } from './golden';
 import { parseScenario, runScenario, type ScenarioResult } from './scenario';
+import { Observer } from './observe';
 import { checkSafety } from './safety';
 
 interface Args {
@@ -52,6 +61,7 @@ interface Args {
   recordGolden: string | null;
   rebaseline: boolean;
   safety: boolean;
+  observe: boolean;
 }
 
 /**
@@ -162,6 +172,7 @@ function parseArgs(argv: string[]): Args {
     recordGolden: null,
     rebaseline: false,
     safety: false,
+    observe: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
@@ -227,6 +238,9 @@ function parseArgs(argv: string[]): Args {
       case '--safety':
         a.safety = true;
         break;
+      case '--observe':
+        a.observe = true;
+        break;
       case '--json':
         a.json = true;
         break;
@@ -255,12 +269,17 @@ Headless-раннер Double or Die
   --runs <n>            сколько забегов прогнать
   --ticks <n>           длина забега в тиках (умолчание 3600 = минута)
   --players <n>         игроков 1..${MAX_PLAYERS}
-  --bot <имя>           ${BOT_NAMES.join(' | ')}
+  --bot <имя>           ${LEGACY_BOT_NAMES.join(' | ')} | mixed
+                        либо профиль «навык:стратегия»
+                        навык:     ${SKILL_NAMES.join(' | ')}
+                        стратегия: ${STRATEGY_NAMES.join(' | ')}
   --json                машинный вывод
   --out <файл>          записать отчёт в файл вместо stdout
   --determinism-check   один сид дважды, сверка хешей
   --seeds <n>           сколько сидов проверять в --determinism-check
   --safety              проверять достижимость безопасной точки (D4) каждый тик
+  --observe             добавить к каждому забегу разбор: пари по id, тир,
+                        исходы, длительности комнат, кто отнял сердце
 
   --scenario <путь>     прогнать сценарий: файл или каталог
   --golden <путь>       сверить эталонные реплеи: файл или каталог
@@ -318,11 +337,22 @@ const share = (part: number, whole: number): number =>
  * начала — к тому времени рядом будет тысяча золотых прогонов, которые
  * придётся переснимать.
  */
-function runOnce(seed: number, players: number, ticks: number, bot: BotName, safety = false) {
+function runOnce(
+  seed: number,
+  players: number,
+  ticks: number,
+  bot: BotName,
+  safety = false,
+  observe = false,
+) {
   const s = createState(seed, players);
   spawnPlayers(s);
   const b = makeBot(bot, seed, players);
   const errors: string[] = [];
+  // Наблюдатель заводится только по просьбе: он копирует пулы врагов и
+  // снарядов перед каждым тиком, и платить за это в прогонах, которым нужен
+  // один хеш, незачем.
+  const observer = observe ? new Observer(s) : null;
 
   // Карты считаются переходом слота 0→1, а не суммой розданных за комнату:
   // так в «предложено» попадает и то, что Туз подбрасывает посреди боя.
@@ -347,7 +377,9 @@ function runOnce(seed: number, players: number, ticks: number, bot: BotName, saf
   let betTicks = 0;
 
   for (let t = 0; t < ticks; t++) {
+    observer?.before(s);
     step(s, b.inputs(s));
+    observer?.after(s);
 
     for (let i = 0; i < MAX_CARDS; i++) {
       const on = s.kActive[i];
@@ -407,6 +439,10 @@ function runOnce(seed: number, players: number, ticks: number, bot: BotName, saf
   return {
     hash: hashHex(s),
     ticks: s.tick,
+    // Кем сыгран забег. У `mixed` имя бота одно на прогон, а профиль свой на
+    // каждый забег, и ограничители считаются по второму: G3 спрашивает про
+    // играющего на ставках, G5 — про наглого, G4 — про опытных.
+    profile: b.profile,
     // Кошелёк и сердца — списком по игрокам, а не суммой: G16 («пари за забег
     // у самого пассивного не меньше половины от самого активного») сравнивает
     // игроков между собой, и сумма стирает ровно то, что он ищет.
@@ -438,6 +474,10 @@ function runOnce(seed: number, players: number, ticks: number, bot: BotName, saf
       medianTicks: median(roomTicks),
       ticks: roomTicks,
     },
+    // Блок появляется только при --observe: его отсутствие обязано быть
+    // видно. Пустой блок в каждом отчёте читался бы как «наблюдали и ничего
+    // не нашли», а это ровно то враньё, от которого отчёт и защищают.
+    ...(observer ? { observed: observer.report() } : {}),
     errors,
   };
 }
@@ -621,7 +661,7 @@ function main(): void {
   const results = [];
   let failures = 0;
   for (let i = 0; i < a.runs; i++) {
-    const r = runOnce(a.seed + i, a.players, a.ticks, a.bot, a.safety);
+    const r = runOnce(a.seed + i, a.players, a.ticks, a.bot, a.safety, a.observe);
     if (r.errors.length > 0) failures++;
     results.push({ seed: a.seed + i, ...r });
   }
