@@ -13,6 +13,31 @@
  *
  * Рендер интерполирует между тиками: симуляция идёт ровно 60 Гц, а экран
  * может быть 120 или 144 — плавность достаётся бесплатно.
+ *
+ * ## Визуальный язык: тёмная заливка и несущая обводка
+ *
+ * Сущность арены рисуется общей тёмной заливкой (`ENTITY_FILL`) и обводкой
+ * цветом своей роли толщиной `STROKE` — см. `entity()` ниже. Роль опознаётся
+ * ОБВОДКОЙ: заливка у всех одна и от пола отличается на ΔE 2.3, то есть
+ * фигуру целиком держат четыре единицы контура. Отсюда и пара «обводка против
+ * заливки» в гейте контраста: обводка, сблизившаяся с заливкой, стирает
+ * сущность молча, не задев ни одной другой проверки.
+ *
+ * Исключений три, и они объявлены здесь, а не по месту:
+ *
+ *   — **снаряды**. Пуля рисуется капсулой с полутолщиной 6: обводка в 4
+ *     единицы съела бы её почти целиком, и самое яркое на экране (GDD §21)
+ *     превратилось бы в тёмную точку с каймой. Снаряд остаётся сплошным, и
+ *     это не поблажка: сплошная заливка — сама по себе верхняя ступень
+ *     иерархии яркости, а роль у него ровно одна, различать её не с чем.
+ *   — **штрихи внутри силуэта**: глаза и зрачки, поля цилиндра Туза,
+ *     пиктограммы пари, палочки семисегментных цифр. Обводить штрих нечем —
+ *     он сам и есть обводка, и вторая вокруг него дала бы кашу на пятнадцати
+ *     единицах.
+ *   — **полосы**: прочность босса, прогресс пари. Полоса сообщает ДЛИНУ, а не
+ *     силуэт: длину показывает залитая часть, и обводка тут отняла бы
+ *     единственный несущий признак. Дорожка полосы при этом живёт по общему
+ *     правилу — тёмная заливка и контур.
  */
 
 import {
@@ -72,11 +97,55 @@ import type { Feel } from './feel';
 import { Shape, ShapeBatch } from './gl/batch';
 import { Face, TextAtlas } from './gl/text';
 import { charset, t, type StringKey } from './i18n';
-import { PALETTE, type Rgb } from './palette';
+import { ENTITY_FILL, PALETTE, type Rgb } from './palette';
 import { ParticleShape, type Particles } from './particles';
 
 /** Толщина обводки из арт-дирекшна: 4 u на всём (GDD §21). */
 const STROKE = 4;
+
+/**
+ * Сущность арены: тёмная заливка плюс несущая обводка цветом роли.
+ *
+ * Отдельная функция, а не пятнадцать одинаковых `push()` подряд: правило
+ * «заливка одна на всех» должно нарушаться в одном месте, а не разъезжаться по
+ * файлу — именно так до редизайна и накопилось семнадцать разных заливок.
+ * Заодно вызов перестаёт быть стеной из пятнадцати чисел, в которой не видно,
+ * какой цвет несущий.
+ *
+ * `stroke` меньше общей толщины задаётся там, где фигура мельче обводки
+ * (метки, кольца в строке расчёта): четыре единицы на радиусе семь — это уже
+ * не обводка, а заливка.
+ */
+function entity(
+  b: ShapeBatch,
+  shape: Shape,
+  x: number,
+  y: number,
+  halfW: number,
+  halfH: number,
+  rotation: number,
+  role: Rgb,
+  alpha = 1,
+  stroke = STROKE,
+): void {
+  b.push(
+    shape,
+    x,
+    y,
+    halfW,
+    halfH,
+    rotation,
+    ENTITY_FILL.r,
+    ENTITY_FILL.g,
+    ENTITY_FILL.b,
+    alpha,
+    stroke,
+    role.r,
+    role.g,
+    role.b,
+    alpha,
+  );
+}
 
 /**
  * Полувысота цифры в HUD.
@@ -405,18 +474,15 @@ export class Renderer {
     // их по базовым координатам значило бы показать не ту арену, на которой
     // идёт бой.
     for (const c of templateOf(s).columns) {
-      b.push(
+      entity(
+        b,
         Shape.Box,
         toFloat(columnX(c, s)),
         toFloat(columnY(c, s)),
         toFloat(c.halfW),
         toFloat(c.halfH),
         0,
-        ...channels(PALETTE.background),
-        1,
-        STROKE,
-        ...channels(PALETTE.grid),
-        1,
+        PALETTE.grid,
       );
     }
   }
@@ -436,9 +502,14 @@ export class Renderer {
    * Второй: заливка шла алым по яркости телеграфа, а алый в этой игре занят
    * объявленной атакой (`PALETTE.danger`). Зона урона не наносит — она стоит
    * фишек, а не сердец, — и читаться как угроза не имеет права: столп №5,
-   * читаемость превыше красоты. Поэтому глухой винный `PALETTE.redZone`,
-   * заливка вполсилы прежней и ровный контур без пульсации: пульсация здесь —
-   * язык «сейчас ударит», и занимать его нечем.
+   * читаемость превыше красоты. Поэтому глухой винный `PALETTE.redZone` и
+   * ровный контур без пульсации: пульсация здесь — язык «сейчас ударит», и
+   * занимать его нечем.
+   *
+   * Заливка с 0.4.0 общая тёмная, а не винная вполсилы: цветная плёнка поверх
+   * пола читалась как второй пол, а границу — то единственное, что игроку тут
+   * надо знать, — несёт контур. Затемнение против общего фона говорит «сюда
+   * нельзя», не занимая под это ни одного цвета.
    *
    * Координаты НЕ масштабируются составом, в отличие от колонн: `inRedZone`
    * в ядре сравнивает позицию с абсолютными `RED_ZONE.x/y`, и нарисованный со
@@ -450,7 +521,7 @@ export class Renderer {
     const x = toFloat(redZoneX(s));
     const y = toFloat(redZoneY(s));
     const r = toFloat(RED_ZONE_RADIUS);
-    this.batch.push(Shape.Circle, x, y, r, r, 0, c.r, c.g, c.b, 0.14, 3, c.r, c.g, c.b, 0.55);
+    entity(this.batch, Shape.Circle, x, y, r, r, 0, c, 0.55);
   }
 
   /**
@@ -503,25 +574,23 @@ export class Renderer {
       // Телеграф алый и пульсирующий — это язык «сейчас ударит» (GDD §21).
       // Провалившийся сектор уже не угроза, а дыра: он рисуется фоном.
       const falling = s.tick < s.sectorFallAt[i];
-      const c = falling ? PALETTE.danger : PALETTE.background;
-      const alpha = falling ? 0.25 + 0.25 * Math.sin(s.tick / 4) : 1;
+      // Провалившийся сектор — дыра, и в новом языке её несёт контур цветом
+      // хрома: раньше дыра заливалась фоном, а фон отличается от пола на ΔE 1,
+      // то есть края у неё не было вовсе. Хром, а не цвет разметки: спицы и
+      // обод уже разметка, и дыра обязана отличаться от них, а не сливаться.
+      const c = falling ? PALETTE.danger : PALETTE.chrome;
+      const alpha = falling ? 0.5 + 0.25 * Math.sin(s.tick / 4) : 1;
       const half = r * Math.sin(Math.PI / SECTOR_COUNT);
-      b.push(
+      entity(
+        b,
         Shape.Capsule,
         cx + (Math.cos(a) * r) / 2,
         cy + (Math.sin(a) * r) / 2,
         r / 2,
         half,
         a,
-        c.r,
-        c.g,
-        c.b,
+        c,
         alpha,
-        0,
-        0,
-        0,
-        0,
-        0,
       );
     }
   }
@@ -541,20 +610,18 @@ export class Renderer {
     const body = PALETTE.enemyAlt;
     const stunned = bossStunned(s);
 
-    b.push(
+    // Оглушённый босс гаснет обводкой, а не заливкой: заливка у всех одна, и
+    // приглушать в нём нечего, кроме несущего цвета.
+    entity(
+      b,
       Shape.Circle,
       cx,
       cy,
       toFloat(BOSS.radius),
       toFloat(BOSS.radius),
       0,
-      body.r,
-      body.g,
-      body.b,
+      body,
       stunned ? 0.4 : 1,
-      STROKE,
-      ...channels(PALETTE.hudText),
-      1,
     );
 
     for (let i = 0; i < MAX_BALLS; i++) {
@@ -584,43 +651,28 @@ export class Renderer {
           0.3 + 0.5 * urgency,
         );
       }
-      const c = PALETTE.bullet;
-      b.push(
+      // Шар — не снаряд по языку отрисовки, хотя и ведёт себя как снаряд:
+      // радиус 16 держит обводку без потери формы, и поблажка, выданная пуле
+      // радиусом 6, ему не нужна.
+      entity(
+        b,
         Shape.Circle,
         toFloat(s.ballX[i]),
         toFloat(s.ballY[i]),
         toFloat(BALL.radius),
         toFloat(BALL.radius),
         0,
-        c.r,
-        c.g,
-        c.b,
-        1,
-        0,
-        0,
-        0,
-        0,
-        0,
+        PALETTE.bullet,
       );
     }
 
-    // Полоса прочности: одна на всех, потому что босс один на всех.
+    // Полоса прочности: одна на всех, потому что босс один на всех. Дорожка
+    // живёт по общему правилу, сама полоса остаётся сплошной — она сообщает
+    // длину, и обводка отняла бы у неё единственный признак.
     const width = 600;
     const share = s.meta[Meta.BossHP] / s.meta[Meta.BossMaxHP];
     const x = toFloat(s.arenaW) / 2;
-    b.push(
-      Shape.Box,
-      x,
-      46,
-      width / 2,
-      9,
-      0,
-      ...channels(PALETTE.background),
-      0.7,
-      2,
-      ...channels(PALETTE.hudDim),
-      1,
-    );
+    entity(b, Shape.Box, x, 46, width / 2, 9, 0, PALETTE.hudDim, 1, 2);
     b.push(
       Shape.Box,
       x - (width / 2) * (1 - share),
@@ -639,10 +691,10 @@ export class Renderer {
   }
 
   /**
-   * Карты пари: подложка, иконка категории, вертикальный луч и подсветка.
+   * Карты пари: лицо с контуром, иконка пари, вертикальный луч и подсветка.
    *
    * Луч — не украшение. Карта и фишка обе подбираются с пола, и путать их
-   * нельзя (GDD §21): фишки мелкие, золотые, россыпью; карта крупная, с
+   * нельзя (GDD §21): фишки мелкие, золотым кольцом, россыпью; карта крупная, с
    * лучом, который виден сквозь толпу даже вчетвером на полной арене.
    *
    * Подсветка — не украшение тем более. Карта не подбирается наездом: наезд
@@ -743,17 +795,30 @@ export class Renderer {
       const fw = r * 0.86;
       const fh = r * 1.04;
 
-      // Подложка едина и кремова у всех категорий: цвет несут рамка и иконка.
+      /*
+       * Карта в языке 0.4.0: тёмное лицо и кремовый несущий контур.
+       *
+       * Кремовый переехал с заливки на обводку, и это не перестановка ради
+       * единообразия. Подложка перестала быть цветом вовсе — она общая у всех
+       * сущностей арены, — а «карта против фишки», пару которых гейт держит по
+       * жёсткому порогу, теперь разводится именно контуром. Категорию несёт
+       * рамка на ступень внутрь, иконка и луч: ровно те три места, что и
+       * раньше (GDD §21), просто рамка стала внутренней — снаружи стоит
+       * кремовый силуэт, по которому карта опознаётся как карта.
+       */
+      entity(b, Shape.Box, x, y, fw, fh, 0, PALETTE.card, edgeA);
       b.push(
         Shape.Box,
         x,
         y,
-        fw,
-        fh,
+        fw - STROKE,
+        fh - STROKE,
         0,
-        ...channels(PALETTE.card),
-        edgeA,
-        STROKE,
+        0,
+        0,
+        0,
+        0,
+        2.5,
         colour.r,
         colour.g,
         colour.b,
@@ -761,7 +826,7 @@ export class Renderer {
       );
       // Пиктограмма ПАРИ, а не категории: «Без урона» и «Без рывка» обе из
       // Стиля и с иконкой категории были неразличимы (см. `drawBetIcon`).
-      drawBetIcon(b, s.kBet[i], x, y - fh * 0.34, fh * 0.34, colour, PALETTE.card, edgeA);
+      drawBetIcon(b, s.kBet[i], x, y - fh * 0.34, fh * 0.34, colour, ENTITY_FILL, edgeA);
 
       /*
        * Сделка сообщается ДО подбора, и на карте живёт ровно два числа.
@@ -779,13 +844,16 @@ export class Renderer {
        * сознательно не показана — она равна кону, умноженному на множитель, то
        * есть уже сказана этими двумя числами.
        */
+      // Множитель кремовым, а не чернилами: лицо карты стало тёмным, и
+      // чернильные цифры на нём пропадали бы ровно так же, как раньше
+      // пропадали кремовые на кремовом.
       drawMultiplier(
         b,
         spec.multiplier / FX_ONE,
         x - fw * 0.66,
         y + fh * 0.5,
         fh * 0.26,
-        PALETTE.pupil,
+        PALETTE.card,
         edgeA,
       );
 
@@ -900,24 +968,14 @@ export class Renderer {
     /*
      * Тулья и поля цилиндра.
      *
-     * Контур той же толщины, что у всего остального в игре (STROKE, 4 u из
-     * арт-дирекшна GDD §21), а не тоньше. Тулья тёмная, и на тёмном полу
-     * силуэт несёт именно контур: на трёх единицах он выходил в два пикселя
-     * реального экрана, и Туза не было видно вовсе.
+     * Туз пришёл к общему языку раньше всех остальных и теперь просто в нём
+     * живёт: тёмная тулья, кремовый несущий контур в 4 единицы. На трёх он
+     * выходил в два пикселя реального экрана, и Туза не было видно вовсе.
+     *
+     * Поля цилиндра остаются сплошными: пять единиц высоты — это штрих, и
+     * обводить его нечем.
      */
-    b.push(
-      Shape.Box,
-      x,
-      y + bob,
-      22,
-      26,
-      tilt,
-      ...channels(PALETTE.aceShadow),
-      0.85,
-      STROKE,
-      ...channels(PALETTE.ace),
-      0.85,
-    );
+    entity(b, Shape.Box, x, y + bob, 22, 26, tilt, PALETTE.ace, 0.85);
     b.push(Shape.Box, x, y + bob + 28, 34, 5, tilt, ...channels(PALETTE.ace), 0.85, 0, 0, 0, 0, 0);
 
     /*
@@ -1183,21 +1241,11 @@ export class Renderer {
       // Мигание за полсекунды до исчезновения: предупреждение без интерфейса.
       const left = s.cDeadline[i] - s.tick;
       if (left < 30 && (s.tick >> 2) % 2 === 0) continue;
-      this.batch.push(
-        Shape.Circle,
-        x,
-        y,
-        11,
-        11,
-        0,
-        c.r,
-        c.g,
-        c.b,
-        1,
-        3,
-        ...channels(PALETTE.eye),
-        0.8,
-      );
+      // Золото ушло с заливки на обводку: россыпь фишек была самым ярким
+      // пятном на полу и спорила по яркости со снарядами, хотя стоит в
+      // иерархии ниже игроков и карт (GDD §21). Кольцо той же ширины, что у
+      // всех, оставляет фишку узнаваемой и возвращает её на своё место.
+      entity(this.batch, Shape.Circle, x, y, 11, 11, 0, c);
     }
   }
 
@@ -1218,7 +1266,7 @@ export class Renderer {
       const r = toFloat(stats.radius);
 
       const flash = fb.enemyFlash[i] > 0;
-      const colour = flash ? PALETTE.bullet : enemyColour(type);
+      const colour = enemyColour(type);
       const squash = fb.enemySquash[i];
 
       // Фитиль пульсирует всегда, а с подожжённым фитилём — вдвое чаще:
@@ -1241,6 +1289,17 @@ export class Renderer {
             : Shape.Circle;
       const rot = type === EnemyType.Brick ? 0 : facing;
 
+      /*
+       * Тип врага несёт форма, цвет — второй признак, и с 0.4.0 он живёт в
+       * обводке (GDD §21). Двойное кодирование от этого не пострадало:
+       * треугольник, квадрат и круг различаются силуэтом, а силуэт как раз и
+       * стал тем, что рисуется.
+       *
+       * Вспышка попадания — единственное место, где заливка врага не общая:
+       * «попал» читается телом, а не каймой, и белая вспышка на четверть
+       * секунды для того и заведена. Обводка при этом остаётся своей — иначе в
+       * момент попадания пропадал бы тип того, в кого попали.
+       */
       b.push(
         shape,
         x,
@@ -1248,12 +1307,12 @@ export class Renderer {
         r * pulse * (1 + squash),
         r * pulse * (1 - squash * 0.6),
         rot,
+        ...channels(flash ? PALETTE.bullet : ENTITY_FILL),
+        1,
+        STROKE,
         colour.r,
         colour.g,
         colour.b,
-        1,
-        STROKE,
-        ...channels(PALETTE.background),
         1,
       );
 
@@ -1368,19 +1427,19 @@ export class Renderer {
       // картинка совпадает с состоянием, а не живёт своей жизнью.
       const alphaBody = invul && (s.tick >> 2) % 2 === 0 ? 0.45 : 1;
 
-      b.push(
+      // Свой цвет переехал с тела на обводку, и правило «игрок всегда различим
+      // в толпе» (GDD §21) держится теперь ею и нимбом: белая обводка,
+      // одинаковая у всех четверых, различала игроков между собой хуже, чем их
+      // собственные цвета, ради которых она и стояла.
+      entity(
+        b,
         Shape.Circle,
         x,
         y,
         r * (1 + stretch),
         r * (1 - stretch * 0.7),
         angle,
-        colour.r,
-        colour.g,
-        colour.b,
-        alphaBody,
-        STROKE,
-        ...channels(PALETTE.eye),
+        colour,
         alphaBody,
       );
 
@@ -1419,23 +1478,11 @@ export class Renderer {
       const bet = fb.dealBet[p];
       const colour = categoryColour(BETS[bet].category);
 
-      b.push(
-        Shape.Box,
-        x,
-        y,
-        52,
-        24,
-        0,
-        ...channels(PALETTE.card),
-        a,
-        3,
-        colour.r,
-        colour.g,
-        colour.b,
-        a,
-      );
-      drawBetIcon(b, bet, x - 36, y - 11, 9, colour, PALETTE.card, a);
-      drawMultiplier(b, BETS[bet].multiplier / FX_ONE, x - 22, y - 11, 7, PALETTE.pupil, a);
+      // Та же плашка, что в HUD и на расчёте, и в том же языке: тёмное поле с
+      // несущей рамкой цветом категории.
+      entity(b, Shape.Box, x, y, 52, 24, 0, colour, a, 3);
+      drawBetIcon(b, bet, x - 36, y - 11, 9, colour, ENTITY_FILL, a);
+      drawMultiplier(b, BETS[bet].multiplier / FX_ONE, x - 22, y - 11, 7, PALETTE.hudText, a);
 
       // Кон ушёл — треугольник вниз мутным; куш придёт — треугольник вверх
       // золотом. Направление читается быстрее знака и не требует перевода.
@@ -1457,13 +1504,31 @@ export class Renderer {
         0,
         0,
       );
-      drawNumber(b, fb.dealStake[p], x - 28, y + 11, 8, PALETTE.pupil, a);
+      // Число красится в цвет своей стрелки: на тёмном поле чернила не видны
+      // вовсе, а раскрасить оба числа одним кремовым значило бы потерять
+      // разницу между «ушло» и «придёт», которую стрелки как раз и несут.
+      drawNumber(b, fb.dealStake[p], x - 28, y + 11, 8, dim, a);
       const ch = PALETTE.chip;
       b.push(Shape.Triangle, x - 2, y + 11, 5, 5, -Math.PI / 2, ch.r, ch.g, ch.b, a, 0, 0, 0, 0, 0);
-      drawNumber(b, fb.dealPayout[p], x + 26, y + 11, 9, PALETTE.pupil, a);
+      drawNumber(b, fb.dealPayout[p], x + 26, y + 11, 9, ch, a);
     }
   }
 
+  /**
+   * Снаряды — объявленное исключение из «тёмной заливки и несущей обводки».
+   *
+   * Пуля игрока рисуется капсулой с полутолщиной 6 единиц. Обводка в 4 съела
+   * бы её почти целиком: от снаряда осталась бы тёмная сердцевина в пару
+   * единиц с каймой, то есть точка. Между «единообразием языка» и правилом
+   * «снаряды всегда светлее и ярче всего остального» (GDD §21) выбрано
+   * правило: оно про то, выживет игрок или нет, а язык — про то, как это
+   * выглядит.
+   *
+   * Ничего не теряется и по существу. Тёмная заливка нужна там, где цветов
+   * много и роль надо опознать; у снаряда роль ровно одна — «в меня сейчас
+   * прилетит», — и различать её надо не с другой ролью, а с полом, что
+   * сплошная заливка и делает лучше всего.
+   */
   private drawBullets(s: SimState, alpha: number): void {
     const c = PALETTE.bullet;
     const e = PALETTE.danger;
@@ -1550,23 +1615,21 @@ export class Renderer {
       const baseX = 40 + i * 240;
       for (let n = 0; n < PLAYER.startHearts; n++) {
         const full = n < s.pHearts[i];
-        b.push(
-          Shape.Hexagon,
-          baseX + n * 34,
-          top,
-          13,
-          13,
-          0,
-          colour.r,
-          colour.g,
-          colour.b,
-          full ? 1 : 0.12,
-          3,
-          colour.r,
-          colour.g,
-          colour.b,
-          full ? 1 : 0.5,
-        );
+        /*
+         * Сердце в новом языке: тёмное поле с обводкой своего цвета, а полное
+         * от пустого отличается ЯДРОМ внутри.
+         *
+         * Раньше разницу нёс цвет заливки, и с общей тёмной заливкой она
+         * исчезла бы вовсе: сердце — тот показатель, ради которого игрок косит
+         * глазом в бою, и различать его по яркости одной обводки значит не
+         * различать никак. Ядро — второй признак к яркости контура, то же
+         * двойное кодирование, что и везде.
+         */
+        const hx = baseX + n * 34;
+        entity(b, Shape.Hexagon, hx, top, 13, 13, 0, colour, full ? 1 : 0.45, 3);
+        if (full) {
+          b.push(Shape.Hexagon, hx, top, 6, 6, 0, colour.r, colour.g, colour.b, 1, 0, 0, 0, 0, 0);
+        }
       }
       // Кошелёк рядом со своими сердцами: чьи фишки — видно без подписи.
       drawNumber(b, s.pChips[i], baseX + 150, top, HUD_DIGIT, PALETTE.chip);
@@ -1582,23 +1645,13 @@ export class Renderer {
       for (let t = 0; t < APPETITE_TIERS; t++) {
         const on = t <= s.pAppetite[i];
         const c = PALETTE.chip;
-        b.push(
-          Shape.Box,
-          baseX + 196 + t * 13,
-          top + 4,
-          4,
-          4 + t * 3,
-          0,
-          c.r,
-          c.g,
-          c.b,
-          on ? 1 : 0.15,
-          2,
-          c.r,
-          c.g,
-          c.b,
-          on ? 1 : 0.45,
-        );
+        const px = baseX + 196 + t * 13;
+        const ph = 4 + t * 3;
+        // Тот же приём, что у сердец: выбранный тир отличается ядром, а не
+        // одной лишь яркостью контура. Пипс шириной 4 единицы обводится
+        // двойкой, а не четвёркой, — четвёрка на такой ширине и есть заливка.
+        entity(b, Shape.Box, px, top + 4, 4, ph, 0, c, on ? 1 : 0.45, 2);
+        if (on) b.push(Shape.Box, px, top + 4, 1.6, ph - 3, 0, c.r, c.g, c.b, 1, 0, 0, 0, 0, 0);
       }
       this.drawBets(s, i, baseX, top + 46);
     }
@@ -1608,23 +1661,10 @@ export class Renderer {
     for (let n = 0; n < waves; n++) {
       const done = n < s.meta[Meta.Wave];
       const c = PALETTE.hudText;
-      b.push(
-        Shape.Circle,
-        w - 40 - (waves - 1 - n) * 26,
-        top,
-        8,
-        8,
-        0,
-        c.r,
-        c.g,
-        c.b,
-        done ? 1 : 0.15,
-        2,
-        c.r,
-        c.g,
-        c.b,
-        0.6,
-      );
+      const wx = w - 40 - (waves - 1 - n) * 26;
+      entity(b, Shape.Circle, wx, top, 8, 8, 0, c, done ? 0.9 : 0.5, 2);
+      // Пройденная волна — с ядром: те же два признака, что у сердец и пипсов.
+      if (done) b.push(Shape.Circle, wx, top, 3.5, 3.5, 0, c.r, c.g, c.b, 1, 0, 0, 0, 0, 0);
     }
     drawNumber(b, s.meta[Meta.Room], w - 40 - waves * 26 - 50, top, HUD_DIGIT, PALETTE.hudDim);
 
@@ -1688,23 +1728,17 @@ export class Renderer {
       const shiver = state === BetState.Active && (s.tick >> 1) % 2 === 0 ? 1.5 : 0;
       const alpha = lost ? 0.25 : 1;
       const cxs = cx + shiver;
-      const back = won ? PALETTE.chip : PALETTE.card;
+      /*
+       * Выигранное золотится ОБВОДКОЙ, а не заливкой.
+       *
+       * Заливка у плашки теперь общая и тёмная, и «золотится» переехало туда,
+       * где у неё вообще остался цвет, — в несущую рамку. Категория при этом не
+       * теряется: её несёт пиктограмма, которая красится своим цветом всегда, а
+       * заодно это единственный способ показать исход, не тратя второй цвет.
+       */
+      const frame = won ? PALETTE.chip : colour;
 
-      b.push(
-        Shape.Box,
-        cxs,
-        y,
-        hw,
-        PLAQUE_HALF_H,
-        0,
-        ...channels(back),
-        alpha * 0.9,
-        3,
-        colour.r,
-        colour.g,
-        colour.b,
-        alpha,
-      );
+      entity(b, Shape.Box, cxs, y, hw, PLAQUE_HALF_H, 0, frame, alpha, 3);
 
       // Полоса прогресса по нижней кромке: та же `q`, по которой считается
       // выплата за «Забрать» (ECONOMY §9А). Она и есть шкала «сначала терпи,
@@ -1752,15 +1786,16 @@ export class Renderer {
       if (compact) {
         // Сжатая: что взято и под какой коэффициент. Числа сделки уезжают в
         // подробную плашку — врать теснотой хуже, чем недоговорить.
-        drawBetIcon(b, s.aBet[k], cxs, y - 9, 9, colour, back, alpha);
-        drawMultiplier(b, spec.multiplier / FX_ONE, cxs - 14, y + 11, 6, PALETTE.pupil, alpha);
+        drawBetIcon(b, s.aBet[k], cxs, y - 9, 9, colour, ENTITY_FILL, alpha);
+        drawMultiplier(b, spec.multiplier / FX_ONE, cxs - 14, y + 11, 6, PALETTE.hudText, alpha);
         continue;
       }
 
       // Верхняя строка: пари, его коэффициент и кон. Всё, что уже решено.
-      drawBetIcon(b, s.aBet[k], cxs - 32, y - 11, 9, colour, back, alpha);
-      drawMultiplier(b, spec.multiplier / FX_ONE, cxs - 17, y - 11, 7.5, PALETTE.pupil, alpha);
-      drawNumber(b, s.aStake[k], cxs + 32, y - 11, 7, PALETTE.pupil, alpha * 0.85);
+      // Цифры кремовые: поле плашки стало тёмным, и чернила на нём пропадают.
+      drawBetIcon(b, s.aBet[k], cxs - 32, y - 11, 9, colour, ENTITY_FILL, alpha);
+      drawMultiplier(b, spec.multiplier / FX_ONE, cxs - 17, y - 11, 7.5, PALETTE.hudText, alpha);
+      drawNumber(b, s.aStake[k], cxs + 32, y - 11, 7, PALETTE.hudDim, alpha * 0.85);
 
       /*
        * На нижней строке живут два разных числа, и путать их нельзя.
@@ -1775,11 +1810,10 @@ export class Renderer {
        * его надо там, где игрок и так смотрит.
        */
       if (state === BetState.Active) {
-        // Кольцо ЦВЕТОМ ЧЕРНИЛ, а не `hudText`: кремовый текст HUD отличается
-        // от кремовой подложки плашки на считанные единицы ΔE, и глиф на ней
-        // пропадал начисто. Пока он стоял снаружи, на тёмном полу, это сходило
-        // с рук — но снаружи он и не показывал, к какому числу относится.
-        const c = PALETTE.pupil;
+        // Кольцо снова кремовое: плашка стала тёмной, и чернильный глиф на ней
+        // пропадал бы ровно так же, как кремовый пропадал на кремовой. Место
+        // при этом прежнее — вплотную к тому кушу, про который кнопка говорит.
+        const c = PALETTE.hudText;
         b.push(Shape.Ring, cxs - 32, y + 11, 7, 7, 0, 0, 0, 0, 0, 3, c.r, c.g, c.b, alpha * 0.8);
       }
       const value = lost
@@ -1787,7 +1821,9 @@ export class Renderer {
         : state === BetState.Active
           ? cashOutValue(s, player, i)
           : Math.trunc((s.aStake[k] * spec.multiplier) / FX_ONE);
-      drawNumber(b, value, cxs + 2, y + 11, 10, lost ? PALETTE.danger : PALETTE.pupil, alpha);
+      // Куш золотом, сорванное — алым: число на тёмной плашке само называет
+      // свою природу, а не берёт цвет у подложки, которой больше нет.
+      drawNumber(b, value, cxs + 2, y + 11, 10, lost ? PALETTE.danger : PALETTE.chip, alpha);
 
       /*
        * Счётчиковое пари показывает счёт ЧИСЛАМИ: «сколько из трёх».
@@ -1896,42 +1932,16 @@ export class Renderer {
         const won = state === BetState.Won || state === BetState.Cashed;
 
         // Метка игрока слева: в кооперативе строк вчетверо больше, и чьё это
-        // пари должно читаться без счёта строк.
-        b.push(
-          Shape.Hexagon,
-          w / 2 - 190,
-          y,
-          10,
-          10,
-          0,
-          colour.r,
-          colour.g,
-          colour.b,
-          1,
-          0,
-          0,
-          0,
-          0,
-          0,
-        );
-        b.push(
-          Shape.Box,
-          w / 2,
-          y,
-          190,
-          26,
-          0,
-          ...channels(won ? PALETTE.chip : PALETTE.card),
-          lost ? 0.3 : 0.95,
-          3,
-          cat.r,
-          cat.g,
-          cat.b,
-          1,
-        );
+        // пари должно читаться без счёта строк. Тот же шестиугольник, что и в
+        // боевом HUD, и в том же языке — иначе своя метка выглядела бы на
+        // расчёте чужой.
+        entity(b, Shape.Hexagon, w / 2 - 190, y, 10, 10, 0, colour, 1, 3);
+        // Строка — та же плашка, что в бою: тёмное поле, рамка цветом
+        // категории, у взятого куша — золотая.
+        entity(b, Shape.Box, w / 2, y, 190, 26, 0, won ? PALETTE.chip : cat, lost ? 0.4 : 1, 3);
         // Та же пиктограмма, что на карте и на плашке: игрок узнаёт своё пари,
         // а не разгадывает его в третий раз.
-        drawBetIcon(b, s.aBet[k], w / 2 - 160, y, 14, cat, won ? PALETTE.chip : PALETTE.card, 1);
+        drawBetIcon(b, s.aBet[k], w / 2 - 160, y, 14, cat, ENTITY_FILL, 1);
 
         /*
          * Имя пари — своей колонкой слева от расписки, а не внутри плашки.
@@ -1957,12 +1967,13 @@ export class Renderer {
          * куш, кольцо — соскочил сам, перечёркнутое — сорвал. Ровно те же три
          * формы, что игрок видел на плашке весь бой.
          */
-        drawNumber(b, s.aStake[k], w / 2 - 120, y, 11, PALETTE.pupil);
-        drawMultiplier(b, spec.multiplier / FX_ONE, w / 2 - 82, y, 11, PALETTE.pupil);
+        drawNumber(b, s.aStake[k], w / 2 - 120, y, 11, PALETTE.hudDim);
+        drawMultiplier(b, spec.multiplier / FX_ONE, w / 2 - 82, y, 11, PALETTE.hudText);
         this.drawOutcome(state, w / 2 - 8, y);
         // Выплата: у обналиченного и выигранного она разная, и берётся та,
         // что игроку действительно заплатили (снята в момент перехода).
-        drawNumber(b, fb.betPayout[k], w / 2 + 110, y, 18, lost ? PALETTE.hudDim : PALETTE.pupil);
+        // Золотом — это фишки, и на тёмной строке им есть где светиться.
+        drawNumber(b, fb.betPayout[k], w / 2 + 110, y, 18, lost ? PALETTE.hudDim : PALETTE.chip);
 
         if (!lost) continue;
 
@@ -2054,8 +2065,12 @@ export class Renderer {
   private drawOutcome(state: BetState, x: number, y: number): void {
     const b = this.batch;
     if (state === BetState.Won) {
+      // Шестиугольник с ядром против пустого кольца обналиченного: исход
+      // по-прежнему различается ФОРМОЙ, а не только цветом, — заливка у обоих
+      // теперь общая, и разница «полный / пустой» держится на ядре.
       const c = PALETTE.chip;
-      b.push(Shape.Hexagon, x, y, 11, 11, 0, c.r, c.g, c.b, 1, 2, ...channels(PALETTE.pupil), 0.6);
+      entity(b, Shape.Hexagon, x, y, 11, 11, 0, c, 1, 3);
+      b.push(Shape.Hexagon, x, y, 4.5, 4.5, 0, c.r, c.g, c.b, 1, 0, 0, 0, 0, 0);
       return;
     }
     if (state === BetState.Cashed) {
@@ -2113,7 +2128,7 @@ function redZoneInPlay(s: SimState): boolean {
   return false;
 }
 
-/** Цвет категории пари: живёт в рамке, иконке и луче, но не в подложке. */
+/** Цвет категории пари: живёт во внутренней рамке, иконке и луче, но не в силуэте. */
 const categoryColour = (c: BetCategory): Rgb =>
   c === BetCategory.Style
     ? PALETTE.betStyle
@@ -2142,8 +2157,9 @@ const categoryColour = (c: BetCategory): Rgb =>
  * этом остаётся вторым признаком — двойное кодирование формой И цветом
  * обязательно (GDD §21).
  *
- * `back` — цвет подложки, на которой рисуют: им прорезается перечёркивание,
- * иначе запретительная черта тонет в самом глифе.
+ * `back` — цвет поля, на котором рисуют: им прорезается перечёркивание, иначе
+ * запретительная черта тонет в самом глифе. С 0.4.0 это общая тёмная заливка
+ * везде, где иконка живёт, — на карте, на плашке и в строке расчёта.
  *
  * Пари вне каталога 0.3.0 честно откатывается к форме категории: новое пари в
  * `content/bets.json` не должно оставлять карту без иконки вовсе.
