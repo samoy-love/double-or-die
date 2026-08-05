@@ -25,6 +25,7 @@ export * from './enemies';
 export * from './boss';
 export * from './bets';
 export * from './doors';
+export * from './floor';
 export * from './run';
 export * from './sim';
 export * from './replay';

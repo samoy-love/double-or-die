@@ -8,6 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  Btn,
   ENEMIES,
   ENEMY_TYPE_COUNT,
   FLOORS_PER_RUN,
@@ -126,6 +127,17 @@ function beatBoss(s: SimState): void {
   for (let i = 0; i < WAVE.roomGapTicks + 2; i++) step(s, idle);
   damageBoss(s, s.meta[Meta.BossHP]);
   for (let i = 0; i < 3; i++) step(s, idle);
+
+  /*
+   * Между смертью босса и следующим этажом встал экран платы.
+   *
+   * Заведение берёт своё за ПРОЙДЕННЫЙ этаж, и через этот экран проходит в том
+   * числе победитель: рассчитаться обязан и он. Экран ждёт игрока, поэтому
+   * тесты рамки забега обязаны его пройти, а не ждать, что этаж сменится сам.
+   */
+  expect(s.meta[Meta.Phase]).toBe(RunPhase.HouseCut);
+  step(s, [{ ...makeFrame(), buttons: Btn.Confirm }]);
+  step(s, idle);
 }
 
 describe('конец забега', () => {

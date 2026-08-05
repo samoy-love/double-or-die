@@ -46,6 +46,7 @@ import {
 } from './bets';
 import { flowTo, flowX, flowY, updateNav } from './nav';
 import { offerDoors } from './doors';
+import { enterHouseCut, expireCurse } from './floor';
 import { endRun } from './run';
 import { damagePlayer, explode, fireEnemy, killEnemy, statsOf } from './combat';
 import { add, type Fx, fromInt, mul, sub } from './fixed';
@@ -191,6 +192,10 @@ export function startRoom(s: SimState, room: number): void {
   s.meta[Meta.DoorPick] = -1;
   if (s.meta[Meta.RoomType] === DoorType.Shop) s.meta[Meta.LastShopRoom] = room;
   if (room === 1) s.meta[Meta.LastShopRoom] = 0;
+
+  // Проклятие живёт ровно одну комнату и снимается её прохождением (GDD §11):
+  // долг забирает темп, а не деньги, и растянутый на этаж он забирал бы этаж.
+  expireCurse(s);
 
   s.meta[Meta.Room] = room;
   s.meta[Meta.Wave] = 0;
@@ -537,6 +542,24 @@ function advanceRoom(s: SimState): void {
     return;
   }
 
+  /*
+   * Босс мёртв — заведение берёт своё, и только потом этаж кончается.
+   *
+   * Плата относится к ПРОЙДЕННОМУ этажу, поэтому считается до перехода: иначе
+   * `20 × (F+1)²` посчиталось бы по номеру следующего, и первый этаж брал бы
+   * плату второго. Победа на последнем этаже проходит через тот же экран —
+   * рассчитаться с заведением обязан и победитель.
+   */
+  enterHouseCut(s);
+}
+
+/**
+ * Плата внесена (или записана в долг) — этаж кончается.
+ *
+ * Отдельно от `advanceRoom` потому, что вызывается не оттуда: экран платы
+ * ждёт игрока, и переход случается в тот тик, когда он ответил.
+ */
+export function leaveFloor(s: SimState): void {
   s.meta[Meta.Phase] = RunPhase.Fight;
   if (s.meta[Meta.Floor] < FLOORS_PER_RUN) {
     s.meta[Meta.Floor]++;

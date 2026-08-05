@@ -32,7 +32,8 @@ import {
 import { stepBoss } from './boss';
 import { fire, stepBullets, stepChips } from './combat';
 import { stepDoors } from './doors';
-import { clearArena, startRoom, stepEnemies } from './enemies';
+import { stepHouseCut } from './floor';
+import { clearArena, leaveFloor, startRoom, stepEnemies } from './enemies';
 import { add, FX_ONE, mul, sub } from './fixed';
 import { endRun } from './run';
 import { normalize, normX, normY, within } from './trig';
@@ -170,6 +171,22 @@ export function step(s: SimState, inputs: readonly InputFrame[]): void {
       // тика — иначе пауза перед первой волной короче на кадр.
       s.tick++;
       startRoom(s, s.meta[Meta.Room] + 1);
+      s.tick--;
+    }
+    s.tick++;
+    return;
+  }
+
+  /*
+   * Экран платы — тоже не бой: мир на нём стоит, как и на двери.
+   *
+   * Заведение считает книги в паузе, и врагам следующего этажа там делать
+   * нечего: они принадлежат этажу, который ещё не начался.
+   */
+  if (s.meta[Meta.Phase] === RunPhase.HouseCut) {
+    if (stepHouseCut(s, inputs)) {
+      s.tick++;
+      leaveFloor(s);
       s.tick--;
     }
     s.tick++;

@@ -38,6 +38,7 @@ import {
   PLAYER,
   ROOMS_PER_FLOOR,
 } from './config';
+import { markLegUp } from './floor';
 import { add, div, FX_ONE, type Fx, mul, sub } from './fixed';
 import { Stream, nextInt } from './rng';
 import {
@@ -1230,6 +1231,17 @@ export function settleBets(s: SimState): void {
         s.meta[Meta.BetsWon]++;
       } else {
         loseBet(s, p, i);
+        /*
+         * Провал обязывает следующий стол содержать трамплин (GDD §11).
+         *
+         * Отметка ставится здесь, в момент расчёта, а не при раздаче: между
+         * ними целый экран двери, и намерение, не записанное в состояние, до
+         * раздачи не доживает. Спираль неудач запрещена дизайном, но трамплин
+         * остаётся ПАРИ — кон платит игрок, иначе двенадцать проваленных
+         * ставок за забег превращаются в двенадцать подарков тому, кого доля
+         * заведения должна прижимать.
+         */
+        markLegUp(s);
       }
     }
   }
