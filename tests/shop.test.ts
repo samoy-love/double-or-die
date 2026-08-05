@@ -54,7 +54,7 @@ import {
   type InputFrame,
   type SimState,
 } from '@dod/sim';
-import { makeBot, passShop } from '@dod/tools/bots';
+import { makeBot, passReward } from '@dod/tools/bots';
 
 const idle = [makeFrame()];
 const press = (b: number): InputFrame[] => [{ ...makeFrame(), buttons: b }];
@@ -382,13 +382,24 @@ describe('лавка в забеге', () => {
   });
 
   it('за обычной дверью не встаёт вовсе', () => {
-    for (const type of [DoorType.Fight, DoorType.Fat, DoorType.Gift, DoorType.DebtPit]) {
+    // Дара в списке нет намеренно: за ним встаёт тот же прилавок, только без
+    // ценников, и проверяется он в `gift.test.ts`.
+    for (const type of [DoorType.Fight, DoorType.Fat, DoorType.DebtPit]) {
       const s = fresh();
       s.meta[Meta.RoomType] = type;
       clearRoom(s, 2);
       expect(s.meta[Meta.Phase]).toBe(RunPhase.Door);
       expect(s.shopItem[0]).toBe(0);
     }
+  });
+
+  it('за дверью «Дар» встаёт прилавок без ценников, а не лавка', () => {
+    const s = fresh(200);
+    s.meta[Meta.RoomType] = DoorType.Gift;
+    clearRoom(s, 2);
+    expect(s.meta[Meta.Phase]).toBe(RunPhase.Reward);
+    expect(s.shopItem[0]).toBeGreaterThan(0);
+    expect(s.shopPrice[0]).toBe(0);
   });
 
   it('после ухода из лавки забег идёт дальше — к следующей двери', () => {
@@ -463,7 +474,7 @@ describe('бот проходит лавку', () => {
 
     let guard = 0;
     while (s.meta[Meta.Phase] === RunPhase.Reward && guard++ < 200) {
-      step(s, passShop(s, idle));
+      step(s, passReward(s, idle));
     }
     expect(s.meta[Meta.Phase]).not.toBe(RunPhase.Reward);
     expect(upgradeCount(s, 0)).toBe(0);

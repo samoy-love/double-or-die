@@ -1,0 +1,20 @@
+{
+  "name": "Дар выдаёт апгрейд, не тронув кошелёк",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "chips": { "amount": 200 } },
+    { "gift": true },
+    { "expect": { "shop": { "offers": { "min": 3, "max": 3 }, "price": { "min": 0, "max": 0 } } } },
+    { "input": { "buttons": ["navright"] } },
+    { "tick": 1 },
+    { "input": { "buttons": ["confirm"] } },
+    { "tick": 1 },
+    {
+      "expect": {
+        "shop": { "owned": { "min": 1, "max": 1 } },
+        "chips": { "min": 200, "max": 200 }
+      }
+    }
+  ]
+}

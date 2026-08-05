@@ -764,7 +764,7 @@ export function makeBot(name: BotName, seed: number, players: number): Bot {
   // не продублирован в шести реализациях `inputs`. Профиль пробрасывается как
   // есть: обёртка не меняет того, кем сыгран забег, а отчёт спрашивает именно
   // это.
-  return { profile: bot.profile, inputs: (s) => passShop(s, passDoors(s, bot.inputs(s))) };
+  return { profile: bot.profile, inputs: (s) => passReward(s, passDoors(s, bot.inputs(s))) };
 }
 
 function makeRawBot(name: BotName, seed: number, players: number): Bot {
@@ -817,11 +817,14 @@ export function passDoors(s: SimState, frames: readonly InputFrame[]): readonly 
 }
 
 /**
- * Лавка: бот обязан её пройти по той же причине, что и дверь.
+ * Лавка и Дар: бот обязан пройти их по той же причине, что и дверь.
  *
  * Экран ждёт игрока (ECONOMY §5: покупка конкурирует с долей заведения, а
  * такое решение не принимают по таймеру), и прогон, которому некому нажать
  * кнопку, встаёт на нём навсегда — молча и до конца отведённых тиков.
+ *
+ * Дар проходится тем же кодом: ценник у него нулевой, `canBuy` пропускает
+ * первое же предложение, а взятый апгрейд закрывает экран сам.
  *
  * Поведение простейшее и намеренно жадное: слева направо купить всё, на что
  * хватает, и уйти. Осмысленный выбор («сначала сердце, потом урон») — предмет
@@ -836,7 +839,7 @@ export function passDoors(s: SimState, frames: readonly InputFrame[]): readonly 
  * товаре навсегда — и прогон вместе с ним. `canBuy` при этом спрашивается тот
  * же самый, что и в покупке: разъедься они, бот жал бы «купить» вечно.
  */
-export function passShop(s: SimState, frames: readonly InputFrame[]): readonly InputFrame[] {
+export function passReward(s: SimState, frames: readonly InputFrame[]): readonly InputFrame[] {
   if (s.meta[Meta.Phase] !== RunPhase.Reward) return frames;
 
   const focus = s.meta[Meta.DoorPick];
