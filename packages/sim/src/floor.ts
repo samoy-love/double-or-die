@@ -15,7 +15,7 @@
 import { APPETITE, HOUSE, LEG_UP, MAX_ACTIVE_BETS } from './config';
 import { Btn, type InputFrame } from './input';
 import { Stream, nextInt } from './rng';
-import { BetState, Curse, Meta, RunPhase, type SimState } from './state';
+import { BetState, Curse, Meta, Obligation, RunPhase, type SimState } from './state';
 
 /**
  * Сколько заведение просит в конце этажа: `20 × (F+1)²`, с кооп-множителем.
@@ -127,35 +127,59 @@ export function expireCurse(s: SimState): void {
 }
 
 /**
- * Экран платы: заплатить или пойти в долг.
+ * Экран платы и торг при нехватке.
  *
  * Ждёт игрока, а не часов, по той же причине, что и дверь: экран, решающий
- * сам, превращает выбор в реакцию. Третий вариант торга — продать апгрейд —
- * приедет вместе с лавкой: продавать пока нечего.
+ * сам, превращает выбор в реакцию.
+ *
+ * ТРИ ДЕЙСТВИЯ — ТРИ КНОПКИ, А НЕ СПИСОК С ФОКУСОМ. Список потребовал бы
+ * индекса выбранного пункта, а свободных слотов в `Meta` не осталось;
+ * переиспользовать чужой (`DoorPick`) значило бы завести поле, смысл которого
+ * зависит от фазы, — ровно то, от чего отказались, разводя экранные биты ввода
+ * по своим. Кнопок на экране хватает: подтверждение, отказ и навигация, — и
+ * каждая означает одно и то же везде.
+ *
+ * Хватает денег — решение одно, и это не торг: заплатить.
  */
 export function stepHouseCut(s: SimState, inputs: readonly InputFrame[]): boolean {
   if (s.meta[Meta.Phase] !== RunPhase.HouseCut) return false;
 
+  const short = !canPay(s);
   for (let i = 0; i < s.playerCount; i++) {
     const pressed = inputs[i].buttons & ~s.pPrevButtons[i];
     s.pPrevButtons[i] = inputs[i].buttons;
 
     if ((pressed & Btn.Confirm) !== 0) {
-      if (canPay(s)) payHouseCut(s);
-      else takeDebt(s);
+      // Хватает — платим. Не хватает — берём пари: это первый и лучший из
+      // трёх выходов торга, потому что оставляет игроку шанс рассчитаться.
+      if (short) takeForcedBet(s);
+      else payHouseCut(s);
       return true;
     }
+
     /*
-     * Отказ — это тоже долг, а не выход.
+     * Отказ — это долг, а не выход.
      *
-     * Кнопка «отказаться» на экране платы означает «иди в долг»: уйти с
-     * этажа, не рассчитавшись, нельзя, и делать вид, что можно, — значит
-     * обещать выход, которого нет.
+     * Уйти с этажа, не рассчитавшись, нельзя, и кнопка, обещающая такой
+     * выход, обещала бы то, чего нет. Поэтому отказ означает «иди в долг» —
+     * самый дорогой из трёх вариантов, но всё-таки вариант.
      */
     if ((pressed & Btn.Cancel) !== 0) {
       takeDebt(s);
       return true;
     }
+
+    /*
+     * Третий вариант торга — продать апгрейд заведению за половину цены —
+     * приедет вместе с лавкой, и раньше приехать не может.
+     *
+     * Половина цены считается от НАСТОЯЩЕЙ цены апгрейда, а цены живут в
+     * каталоге лавки, которого ещё нет. Поставить сюда «половину средней»
+     * значило бы завести число мимо расчёта: ECONOMY §5 задаёт шесть разных
+     * баз именно затем, чтобы одинаковых ценников не было, и усреднение
+     * вернуло бы ровно то, от чего там отказались. Кнопка под него уже
+     * свободна — навигация на этом экране не используется.
+     */
   }
   return false;
 }
@@ -165,16 +189,67 @@ export function stepHouseCut(s: SimState, inputs: readonly InputFrame[]): boolea
  *
  * Отметка ставится в момент расчёта, а не раздачи: между ними целый экран, и
  * намерение, не записанное в состояние, до раздачи не доживает.
+ *
+ * Принудительное пари торга сильнее трамплина и не уступает ему места: долг
+ * заведению — обязательство, а трамплин — подарок, и подарок, вытеснивший
+ * долг, означал бы, что провалившийся игрок случайно рассчитался.
  */
 export function markLegUp(s: SimState): void {
-  s.meta[Meta.LegUp] = 1;
+  if (s.meta[Meta.LegUp] === Obligation.Forced) return;
+  s.meta[Meta.LegUp] = Obligation.LegUp;
 }
 
-/** Нужен ли трамплин в этой раздаче, и снять отметку. */
-export function takeLegUp(s: SimState): boolean {
-  if (s.meta[Meta.LegUp] === 0) return false;
-  s.meta[Meta.LegUp] = 0;
-  return true;
+/** Что следующая раздача обязана положить на стол, и снять отметку. */
+export function takeObligation(s: SimState): Obligation {
+  const due = s.meta[Meta.LegUp] as Obligation;
+  s.meta[Meta.LegUp] = Obligation.None;
+  return due;
+}
+
+/**
+ * Торг: взять принудительное пари вместо долга (GDD §12А.2).
+ *
+ * «Возьми вот это пари в следующей комнате — и мы в расчёте». Кон равен
+ * НЕДОСТАЧЕ, а не тиру аппетита: иначе Туз предлагает сделку, которой не
+ * хватает на саму сделку — недостача в сто двадцать не закрывается коном в
+ * пятьдесят. Множитель ×2 при целевых 55% успеха даёт игроку небольшой плюс:
+ * это выход, а не наказание за бедность.
+ *
+ * Проклятия здесь нет, и по нему же это состояние отличается от обычного
+ * долга: `Debt > 0` при `Curse === None` означает «недостача гасится пари».
+ * Отдельного слота не потребовалось — свободных в `Meta` не осталось, а два
+ * ре-бейзлайна версии уже израсходованы.
+ */
+export function takeForcedBet(s: SimState): void {
+  const shortfall = Math.max(0, s.meta[Meta.HouseCut] - purse(s));
+  payHouseCut(s);
+  s.meta[Meta.Debt] = shortfall;
+  s.meta[Meta.Curse] = Curse.None;
+  s.meta[Meta.CurseRoom] = 0;
+  s.meta[Meta.LegUp] = Obligation.Forced;
+}
+
+/** Гасится ли долг принудительным пари, а не проклятием. */
+export const debtOnBet = (s: SimState): boolean =>
+  s.meta[Meta.Debt] > 0 && s.meta[Meta.Curse] === Curse.None;
+
+/**
+ * Принудительное пари разрешилось.
+ *
+ * Выиграл — рассчитался и получил вдвое; провалил — долг остаётся и
+ * оборачивается проклятием, ровно тем, от которого он в торге и уходил.
+ */
+export function settleForcedBet(s: SimState, won: boolean): void {
+  if (!debtOnBet(s)) return;
+  const stake = s.meta[Meta.Debt];
+  s.meta[Meta.Debt] = 0;
+
+  if (won) {
+    s.pChips[0] += stake * HOUSE.forcedBetMultiplier;
+    return;
+  }
+  s.meta[Meta.Curse] = Curse.Blood + nextInt(s.rng, Stream.Loot, Curse.Commission);
+  s.meta[Meta.CurseRoom] = 0;
 }
 
 /**

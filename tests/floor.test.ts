@@ -14,13 +14,17 @@ import {
   HOUSE,
   LEG_UP,
   Meta,
+  Obligation,
   RunPhase,
   canPay,
   createState,
+  debtOnBet,
   enterHouseCut,
   houseCut,
   makeFrame,
   setSpawning,
+  markLegUp,
+  settleForcedBet,
   spawnPlayers,
   startRoom,
   step,
@@ -106,13 +110,13 @@ describe('уплата', () => {
 });
 
 describe('долг', () => {
-  it('нехватка вешает проклятие и оставляет недостачу', () => {
+  it('отказ вешает проклятие и оставляет недостачу', () => {
     const s = fresh();
     s.pChips[0] = 30;
     enterHouseCut(s);
     expect(canPay(s)).toBe(false);
 
-    step(s, confirm);
+    step(s, cancel);
     expect(s.pChips[0]).toBe(0);
     expect(s.meta[Meta.Debt]).toBe(houseCut(1, 1) - 30);
     expect(s.meta[Meta.Curse]).not.toBe(Curse.None);
@@ -210,5 +214,75 @@ describe('победа тоже платит', () => {
     step(s, confirm);
     expect(s.meta[Meta.Phase]).toBe(RunPhase.Summary);
     expect(s.meta[Meta.Victory]).toBe(1);
+  });
+});
+
+describe('торг: принудительное пари', () => {
+  /**
+   * Первый и лучший из трёх выходов: он оставляет игроку шанс рассчитаться,
+   * тогда как долг забирает комнату гарантированно.
+   */
+  it('подтверждение при нехватке берёт пари, а не долг', () => {
+    const s = fresh();
+    s.pChips[0] = 30;
+    enterHouseCut(s);
+    step(s, confirm);
+
+    expect(s.meta[Meta.Debt]).toBe(houseCut(1, 1) - 30);
+    // Проклятия нет — по нему и отличается долг под пари от обычного.
+    expect(s.meta[Meta.Curse]).toBe(Curse.None);
+    expect(debtOnBet(s)).toBe(true);
+    expect(s.meta[Meta.LegUp]).toBe(Obligation.Forced);
+  });
+
+  it('кон равен недостаче, а не тиру аппетита', () => {
+    // Иначе Туз предлагает сделку, которой не хватает на саму сделку.
+    const s = fresh();
+    s.pChips[0] = 10;
+    enterHouseCut(s);
+    const shortfall = houseCut(1, 1) - 10;
+    step(s, confirm);
+    expect(s.meta[Meta.Debt]).toBe(shortfall);
+  });
+
+  it('выигрыш рассчитывает долг и платит вдвое', () => {
+    const s = fresh();
+    s.pChips[0] = 30;
+    enterHouseCut(s);
+    step(s, confirm);
+    const stake = s.meta[Meta.Debt];
+
+    settleForcedBet(s, true);
+    expect(s.meta[Meta.Debt]).toBe(0);
+    expect(s.meta[Meta.Curse]).toBe(Curse.None);
+    expect(s.pChips[0]).toBe(stake * HOUSE.forcedBetMultiplier);
+  });
+
+  it('провал возвращает то самое проклятие, от которого уходили', () => {
+    const s = fresh();
+    s.pChips[0] = 30;
+    enterHouseCut(s);
+    step(s, confirm);
+
+    settleForcedBet(s, false);
+    expect(s.meta[Meta.Debt]).toBe(0);
+    expect(s.meta[Meta.Curse]).not.toBe(Curse.None);
+  });
+
+  /**
+   * Долг сильнее подарка: трамплин не вытесняет принудительное пари.
+   *
+   * Иначе провалившийся игрок случайно рассчитывался бы с заведением — обе
+   * отметки живут в одном слоте, и та, что записалась последней, победила бы.
+   */
+  it('трамплин не вытесняет принудительное пари', () => {
+    const s = fresh();
+    s.pChips[0] = 30;
+    enterHouseCut(s);
+    step(s, confirm);
+    expect(s.meta[Meta.LegUp]).toBe(Obligation.Forced);
+
+    markLegUp(s);
+    expect(s.meta[Meta.LegUp]).toBe(Obligation.Forced);
   });
 });
