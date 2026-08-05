@@ -43,6 +43,8 @@ import {
   withAppetite,
   MAX_ACTIVE_BETS,
   MAX_CARDS,
+  Meta,
+  RunPhase,
   MAX_CHIPS,
   MAX_ENEMIES,
   SHARED,
@@ -738,6 +740,15 @@ export function mixedProfile(seed: number): ProfileName {
 }
 
 export function makeBot(name: BotName, seed: number, players: number): Bot {
+  const bot = makeRawBot(name, seed, players);
+  // Экран двери проходится одинаково всеми, поэтому обёрнут здесь один раз, а
+  // не продублирован в шести реализациях `inputs`. Профиль пробрасывается как
+  // есть: обёртка не меняет того, кем сыгран забег, а отчёт спрашивает именно
+  // это.
+  return { profile: bot.profile, inputs: (s) => passDoors(s, bot.inputs(s)) };
+}
+
+function makeRawBot(name: BotName, seed: number, players: number): Bot {
   switch (name) {
     case 'greedy':
       return new GreedyBot(seed, players);
@@ -756,4 +767,32 @@ export function makeBot(name: BotName, seed: number, players: number): Bot {
       return new ProfileBot(skill, strategy, seed, players);
     }
   }
+}
+
+/**
+ * Экран двери: бот обязан его пройти, иначе headless-прогон встаёт навсегда.
+ *
+ * Дверь ждёт игрока, а не часов — это несущее правило экрана (UX §3), и
+ * менять его ради ботов нельзя: дверь, закрывающаяся сама, превращает выбор
+ * в реакцию. Значит проходить её должен тот, кто изображает игрока.
+ *
+ * Обёртка общая на всех ботов, а не метод в каждом: экран одинаков для всех,
+ * а забыть его в одном из шести означало бы зависший прогон ровно на том
+ * профиле, которым реже пользуются. Первый же `npm run safety` после дверей
+ * висел бы пять тысяч тиков молча.
+ *
+ * Выбор двери — предмет СТРАТЕГИИ, и здесь он намеренно простейший: фокус
+ * ставится на первую дверь и подтверждается. Осмысленный выбор («жадный идёт
+ * в Лавку, осторожный в обычный бой») приедет вместе с абстрактной моделью,
+ * которой он и нужен; до неё любая эвристика была бы выдумкой, влияющей на
+ * все балансные замеры.
+ */
+export function passDoors(s: SimState, frames: readonly InputFrame[]): readonly InputFrame[] {
+  if (s.meta[Meta.Phase] !== RunPhase.Door) return frames;
+
+  const out = frames.map((f) => ({ ...f }));
+  // Фокус ставится нажатием вправо, подтверждение — следующим кадром: оба
+  // действия читаются по фронту, и слить их в один кадр нельзя.
+  out[0].buttons |= s.meta[Meta.DoorPick] < 0 ? Btn.NavRight : Btn.Confirm;
+  return out;
 }

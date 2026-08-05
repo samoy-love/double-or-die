@@ -23,6 +23,7 @@ import {
 import { BetId, cashOutBest, failBetId, stepBets, tryTakeCard } from './bets';
 import { stepBoss } from './boss';
 import { fire, stepBullets, stepChips } from './combat';
+import { stepDoors } from './doors';
 import { clearArena, startRoom, stepEnemies } from './enemies';
 import { add, FX_ONE, mul, sub } from './fixed';
 import { endRun } from './run';
@@ -134,6 +135,35 @@ export function step(s: SimState, inputs: readonly InputFrame[]): void {
    * клиент отсчитывает по нему свои паузы.
    */
   if (s.meta[Meta.Phase] === RunPhase.Summary) {
+    s.tick++;
+    return;
+  }
+
+  /*
+   * Экран двери — не бой: пока он открыт, мир не шагает.
+   *
+   * Иначе враги следующей комнаты уже спавнились бы под экраном выбора, а
+   * карты таяли бы, пока игрок читает. Дверь и есть то место, где время
+   * останавливается по построению (UX §3).
+   */
+  if (s.meta[Meta.Phase] === RunPhase.Door) {
+    if (stepDoors(s, inputs)) {
+      /*
+       * Фаза возвращается в бой ЗДЕСЬ, до начала комнаты.
+       *
+       * `startRoom` фазу не трогает — она не его забота, он раздаёт карты и
+       * считает бюджет. Забытый возврат стоил дефекта, который поймал
+       * инвариант: экран двери оставался открытым, бот подтверждал его снова
+       * следующим же кадром, и комнаты начинались подряд каждые два тика — до
+       * девятой, которой не существует.
+       */
+      s.meta[Meta.Phase] = RunPhase.Fight;
+      // tick++ произойдёт после нас, поэтому комната считается от следующего
+      // тика — иначе пауза перед первой волной короче на кадр.
+      s.tick++;
+      startRoom(s, s.meta[Meta.Room] + 1);
+      s.tick--;
+    }
     s.tick++;
     return;
   }
