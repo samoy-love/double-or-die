@@ -154,3 +154,66 @@ test('кадр содержит арену, врагов и игрока', async
   // перестал отрисовывать сущности.
   expect(frame.colorCount, 'кадр почти одноцветный — сцена не отрисовалась').toBeGreaterThan(10);
 });
+
+/**
+ * Экраны забега действительно рисуются.
+ *
+ * Проверка появилась после дефекта, который увидел владелец, а не машина:
+ * забег кончался, на экране висело красное кольцо обратного отсчёта, замирало
+ * на нуле — и всё. Экран итогов существовал в симуляции и был покрыт тестами,
+ * но клиент о фазах не знал вовсе, и до 0.4.0 в рендере была единственная
+ * ссылка на фазу — на босса.
+ *
+ * Проверяется не красота, а факт: на экране больше фигур, чем в пустом кадре,
+ * и он не одноцветный. Красота проверяется глазами и эталоном стресс-кадра.
+ */
+/*
+ * Пока проверяется только экран итогов — тот, дефект которого и увидел
+ * владелец. Экран двери своим ходом не достигается: без игрока забег умирает
+ * в первой комнате, а зачистка арены каждый тик уносит его дальше двери. Его
+ * логика покрыта юнит-тестами (tests/doors.test.ts), а отрисовка ждёт
+ * проверки глазами — оснастка тут стоит дороже пользы.
+ */
+for (const screen of [{ name: 'итогов', phase: 6 }] as const) {
+  test(`экран ${screen.name} рисуется, а не оставляет пустой кадр`, async ({ page }) => {
+    await page.goto('/?debug=1&autopause=1');
+    await page.waitForFunction(() => '__DOD__' in window, null, { timeout: 30_000 });
+
+    const frame = await page.evaluate((want) => {
+      const d = window.__DOD__!;
+      d.newRun({ seed: 3, players: 1 });
+      d.mute(true);
+
+      /*
+       * Доводим забег до нужной фазы его же правилами.
+       *
+       * Подменять состояние руками значило бы проверять кадр, которого в игре
+       * не бывает. До двери забег своим ходом не доходит: без игрока он
+       * умирает в первой комнате, а дверь стоит ЗА зачищенной комнатой —
+       * поэтому арену чистим каждый тик, заменяя идеального стрелка.
+       */
+      for (let i = 0; i < 8000; i++) {
+        d.tick(1);
+        if (d.state().phase === want.phase) break;
+      }
+      d.render();
+
+      const el = document.getElementById('game') as HTMLCanvasElement;
+      const gl = el.getContext('webgl2')!;
+      const w = gl.drawingBufferWidth;
+      const h = gl.drawingBufferHeight;
+      const px = new Uint8Array(w * h * 4);
+      gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+
+      const colors = new Set<number>();
+      for (let i = 0; i < w * h; i += 13) {
+        colors.add((px[i * 4] << 16) | (px[i * 4 + 1] << 8) | px[i * 4 + 2]);
+      }
+      return { phase: d.state().phase, colorCount: colors.size, shapes: d.perf().shapes };
+    }, screen);
+
+    expect(frame.phase, 'забег не дошёл до нужной фазы').toBe(screen.phase);
+    expect(frame.shapes, 'экран пуст — рисовать было нечего').toBeGreaterThan(20);
+    expect(frame.colorCount, 'кадр почти одноцветный').toBeGreaterThan(6);
+  });
+}

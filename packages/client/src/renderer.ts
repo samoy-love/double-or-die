@@ -46,6 +46,8 @@ import {
   ANGLE_FULL,
   BALL,
   BETS,
+  DoorType,
+  MAX_DOORS,
   BOSS,
   BetCategory,
   BetId,
@@ -1670,13 +1672,155 @@ export class Renderer {
 
     this.drawSettlement(s, w, h, fb);
 
-    // Ожидание перезапуска после гибели: игрок должен видеть, что игра жива.
-    if (s.meta[Meta.RestartAt] !== 0) {
+    /*
+     * Отсчёт после гибели: сколько осталось до итогов.
+     *
+     * Раньше это поле означало «сейчас перезапустимся», и кольцо честно
+     * отсчитывало перезапуск. В 0.4.0 перезапуск заменён концом забега, поле
+     * осталось — и кольцо начало отсчитывать до нуля, замирать на нём и
+     * ничего не объяснять: игрок видел красный ноль и застывший бой. Теперь
+     * оно рисуется ТОЛЬКО пока идёт отсчёт, а на нуле его сменяет экран
+     * итогов.
+     */
+    if (s.meta[Meta.RestartAt] !== 0 && s.meta[Meta.Phase] !== RunPhase.Summary) {
       const left = Math.max(0, s.meta[Meta.RestartAt] - s.tick);
       const c = PALETTE.danger;
       b.push(Shape.Ring, w / 2, h / 2, 60, 60, 0, 0, 0, 0, 0, 6, c.r, c.g, c.b, 0.9);
       drawNumber(b, Math.ceil(left / 60), w / 2, h / 2, 42, PALETTE.hudText);
     }
+
+    this.drawRunScreens(s, w, h);
+  }
+
+  /**
+   * Экраны забега: дверь, плата и итоги.
+   *
+   * Все три уже работали в симуляции и были покрыты тестами, но клиент о них
+   * не знал вовсе: в рендере была единственная ссылка на фазу, и та на босса.
+   * Играть руками было нельзя — человек упирался в замерший бой без единой
+   * подсказки, что нажать. Прогоны при этом шли: боты жмут кнопку вслепую.
+   *
+   * Затемнение под каждым экраном обязательно. Бой под ним остаётся видимым —
+   * это тот же мир, а не другое место, — но перестаёт спорить за внимание с
+   * решением, ради которого экран и открыт.
+   */
+  private drawRunScreens(s: SimState, w: number, h: number): void {
+    const phase = s.meta[Meta.Phase] as RunPhase;
+    if (phase === RunPhase.Door) this.drawDoorScreen(s, w, h);
+    else if (phase === RunPhase.HouseCut) this.drawHouseCutScreen(s, w, h);
+    else if (phase === RunPhase.Summary) this.drawSummaryScreen(s, w, h);
+  }
+
+  /** Затемнение под экраном: бой виден, но не спорит за внимание. */
+  private dim(w: number, h: number): void {
+    const c = PALETTE.background;
+    this.batch.push(Shape.Box, w / 2, h / 2, w / 2, h / 2, 0, c.r, c.g, c.b, 0.82, 0, 0, 0, 0, 0);
+  }
+
+  private screenTitle(text: string, w: number, y: number, size = 38): void {
+    const c = PALETTE.hudText;
+    this.text.push(text, w / 2, y, size, Face.Display, c.r, c.g, c.b, 0.95, 'center');
+  }
+
+  private screenLine(text: string, w: number, y: number, colour = PALETTE.hudDim, size = 15): void {
+    this.text.push(text, w / 2, y, size, Face.Ui, colour.r, colour.g, colour.b, 0.9, 'center');
+  }
+
+  /**
+   * Выбор двери: три карточки, выбранная — золотом.
+   *
+   * Золото здесь то же, что подсвечивает ближайшую карту на арене: «вот это
+   * возьмётся, если нажать». Игрок уже выучил его в бою, и заводить второй
+   * язык подсветки ради экрана значило бы учить заново.
+   */
+  private drawDoorScreen(s: SimState, w: number, h: number): void {
+    this.dim(w, h);
+    this.screenTitle(t('door.title'), w, h / 2 - 150);
+    this.screenLine(t('door.hint'), w, h / 2 - 110);
+
+    const pick = s.meta[Meta.DoorPick];
+    const gap = 230;
+    for (let i = 0; i < MAX_DOORS; i++) {
+      const x = w / 2 + (i - (MAX_DOORS - 1) / 2) * gap;
+      const chosen = i === pick;
+      const colour = chosen ? PALETTE.accent : PALETTE.hudDim;
+      entity(this.batch, Shape.Box, x, h / 2, 96, 128, 0, colour, chosen ? 1 : 0.7);
+      this.text.push(
+        doorTypeName(s.doorType[i] as DoorType),
+        x,
+        h / 2 + 160,
+        16,
+        Face.Ui,
+        colour.r,
+        colour.g,
+        colour.b,
+        chosen ? 1 : 0.75,
+        'center',
+      );
+    }
+  }
+
+  /**
+   * Плата: три строки и то, чем кончится нажатие.
+   *
+   * Строк ровно три — сколько просят, сколько есть, чего не хватает, — потому
+   * что решение здесь одно и считается в уме. Кнопка называется по-разному в
+   * зависимости от кошелька: «Заплатить», когда хватает, и «Иди в долг»,
+   * когда нет. Одна подпись на оба случая врала бы в одном из них.
+   */
+  private drawHouseCutScreen(s: SimState, w: number, h: number): void {
+    this.dim(w, h);
+    this.screenTitle(t('house.title'), w, h / 2 - 130);
+
+    let purse = 0;
+    for (let i = 0; i < s.playerCount; i++) purse += s.pChips[i];
+    const cut = s.meta[Meta.HouseCut];
+    const enough = purse >= cut;
+
+    this.screenLine(t('house.cut'), w, h / 2 - 60);
+    drawNumber(this.batch, cut, w / 2, h / 2 - 24, 34, PALETTE.accent);
+
+    this.screenLine(t('house.purse'), w, h / 2 + 26);
+    drawNumber(this.batch, purse, w / 2, h / 2 + 60, 26, PALETTE.chip);
+
+    if (!enough) {
+      this.screenLine(t('house.short'), w, h / 2 + 104, PALETTE.danger);
+      drawNumber(this.batch, cut - purse, w / 2, h / 2 + 138, 26, PALETTE.danger);
+    }
+
+    this.screenLine(
+      enough ? t('house.pay') : t('house.debt'),
+      w,
+      h / 2 + (enough ? 118 : 186),
+      enough ? PALETTE.accent : PALETTE.danger,
+      18,
+    );
+  }
+
+  /**
+   * Итоги: чем кончился забег и что игрок унёс.
+   *
+   * Отдельный экран, а не строка поверх боя. Забег обязан кончаться ЯВНО:
+   * ворота версии меряют, сколько игроков начинают второй ДОБРОВОЛЬНО, а
+   * добровольность невозможно измерить у того, кто не понял, что предыдущий
+   * закончился.
+   */
+  private drawSummaryScreen(s: SimState, w: number, h: number): void {
+    this.dim(w, h);
+    const won = s.meta[Meta.Victory] !== 0;
+
+    this.screenTitle(won ? t('summary.victory') : t('summary.death'), w, h / 2 - 120, 34);
+
+    this.screenLine(t('summary.floor'), w, h / 2 - 46);
+    drawNumber(this.batch, s.meta[Meta.Floor], w / 2, h / 2 - 12, 30, PALETTE.hudText);
+
+    this.screenLine(t('summary.keys'), w, h / 2 + 40);
+    drawNumber(this.batch, s.meta[Meta.Keys], w / 2, h / 2 + 78, 42, PALETTE.accent);
+
+    this.screenLine(t('summary.paid'), w, h / 2 + 128, PALETTE.hudDim, 13);
+    drawNumber(this.batch, s.meta[Meta.PaidToAce], w / 2, h / 2 + 158, 20, PALETTE.hudDim);
+
+    this.screenLine(t('summary.again'), w, h / 2 + 206, PALETTE.accent, 18);
   }
 
   /**
@@ -2441,6 +2585,25 @@ function drawSlash(
  * данные ради приведения, которого всё равно не избежать.
  */
 const betName = (id: string): string => t(`bet.${id}.name` as StringKey);
+
+/**
+ * Имя типа двери из словаря.
+ *
+ * Таблицей, а не вычисляемым ключом: типов шесть, они перечислением, и
+ * `door.type.${DoorType[i]}` потребовал бы держать в сборке объект
+ * перечисления ради шести строк. Заодно опечатка в ключе ловится линтером
+ * словаря, а не пустой надписью на экране.
+ */
+const DOOR_NAME: Readonly<Record<DoorType, StringKey>> = {
+  [DoorType.Fight]: 'door.type.fight',
+  [DoorType.Fat]: 'door.type.fat',
+  [DoorType.Shop]: 'door.type.shop',
+  [DoorType.Gift]: 'door.type.gift',
+  [DoorType.Event]: 'door.type.event',
+  [DoorType.DebtPit]: 'door.type.pit',
+};
+
+const doorTypeName = (type: DoorType): string => t(DOOR_NAME[type]);
 
 /** Форма иконки: категория обязана читаться и без цвета (GDD §21). */
 const categoryShape = (c: BetCategory): Shape =>
