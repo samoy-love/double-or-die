@@ -20,7 +20,7 @@
  * (`content/upgrades.json`), и правит их балансировщик.
  */
 
-import { CHIP, PISTOL, PLAYER, UPGRADE } from './config';
+import { CHIP, HOUSE, PISTOL, PLAYER, UPGRADE } from './config';
 import { type Fx, fromInt } from './fixed';
 import { Btn, type InputFrame } from './input';
 import { Stream, nextInt } from './rng';
@@ -54,6 +54,17 @@ export function priceOf(base: number, floor: number): number {
   }
   return Math.trunc(num / den);
 }
+
+/**
+ * Сколько заведение даёт за апгрейд: половина цены ТЕКУЩЕГО этажа (ECONOMY §10).
+ *
+ * Цена берётся от того этажа, на котором торгуются, а не от того, где купили:
+ * так правило проще (не надо помнить, где что куплено) и щедрее там, где игрок
+ * и беднеет. Обратное — считать по этажу покупки — превращало бы ранние
+ * покупки в ловушку.
+ */
+export const buybackPriceOf = (base: number, floor: number): number =>
+  Math.trunc((priceOf(base, floor) * HOUSE.buybackPct) / 100);
 
 // ---------------------------------------------------------------------------
 // Купленное
@@ -101,6 +112,74 @@ export function grantUpgrade(s: SimState, player: number, upgrade: number): bool
     return true;
   }
   return false;
+}
+
+/**
+ * Отдать апгрейд заведению: слот пустеет, эффект уходит вместе с ним.
+ *
+ * Сердце снимается ЗДЕСЬ по той же причине, по какой начисляется в
+ * `grantUpgrade`: оставленное, оно превратило бы торг в станок — купить сердце,
+ * продать его обратно и оставить себе здоровье стоило бы половины ценника и
+ * повторялось бы каждый этаж.
+ *
+ * Последнее сердце не забирается: экран платы не боевой, и смерть от нажатия
+ * кнопки на нём была бы смертью в интерфейсе, а не в игре. Ноль здесь означал
+ * бы ещё и живого игрока без здоровья — состояние, которое ловит инвариант.
+ */
+function revokeSlot(s: SimState, player: number, n: number): void {
+  const held = s.pUpgrades[slot(player, n)];
+  if (held === 0) return;
+  s.pUpgrades[slot(player, n)] = 0;
+
+  const spec = UPGRADES[held - 1];
+  if (spec.effect === UpgradeEffect.Heart) {
+    const left = s.pHearts[player] - spec.value;
+    s.pHearts[player] = left < 1 ? 1 : left;
+  }
+}
+
+/**
+ * Что дороже отдать: тот, кто ближе закрывает недостачу.
+ *
+ * Выбирать игроку нечем — на экране платы нет ни списка, ни фокуса (см.
+ * `stepHouseCut`), — поэтому выбирает правило, и оно обязано выбирать то же,
+ * что выбрал бы игрок: самый дешёвый из тех, кого хватает, а если не хватает
+ * никого — самый дорогой, чтобы недостача сократилась сильнее всего.
+ */
+function preferable(candidate: number, current: number, shortfall: number): boolean {
+  const candidateEnough = candidate >= shortfall;
+  const currentEnough = current >= shortfall;
+  if (candidateEnough !== currentEnough) return candidateEnough;
+  return candidateEnough ? candidate < current : candidate > current;
+}
+
+/**
+ * Продать апгрейд заведению. Возвращает выручку; ноль — продавать нечего.
+ *
+ * Третий выход торга (ECONOMY §10). Ноль — не ошибка вызывающего, а законный
+ * ответ: у игрока может не быть ни одного апгрейда, и торг обязан это пережить.
+ */
+export function sellUpgrade(s: SimState, player: number, shortfall: number): number {
+  const floor = s.meta[Meta.Floor];
+  let pick = -1;
+  let price = 0;
+
+  for (let i = 0; i < MAX_UPGRADE_SLOTS; i++) {
+    const held = s.pUpgrades[slot(player, i)];
+    if (held === 0) continue;
+    const offer = buybackPriceOf(UPGRADES[held - 1].base, floor);
+    // Равные ценники разрешаются младшим слотом: две базы по 40 в каталоге
+    // есть, и без этого порядок зависел бы от порядка покупок.
+    if (pick < 0 || preferable(offer, price, shortfall)) {
+      pick = i;
+      price = offer;
+    }
+  }
+
+  if (pick < 0) return 0;
+  revokeSlot(s, player, pick);
+  s.pChips[player] += price;
+  return price;
 }
 
 /**

@@ -60,6 +60,7 @@ import {
   hasUpgrade,
   openShop,
   upgradeCount,
+  enterHouseCut,
   bossRoomBudget,
   bossStunned,
   clearArena,
@@ -362,6 +363,14 @@ export type Step =
   /** Перевести забег на названный этаж: цены и плата считаются от него. */
   | { floor: number }
   /**
+   * Открыть экран платы: то же, что делает смерть босса в конце этажа.
+   *
+   * Не обход хода забега, а другой предмет проверки: то, что этаж кончается
+   * платой, проверяется своим тестом, а торг — этим шагом, без похода через
+   * восемь комнат и босса до него.
+   */
+  | { houseCut: true }
+  /**
    * Туз выкладывает свою карту.
    *
    * Названным пари, а не тем, что выпадет: расписание выходов проверяется
@@ -578,6 +587,7 @@ const STEP_SCHEMA: Record<StepKey, Node> = {
   shop: TRUE,
   upgrade: obj({ id: UPGRADE_ID, player: PLAYER_IDX() }, ['id']),
   floor: int(1, FLOORS_PER_RUN),
+  houseCut: TRUE,
   aceBet: obj({ id: BET_ID }, ['id']),
   settle: TRUE,
   clear: TRUE,
@@ -1223,6 +1233,8 @@ export function runScenario(sc: Scenario): ScenarioResult {
         }
       } else if ('floor' in st) {
         s.meta[Meta.Floor] = st.floor;
+      } else if ('houseCut' in st) {
+        enterHouseCut(s);
       } else if ('aceBet' in st) {
         // Срок тот же, что у обычной карты: в игре предложение живёт до первой
         // волны, а сценарий волн по умолчанию не пускает — и часы паузы,
