@@ -38,7 +38,21 @@ export type StringKey =
   | 'bet.no_dash.name'
   | 'bet.no_red_zone.name'
   | 'bet.under_45s.name'
+  | 'door.hint'
+  | 'door.title'
+  | 'door.type.event'
+  | 'door.type.fat'
+  | 'door.type.fight'
+  | 'door.type.gift'
+  | 'door.type.pit'
+  | 'door.type.shop'
   | 'error.webgl2'
+  | 'house.cut'
+  | 'house.debt'
+  | 'house.pay'
+  | 'house.purse'
+  | 'house.short'
+  | 'house.title'
   | 'overlay.dropped'
   | 'overlay.halt.hint'
   | 'overlay.halt.report'
@@ -47,7 +61,13 @@ export type StringKey =
   | 'overlay.paused'
   | 'overlay.stats'
   | 'overlay.update'
-  | 'settlement.title';
+  | 'settlement.title'
+  | 'summary.again'
+  | 'summary.death'
+  | 'summary.floor'
+  | 'summary.keys'
+  | 'summary.paid'
+  | 'summary.victory';
 
 export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
   ru: {
@@ -75,8 +95,22 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
     'bet.no_dash.name': 'Без рывка',
     'bet.no_red_zone.name': 'Не заходи в красную зону',
     'bet.under_45s.name': 'Быстрее 45 секунд',
+    'door.hint': 'Заведение не возвращает выбор',
+    'door.title': 'Выбирайте дверь',
+    'door.type.event': 'Событие',
+    'door.type.fat': 'Жирный бой',
+    'door.type.fight': 'Бой',
+    'door.type.gift': 'Дар',
+    'door.type.pit': 'Долговая яма',
+    'door.type.shop': 'Лавка',
     'error.webgl2':
       'WebGL2 недоступен: без него игра не рисуется. Обновите браузер или включите аппаратное ускорение.',
+    'house.cut': 'Доля заведения',
+    'house.debt': 'Иди в долг',
+    'house.pay': 'Заплатить',
+    'house.purse': 'В кошельке',
+    'house.short': 'Не хватает',
+    'house.title': 'Стол берёт своё',
     'overlay.dropped': 'ПОТЕРЯНО ФИГУР {count}',
     'overlay.halt.hint':
       'Это дефект ядра, а не ваш ход. P или Esc — продолжить, F5 — начать заново.',
@@ -88,6 +122,12 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
       '{build}  ·  тик {tick}  ·  {fps} FPS  ·  сид {seed}  ·  игроков {players}  ·  {hash}',
     'overlay.update': 'Доступна новая версия ({build}) — обновите страницу',
     'settlement.title': 'Расчёт',
+    'summary.again': 'Ещё разок',
+    'summary.death': 'Мёртвый не выигрывает',
+    'summary.floor': 'Этаж',
+    'summary.keys': 'Ключи за забег',
+    'summary.paid': 'Отдано заведению',
+    'summary.victory': 'Вы ушли своими ногами',
   },
   en: {
     'ace.bark.applaud.1': 'It happens. It happens to everyone.',
@@ -114,8 +154,22 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
     'bet.no_dash.name': 'No Dash',
     'bet.no_red_zone.name': 'Stay Out of the Red Zone',
     'bet.under_45s.name': 'Under 45 Seconds',
+    'door.hint': 'The house does not refund choices',
+    'door.title': 'Choose a door',
+    'door.type.event': 'Event',
+    'door.type.fat': 'Fat fight',
+    'door.type.fight': 'Fight',
+    'door.type.gift': 'Gift',
+    'door.type.pit': 'Debt pit',
+    'door.type.shop': 'Shop',
     'error.webgl2':
       'WebGL2 is unavailable: the game cannot draw without it. Update the browser or enable hardware acceleration.',
+    'house.cut': 'House cut',
+    'house.debt': 'Go into debt',
+    'house.pay': 'Pay up',
+    'house.purse': 'In the purse',
+    'house.short': 'Short',
+    'house.title': 'The house takes its cut',
     'overlay.dropped': 'SHAPES DROPPED {count}',
     'overlay.halt.hint':
       'This is a core defect, not your move. P or Esc to continue, F5 to start over.',
@@ -127,5 +181,11 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
       '{build}  ·  tick {tick}  ·  {fps} FPS  ·  seed {seed}  ·  players {players}  ·  {hash}',
     'overlay.update': 'A new build ({build}) is available — reload the page',
     'settlement.title': 'Settlement',
+    'summary.again': 'One more',
+    'summary.death': 'The dead do not collect',
+    'summary.floor': 'Floor',
+    'summary.keys': 'Keys earned',
+    'summary.paid': 'Paid to the house',
+    'summary.victory': 'You walked out on your own',
   },
 };
