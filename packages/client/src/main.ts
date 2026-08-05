@@ -4,10 +4,11 @@
  * Состояние задаётся URL-параметрами: агенту достаточно одного перехода,
  * чтобы оказаться где нужно, без кликов и ожиданий.
  *
- *   ?seed=1234&players=2&autopause=1
+ *   ?seed=1234&players=2&autopause=1&lang=en
  */
 
 import { autoReport, downloadBugReport, reportFileName } from './bugreport';
+import { detectLang, setLang } from './i18n';
 import { GameLoop } from './loop';
 import { BUILD, IS_DEV, registerServiceWorker, watchForUpdates } from './version';
 import { Overlay } from './overlay';
@@ -15,6 +16,16 @@ import { log, logError } from './protocol';
 import { Profile } from './save';
 
 async function main(): Promise<void> {
+  /*
+   * Язык выбирается ПЕРВЫМ действием загрузки.
+   *
+   * Всё, что рисуется дальше, спрашивает словарь: атлас глифов собирается по
+   * буквам выбранного языка, а плашки оверлея берут строки при создании.
+   * Выбранный позже язык означал бы кадр на чужом языке и атлас без половины
+   * букв.
+   */
+  setLang(detectLang(location.search, navigator.languages));
+
   const params = new URLSearchParams(location.search);
   const seed = Number(params.get('seed') ?? 1) || 1;
   const players = Math.min(4, Math.max(1, Number(params.get('players') ?? 1) || 1));

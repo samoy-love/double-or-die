@@ -6,6 +6,7 @@
  * сверяются два запуска, когда тест уже упал и нужно понять, где именно.
  */
 
+import { t } from './i18n';
 import type { GameLoop } from './loop';
 import { BUILD } from './version';
 
@@ -60,13 +61,21 @@ export class Overlay {
 
     const s = this.loop.state;
     this.el.textContent =
-      `${BUILD}  ·  тик ${s.tick}  ·  ${this.loop.fps} FPS  ·  ` +
-      `сид ${s.seed}  ·  игроков ${s.playerCount}  ·  ${this.loop.hash()}` +
+      t('overlay.stats', {
+        build: BUILD,
+        tick: s.tick,
+        fps: this.loop.fps,
+        seed: s.seed,
+        players: s.playerCount,
+        hash: this.loop.hash(),
+      }) +
       // Обрезанный кадр — это неполная картинка, и молчать о ней нельзя.
       // Показывается, только когда есть о чём: строка про ноль потерянных
       // фигур каждый кадр приучает не читать всю строку целиком.
-      (this.loop.droppedShapes > 0 ? `  ·  ПОТЕРЯНО ФИГУР ${this.loop.droppedShapes}` : '') +
-      (this.loop.isPaused ? '  ·  ПАУЗА' : '');
+      (this.loop.droppedShapes > 0
+        ? `  ·  ${t('overlay.dropped', { count: this.loop.droppedShapes })}`
+        : '') +
+      (this.loop.isPaused ? `  ·  ${t('overlay.paused')}` : '');
   }
 
   /**
@@ -77,7 +86,7 @@ export class Overlay {
    */
   showUpdate(build: string): void {
     this.update.hidden = false;
-    this.update.textContent = `Доступна новая версия (${build}) — обновите страницу`;
+    this.update.textContent = t('overlay.update', { build });
     this.update.onclick = () => location.reload();
   }
 
@@ -101,13 +110,13 @@ export class Overlay {
   showHalt(message: string, seed: number, tick: number, reportFile?: string): void {
     this.halt.hidden = false;
     this.halt.innerHTML =
-      '<b>Симуляция остановлена: нарушен инвариант</b>\n\n' +
+      `<b>${escapeHtml(t('overlay.halt.title'))}</b>\n\n` +
       `${escapeHtml(message)}\n\n` +
-      `сид ${seed} · тик ${tick} · сборка ${BUILD}\n` +
+      `${escapeHtml(t('overlay.halt.where', { seed, tick, build: BUILD }))}\n` +
       // Файл уже скачан, и сказать об этом надо здесь: игрок, который его не
       // заметил, не приложит к жалобе ровно то, по чему дефект и ищется.
-      (reportFile ? `Баг-репорт сохранён: ${escapeHtml(reportFile)}\n` : '') +
-      'Это дефект ядра, а не ваш ход. P или Esc — продолжить, F5 — начать заново.';
+      (reportFile ? `${escapeHtml(t('overlay.halt.report', { file: reportFile }))}\n` : '') +
+      escapeHtml(t('overlay.halt.hint'));
   }
 
   /**
@@ -129,6 +138,10 @@ export class Overlay {
  * текст, а не как разметка. Своих угловых скобок он не содержит, но полагаться
  * на это нельзя: сообщение собирается из состояния, а состояние в дальнейшем
  * будет приходить и по сети (0.9.0).
+ *
+ * Через ту же воронку идут и строки словаря. Разметки в них не бывает по схеме
+ * (`content/strings.schema.md`), но словарь правит переводчик, а не автор этой
+ * страницы, — и цена доверия к чужому файлу здесь выше цены одной замены.
  */
 const escapeHtml = (v: string): string =>
   v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

@@ -11,6 +11,42 @@
       "note": "Иконка вкладки: цилиндр Туза. Рисуется вектором, растровых версий не держим."
     },
     {
+      "id": "font-display-latin",
+      "file": "assets/fonts/poiret-one-latin.woff2",
+      "source": "library",
+      "license": "OFL 1.1 — assets/fonts/OFL-poiret-one.txt",
+      "stage": "final",
+      "usedBy": "packages/client/src/style.css",
+      "note": "Акцидентная гарнитура: титулы и голос заведения. Подмножество латиницы."
+    },
+    {
+      "id": "font-display-cyrillic",
+      "file": "assets/fonts/poiret-one-cyrillic.woff2",
+      "source": "library",
+      "license": "OFL 1.1 — assets/fonts/OFL-poiret-one.txt",
+      "stage": "final",
+      "usedBy": "packages/client/src/style.css",
+      "note": "То же начертание, кириллическое подмножество: грузится только там, где нужно."
+    },
+    {
+      "id": "font-ui-latin",
+      "file": "assets/fonts/inter-latin.woff2",
+      "source": "library",
+      "license": "OFL 1.1 — assets/fonts/OFL-inter.txt",
+      "stage": "final",
+      "usedBy": "packages/client/src/style.css",
+      "note": "Интерфейсная гарнитура, вариативная. Подмножество латиницы."
+    },
+    {
+      "id": "font-ui-cyrillic",
+      "file": "assets/fonts/inter-cyrillic.woff2",
+      "source": "library",
+      "license": "OFL 1.1 — assets/fonts/OFL-inter.txt",
+      "stage": "final",
+      "usedBy": "packages/client/src/style.css",
+      "note": "То же начертание, кириллическое подмножество."
+    },
+    {
       "id": "service-worker",
       "file": "public/sw.js",
       "source": "own",

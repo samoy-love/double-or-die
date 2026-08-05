@@ -14,7 +14,22 @@ import { defineConfig, globalIgnores } from 'eslint/config';
  * границ — в CI и по существу.
  */
 export default defineConfig([
-  globalIgnores(['dist/**', 'dev-dist/**', 'stage/**', 'coverage/**', 'public/sw.js']),
+  /*
+   * `.claude/worktrees` — рабочие копии агентов: целые репозитории внутри
+   * нашего, со своими `tsconfig.json`. Линтер, добравшись до них, видит
+   * несколько корней конфигурации и отказывается разбирать вообще всё —
+   * `npm run check` падает с «multiple candidate TSConfigRootDirs» на файлах,
+   * которые к проекту отношения не имеют. Каталог заодно исключён в
+   * `.gitignore`, и по той же причине.
+   */
+  globalIgnores([
+    'dist/**',
+    'dev-dist/**',
+    'stage/**',
+    'coverage/**',
+    'public/sw.js',
+    '.claude/worktrees/**',
+  ]),
 
   {
     files: ['**/*.{ts,js}'],

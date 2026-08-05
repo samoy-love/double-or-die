@@ -1,6 +1,6 @@
 /**
- * Пари — данные, а не код (TECH §11), но ядру симуляции нельзя ни файлов, ни
- * зависимостей. Отсюда этот генератор.
+ * Пари и строки — данные, а не код (TECH §11), но ядру симуляции нельзя ни
+ * файлов, ни зависимостей. Отсюда этот генератор.
  *
  * `content/bets.json` — источник правды: его правит балансировщик, его читает
  * будущий редактор в админке, он же уедет в remote config. Схема на Zod
@@ -11,8 +11,14 @@
  * это правило дороже удобства — на нём стоят реплеи, античит и порт на
  * консоли. Сгенерированный модуль остаётся чистым TypeScript без зависимостей.
  *
- * Дрейф ловится в CI: `--check` пересобирает модуль в память и сравнивает с
- * закоммиченным. Разошлись — значит кто-то правил одно, забыв про другое.
+ * `content/strings.json` живёт по тем же правилам и по своей причине: словарь
+ * правит переводчик, а не программист, и файл, который открывают на семи
+ * языках, не имеет права быть исходником на TypeScript. Клиент получает из него
+ * модуль с ТИПИЗИРОВАННЫМИ ключами — опечатка в ключе становится ошибкой
+ * компиляции, а не пустым местом на экране, замеченным на чужом языке.
+ *
+ * Дрейф ловится в CI: `--check` пересобирает модули в память и сравнивает с
+ * закоммиченными. Разошлись — значит кто-то правил одно, забыв про другое.
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -22,6 +28,8 @@ import { z } from 'zod';
 const ROOT = join(import.meta.dirname, '..');
 const SOURCE = join(ROOT, 'content', 'bets.json');
 const TARGET = join(ROOT, 'packages', 'sim', 'src', 'bets.generated.ts');
+const STRINGS_SOURCE = join(ROOT, 'content', 'strings.json');
+const STRINGS_TARGET = join(ROOT, 'packages', 'client', 'src', 'strings.generated.ts');
 
 /**
  * Как считается прогресс `q` — доля пути, пройденного под риском
@@ -237,6 +245,169 @@ export const BET_COUNT = BETS.length;
 `;
 }
 
+// ---------------------------------------------------------------------------
+// Словарь строк
+// ---------------------------------------------------------------------------
+
+/**
+ * Языки версии 0.4.0 (UX §8). Порядок задаёт порядок в сгенерированном модуле,
+ * первый — исходник, с которого переводят остальные.
+ */
+const LANGS = ['ru', 'en'] as const;
+type Lang = (typeof LANGS)[number];
+
+/** Область.точное место[.номер] — `ace.bark.yawn.2`, `overlay.paused`. */
+const KEY_RE = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$/;
+
+/** Имя подстановки в фигурных скобках: `{count}`, `{seed}`. */
+const PLACEHOLDER_RE = /\{([a-z][a-zA-Z0-9]*)\}/g;
+
+const Text = z
+  .string()
+  .min(1)
+  // Перенос — забота раскладки, а не словаря: строка, разбитая `\n` в данных,
+  // ломается на первом же языке с другой длиной слов.
+  .refine((v) => !v.includes('\n'), { message: 'в строке словаря нет переводов строки' });
+
+const Dictionary = z.record(z.string().regex(KEY_RE), Text);
+
+const Strings = z
+  .object({
+    $schema: z.string().optional(),
+    version: z.literal(1),
+    languages: z.object(
+      Object.fromEntries(LANGS.map((l) => [l, Dictionary])) as Record<Lang, typeof Dictionary>,
+    ),
+  })
+  // Паритет ключей — главная проверка файла. Языки лежат отдельными таблицами
+  // ради переводчика, который работает с языком целиком; цена этого удобства —
+  // ровно тот ключ, который забыли в одной из таблиц, и платит её проверка,
+  // а не игрок, увидевший пустое место на своём языке.
+  .superRefine((c, ctx) => {
+    const base = Object.keys(c.languages[LANGS[0]]);
+    for (const lang of LANGS.slice(1)) {
+      const own = new Set(Object.keys(c.languages[lang]));
+      for (const key of base) {
+        if (!own.has(key)) ctx.addIssue({ code: 'custom', message: `${lang}: нет ключа ${key}` });
+      }
+      for (const key of own) {
+        if (!base.includes(key)) {
+          ctx.addIssue({ code: 'custom', message: `${lang}: лишний ключ ${key}` });
+        }
+      }
+    }
+  })
+  // Перевод, потерявший `{seed}`, оставляет игрока без номера сида в
+  // баг-репорте — и заметить это можно только на том языке, на котором никто
+  // не играл.
+  .superRefine((c, ctx) => {
+    for (const key of Object.keys(c.languages[LANGS[0]])) {
+      const base = placeholders(c.languages[LANGS[0]][key]);
+      for (const lang of LANGS.slice(1)) {
+        const value = c.languages[lang][key];
+        if (value === undefined) continue;
+        const own = placeholders(value);
+        if (base.join(',') !== own.join(',')) {
+          ctx.addIssue({
+            code: 'custom',
+            message: `${lang}: подстановки в ${key} разошлись с ${LANGS[0]} (${base.join(', ') || '—'} против ${own.join(', ') || '—'})`,
+          });
+        }
+      }
+    }
+  });
+
+type Strings = z.infer<typeof Strings>;
+
+/** Имена подстановок строки, отсортированные: сравнивается набор, а не порядок. */
+function placeholders(value: string): string[] {
+  return [...value.matchAll(PLACEHOLDER_RE)].map((m) => m[1]).sort();
+}
+
+/**
+ * Имена пари — тоже строки словаря, а не поле каталога.
+ *
+ * `name` в `content/bets.json` остаётся, но он служебный: по нему пари ищут в
+ * сценариях, отчётах балансировщика и логах, и переводить его незачем. На
+ * карту же попадает `bet.<id>.name` из словаря — иначе английская сборка
+ * показывала бы русское условие, а каталог пришлось бы держать в семи копиях.
+ */
+function checkBetNames(strings: Strings, catalog: Catalog): string[] {
+  const problems: string[] = [];
+  const expected = catalog.bets.map((b) => `bet.${b.id}.name`);
+  const have = Object.keys(strings.languages[LANGS[0]]).filter((k) => /^bet\..+\.name$/.test(k));
+
+  for (const key of expected) {
+    if (!have.includes(key)) problems.push(`в словаре нет имени пари: ${key}`);
+  }
+  for (const key of have) {
+    if (!expected.includes(key)) problems.push(`имя пари без пари в каталоге: ${key}`);
+  }
+  // Условие на карте — не длиннее 28 знаков (GLOSSARY, п. 7). Английское
+  // держим в тех же 28: макет, перекроенный под первый же перевод, придётся
+  // кроить и под остальные шесть.
+  for (const lang of LANGS) {
+    for (const key of expected) {
+      const value = strings.languages[lang][key];
+      if (value !== undefined && value.length > 28) {
+        problems.push(`${lang}: ${key} длиннее 28 знаков (${value.length})`);
+      }
+    }
+  }
+  return problems;
+}
+
+/** Строка в литерал TypeScript. Кавычки одинарные — так же форматирует prettier. */
+const quote = (v: string): string => `'${v.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+
+/**
+ * Пара «ключ: значение» так, как её написал бы prettier.
+ *
+ * Сгенерированный файл лежит в репозитории и проходит `format:check` наравне с
+ * рукописным. Форматировать его отдельным вызовом prettier значило бы завести
+ * зависимость генератора от форматтера ради одного правила — переноса длинной
+ * строки на следующий уровень отступа. Правило простое, и дешевле повторить
+ * его здесь, чем объяснять, почему `npm run content` тянет за собой prettier.
+ */
+function row(key: string, value: string): string {
+  const flat = `    ${key}: ${value},`;
+  return flat.length <= 100 ? flat : `    ${key}:\n      ${value},`;
+}
+
+function generateStrings(strings: Strings): string {
+  const keys = Object.keys(strings.languages[LANGS[0]]).sort();
+  const union = keys.map((k) => `  | ${quote(k)}`).join('\n');
+  const tables = LANGS.map((lang) => {
+    const rows = keys.map((k) => row(quote(k), quote(strings.languages[lang][k]))).join('\n');
+    return `  ${lang}: {\n${rows}\n  },`;
+  }).join('\n');
+
+  return `/**
+ * СГЕНЕРИРОВАННЫЙ ФАЙЛ. Правьте content/strings.json и запускайте npm run content.
+ *
+ * Весь видимый игроку текст живёт данными (UX §8), а клиенту нужен модуль с
+ * типизированными ключами: опечатка в ключе обязана падать компиляцией, а не
+ * пустым местом на экране, замеченным на языке, на котором никто не играл.
+ * Расхождение источника и этого файла ловит CI.
+ */
+
+/** Языки версии 0.4.0. Первый — исходник, с которого переводят остальные. */
+export const LANGS = [${LANGS.map(quote).join(', ')}] as const;
+
+export type Lang = (typeof LANGS)[number];
+
+/** Ключ словаря. Список закрыт: строки вне его в игре не бывает. */
+export type StringKey =
+${union};
+
+export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
+${tables}
+};
+`;
+}
+
+// ---------------------------------------------------------------------------
+
 function main(): void {
   const raw = JSON.parse(readFileSync(SOURCE, 'utf8')) as unknown;
   const parsed = Catalog.safeParse(raw);
@@ -248,21 +419,51 @@ function main(): void {
     process.exit(1);
   }
 
+  const rawStrings = JSON.parse(readFileSync(STRINGS_SOURCE, 'utf8')) as unknown;
+  const parsedStrings = Strings.safeParse(rawStrings);
+  if (!parsedStrings.success) {
+    console.error('✗ content/strings.json не проходит схему:\n');
+    for (const issue of parsedStrings.error.issues) {
+      console.error(`  ${issue.path.join('.') || '(корень)'}: ${issue.message}`);
+    }
+    process.exit(1);
+  }
+
+  const betNameProblems = checkBetNames(parsedStrings.data, parsed.data);
+  if (betNameProblems.length > 0) {
+    console.error('✗ словарь и каталог пари разошлись:\n');
+    for (const p of betNameProblems) console.error(`  ${p}`);
+    process.exit(1);
+  }
+
   const generated = generate(parsed.data);
+  const generatedStrings = generateStrings(parsedStrings.data);
+  const keyCount = Object.keys(parsedStrings.data.languages[LANGS[0]]).length;
 
   if (process.argv.includes('--check')) {
-    const current = readFileSync(TARGET, 'utf8');
-    if (current !== generated) {
-      console.error('✗ packages/sim/src/bets.generated.ts разошёлся с content/bets.json');
-      console.error('  Запустите npm run content и закоммитьте результат.');
+    const drift: string[] = [];
+    if (readFileSync(TARGET, 'utf8') !== generated) {
+      drift.push('packages/sim/src/bets.generated.ts ↔ content/bets.json');
+    }
+    if (readFileSync(STRINGS_TARGET, 'utf8') !== generatedStrings) {
+      drift.push('packages/client/src/strings.generated.ts ↔ content/strings.json');
+    }
+    if (drift.length > 0) {
+      console.error('✗ сгенерированное разошлось с источником:\n');
+      for (const d of drift) console.error(`  ${d}`);
+      console.error('\n  Запустите npm run content и закоммитьте результат.');
       process.exit(1);
     }
-    console.log(`каталог пари: ${parsed.data.bets.length}, сгенерированное совпадает`);
+    console.log(
+      `каталог пари: ${parsed.data.bets.length}, словарь: ${keyCount} ключей × ${LANGS.length} языка, сгенерированное совпадает`,
+    );
     return;
   }
 
   writeFileSync(TARGET, generated);
+  writeFileSync(STRINGS_TARGET, generatedStrings);
   console.log(`каталог пари: ${parsed.data.bets.length} → ${TARGET}`);
+  console.log(`словарь: ${keyCount} ключей × ${LANGS.length} языка → ${STRINGS_TARGET}`);
 }
 
 main();
