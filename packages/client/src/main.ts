@@ -9,6 +9,7 @@
 
 import { autoReport, downloadBugReport, reportFileName } from './bugreport';
 import { detectLang, setLang } from './i18n';
+import { applyCssVariables } from './palette';
 import { GameLoop } from './loop';
 import { BUILD, IS_DEV, registerServiceWorker, watchForUpdates } from './version';
 import { Overlay } from './overlay';
@@ -16,6 +17,15 @@ import { log, logError } from './protocol';
 import { Profile } from './save';
 
 async function main(): Promise<void> {
+  /*
+   * Цвета страницы ставятся до первого кадра.
+   *
+   * CSS берёт их переменными из палитры, а не держит своих: до редизайна
+   * 0.4.0 в таблице стилей лежали шесть захардкоженных значений, палитра
+   * сменилась целиком, а фон остался прежним — и не заметил никто.
+   */
+  applyCssVariables(document.documentElement);
+
   /*
    * Язык выбирается ПЕРВЫМ действием загрузки.
    *
