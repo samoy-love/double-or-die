@@ -1,0 +1,28 @@
+{
+  "name": "Выигранная Ставка Туза платит один к одному из его кармана",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "clear": true },
+    { "chips": { "amount": 100 } },
+    { "aceBet": { "id": "no_damage" } },
+    { "input": { "buttons": ["confirm"] } },
+    { "tick": 1 },
+    { "clearInput": {} },
+    {
+      "expect": {
+        "ace": { "offer": false, "stake": { "min": 25, "max": 25 } },
+        "bets": { "id": "no_damage", "state": "active", "active": { "min": 1, "max": 1 } },
+        "chips": { "min": 100, "max": 100 }
+      }
+    },
+    { "settle": true },
+    {
+      "expect": {
+        "bets": { "id": "no_damage", "state": "won", "won": { "min": 1, "max": 1 } },
+        "chips": { "min": 125, "max": 125 },
+        "ace": { "paid": { "min": 0, "max": 0 } }
+      }
+    }
+  ]
+}

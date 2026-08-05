@@ -27,6 +27,7 @@ import {
   EnemyType,
   PLAYER,
   Stream,
+  aceCardAt,
   add,
   cos,
   createStreams,
@@ -593,6 +594,22 @@ class ProfileBot implements Bot {
       this.hearts[i] = s.pHearts[i];
       if (held === 0) this.bailing[i] = 0;
       if (this.bailing[i] && s.tick % 6 === 0) f.buttons |= Btn.CashOut;
+
+      /*
+       * Ставка Туза: решение принимает СТРАТЕГИЯ, а не случай.
+       *
+       * Без этого ограничитель G12 нечем считать: механика есть, а согласиться
+       * на неё в Monte-Carlo некому, и отчёт показывал бы ноль ставок Туза за
+       * тысячу забегов — то есть «ожидание в коридоре» по пустой выборке.
+       *
+       * Играющий на ставках принимает: ожидание для него положительное
+       * (ECONOMY §10А), и отказ был бы игрой хуже собственного профиля. Тот,
+       * кто карт не берёт вовсе (`none`), отказывается — иначе «осторожный»
+       * оказался бы игроком, который не рискует, но ставку у Туза берёт.
+       */
+      if (held < MAX_ACTIVE_BETS && aceCardAt(s) >= 0 && s.tick % 4 === 0) {
+        f.buttons |= this.strategy.maxBets > 0 ? Btn.Confirm : Btn.Cancel;
+      }
 
       this.move(s, i, f, px, py, held);
       this.aim(s, i, f, px, py);

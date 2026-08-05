@@ -10,6 +10,12 @@
  *
  * Кон списывается в момент подбора и никогда не превышает кошелёк: Туз в
  * кредит не принимает, и поэтому провал пари не создаёт долга (GDD §11).
+ *
+ * Здесь же живёт **Ставка Туза** (GDD §12А.1): раз в два-три боя он кладёт
+ * СВОЮ карту и ставит против игрока из своего кармана. Новой системы она не
+ * требует — условие берётся из того же каталога, — и меняет ровно две вещи:
+ * источник карты (`kOwner === ACE`) и направление выплаты (один к одному из
+ * его кошелька, а не кон × множитель из своего).
  */
 
 import {
@@ -23,7 +29,15 @@ import {
   redZoneY,
 } from './arena';
 import { BET_COUNT, BETS, BetId, BetProgress, type BetSpec } from './bets.generated';
-import { APPETITE, ARENA_PAD, CARD, MAX_ACTIVE_BETS, PLAYER } from './config';
+import {
+  ACE_BET,
+  APPETITE,
+  ARENA_PAD,
+  CARD,
+  MAX_ACTIVE_BETS,
+  PLAYER,
+  ROOMS_PER_FLOOR,
+} from './config';
 import { add, div, FX_ONE, type Fx, mul, sub } from './fixed';
 import { Stream, nextInt } from './rng';
 import {
@@ -50,6 +64,21 @@ export {
 /** Общая карта: досталась тому, кто добежал. */
 export const SHARED = -1;
 
+/**
+ * Карта Туза: он выложил СВОЮ и ставит против игрока (GDD §12А.1).
+ *
+ * Ещё одно отрицательное значение владельца, а не новый слот состояния и не
+ * новый массив: и то и другое меняет длину хеша, то есть валит все двадцать
+ * эталонов. Карта Туза — это карта: у неё есть пари, срок и место, а «чья
+ * она» и так живёт в `kOwner`. Отрицательные значения там уже означают «не
+ * персональная», и второе просто уточняет, чья именно.
+ *
+ * Телом её никто не подбирает: `tryTakeCard` берёт только свою и общую, а
+ * решение по этой принимается кнопкой на экране — «Принять» или
+ * «Отказаться» (`acceptAceBet` / `declineAceBet`).
+ */
+export const ACE = -2;
+
 export const betAt = (index: number): BetSpec => BETS[index];
 
 /** Слот активного пари игрока `p` под номером `n`. */
@@ -59,6 +88,179 @@ const slot = (p: number, n: number): number => p * MAX_ACTIVE_BETS + n;
 export function stakeFor(s: SimState, player: number): number {
   const tier = Math.min(APPETITE.length - 1, Math.max(0, s.pAppetite[player]));
   return Math.min(APPETITE[tier], s.pChips[player]);
+}
+
+// ---------------------------------------------------------------------------
+// Ставка Туза
+// ---------------------------------------------------------------------------
+
+/**
+ * Его кон: `min(40 × этаж, 25% кошелька игрока)` (ECONOMY §10А).
+ *
+ * Доля кошелька — не осторожность, а условие работоспособности: на первом
+ * этаже ставка в сорок превысила бы стартовые тридцать фишек, и одна карта
+ * Туза вносила бы дисперсию уровня самого рискового профиля игры.
+ */
+export function aceStakeFor(s: SimState, player: number): number {
+  const byFloor = ACE_BET.stakePerFloor * s.meta[Meta.Floor];
+  const byWallet = Math.trunc((s.pChips[player] * ACE_BET.stakeWalletPct) / 100);
+  return byFloor < byWallet ? byFloor : byWallet;
+}
+
+/**
+ * Выходит ли Туз со своей картой в бою номер `fight` (сквозной за забег).
+ *
+ * «Одна карта на 2–3 боя» (ECONOMY §10А) — это две на каждые пять, и здесь
+ * они разносятся по пяти боям равномерно. Промежутки получаются 2 и 3
+ * попеременно, а не в среднем: два боя подряд без карты и три подряд без карты
+ * — разные ощущения, и «в среднем 2.5» позволило бы обоим сойтись в одном
+ * забеге до пяти.
+ *
+ * ЧИСТАЯ ФУНКЦИЯ, и это несущее свойство, а не аккуратность. Счётчик «боёв с
+ * прошлой карты» пришлось бы держать слотом состояния — то есть менять длину
+ * `meta` и хеш, — а заодно он стал бы вторым источником истины о номере боя,
+ * который уже записан этажом и комнатой.
+ */
+export const aceBetDue = (fight: number): boolean =>
+  fight >= ACE_BET.firstFight &&
+  ((fight - ACE_BET.firstFight) * ACE_BET.offersPerPeriod) % ACE_BET.offerPeriod <
+    ACE_BET.offersPerPeriod;
+
+/**
+ * Туз выкладывает свою карту в начале комнаты, если ей срок.
+ *
+ * Не посреди боя, и это следствие того, что решение теперь принимается
+ * ЭКРАНОМ: «Принять» или «Отказаться» — выбор, который читают, а не хватают
+ * телом. Пауза перед первой волной для него и существует, поэтому и срок
+ * карты — ровно до первой волны: не ответил — значит отказался, и это не
+ * стоит ему ничего (GDD §12А.1).
+ *
+ * У босса своей карты он не кладёт: там уже идёт встречная ставка босса
+ * (GDD §8.1), и два предложения на один бой превращают выбор в очередь.
+ *
+ * Нищему он не предлагает: кон считается долей кошелька, и при пустом
+ * кармане ставка вырождается в ноль против нуля — жест без содержания.
+ */
+export function offerAceBet(s: SimState): void {
+  if (s.meta[Meta.Phase] === RunPhase.Boss) return;
+  const fight = (s.meta[Meta.Floor] - 1) * ROOMS_PER_FLOOR + s.meta[Meta.Room];
+  if (!aceBetDue(fight)) return;
+
+  let worth = 0;
+  for (let p = 0; p < s.playerCount; p++) {
+    if ((s.pFlags[p] & EntityFlag.Alive) === 0) continue;
+    if (aceStakeFor(s, p) > worth) worth = aceStakeFor(s, p);
+  }
+  if (worth === 0) return;
+
+  const bet = pickBet(s, ACE);
+  if (bet < 0) return;
+  layAceCard(s, bet, s.meta[Meta.NextWaveAt]);
+}
+
+/**
+ * Положить карту Туза в названный срок. Публично: этим пользуются сценарии.
+ *
+ * Ложится в центр арены и без поиска свободного места — в отличие от карт
+ * раскладки. Это не карта на полу, за которой бегут: это его карта на столе,
+ * и её показывает экран. Заодно точка получается чистой функцией от арены, а
+ * не третьим обращением к RNG за одну комнату.
+ */
+export const layAceCard = (s: SimState, bet: number, deadline: number): number =>
+  putCard(s, bet, ACE, deadline, s.arenaW >> 1, s.arenaH >> 1);
+
+/** Лежащая карта Туза или −1. Она всегда одна: это проверяет инвариант. */
+export function aceCardAt(s: SimState): number {
+  for (let i = 0; i < MAX_CARDS; i++) {
+    if (s.kActive[i] && s.kOwner[i] === ACE) return i;
+  }
+  return -1;
+}
+
+/**
+ * Кон Туза по слоту активного пари. Ноль — пари обычное, кон игрока.
+ *
+ * **Знак кона говорит, ЧЕЙ он.** Кон игрока списывается с кошелька при
+ * подборе и потому неотрицателен всегда; кон Туза не списывается ни с кого и
+ * записывается отрицательным. Одно поле вместо второго — потому что второе
+ * означало бы новый массив состояния, то есть новую длину хеша и
+ * ре-бейзлайн всех эталонов ради одного бита. Смысл при этом не двоится:
+ * «сколько поставлено» и «кем поставлено» — про одну и ту же сумму.
+ */
+export const aceStakeAt = (s: SimState, player: number, n: number): number => {
+  const v = s.aStake[slot(player, n)];
+  return v < 0 ? -v : 0;
+};
+
+/**
+ * Принять Ставку Туза. Возвращает false, если принимать нечего или нечем.
+ *
+ * Кон при принятии ФИКСИРУЕТСЯ: кошелёк за бой меняется, а сумма, о которой
+ * договорились, — нет. Иначе выплата зависела бы от того, сколько фишек игрок
+ * успел подобрать после рукопожатия.
+ *
+ * С кошелька при этом не списывается ничего: ставит он, и списывать пока
+ * нечего. Проигрыш заберёт своё в `loseBet` — и не больше, чем есть.
+ */
+export function acceptAceBet(s: SimState, player: number): boolean {
+  const card = aceCardAt(s);
+  if (card < 0) return false;
+  if ((s.pFlags[player] & EntityFlag.Alive) === 0) return false;
+  if (activeCount(s, player) >= MAX_ACTIVE_BETS) return false;
+
+  const stake = aceStakeFor(s, player);
+  if (stake <= 0) return false;
+  if (!takeBet(s, player, s.kBet[card], -stake)) return false;
+
+  s.kActive[card] = 0;
+  return true;
+}
+
+/**
+ * Отказаться. **Без штрафа** — это правило, а не поблажка (GDD §12А.1).
+ *
+ * Игрока не спрашивают, кто отказался: ставит Туз против стола, и одного
+ * «нет» хватает, чтобы карты не стало. Молчание до первой волны означает то
+ * же самое и стоит столько же — ноль.
+ */
+export function declineAceBet(s: SimState): boolean {
+  const card = aceCardAt(s);
+  if (card < 0) return false;
+  s.kActive[card] = 0;
+  return true;
+}
+
+/**
+ * Проигранная Ставка Туза: он забирает эквивалент — но не больше, чем есть.
+ *
+ * **Кошелёк в минус не уходит никогда** (ECONOMY §10, «Туз в кредит не
+ * принимает»). Кон здесь не списан заранее, как у обычного пари, поэтому
+ * правило приходится держать в момент расчёта: между рукопожатием и провалом
+ * игрок мог потратиться в лавке или потерять фишки Вьюну.
+ */
+function payAce(s: SimState, player: number, k: number): void {
+  const owed = -s.aStake[k];
+  if (owed <= 0) return;
+  const paid = owed < s.pChips[player] ? owed : s.pChips[player];
+  s.pChips[player] -= paid;
+  s.meta[Meta.PaidToAce] += paid;
+}
+
+/**
+ * Забег кончился со Ставкой Туза на руках — он забирает своё.
+ *
+ * Отдельная функция, потому что конец забега разрешает пари сам (`endRun`) и
+ * мимо `loseBet`: там уже не важен ни near-miss, ни счётчик проигранных, а
+ * вот деньги важны. Пари, застигнутое концом, не выполнено — значит выиграл он.
+ */
+export function payAceOnRunEnd(s: SimState): void {
+  for (let p = 0; p < s.playerCount; p++) {
+    for (let i = 0; i < MAX_ACTIVE_BETS; i++) {
+      const k = slot(p, i);
+      if (s.aState[k] !== BetState.Active) continue;
+      payAce(s, p, k);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -394,11 +596,16 @@ function betAvailable(s: SimState, bet: number, owner: number): boolean {
  * добежал, то есть любому, — поэтому она отбраковывается, если невыполнима
  * хоть у кого-то за столом: гонка за карту, которую половина стола отыграть
  * не может, честной не бывает.
+ *
+ * Карта Туза проверяется по тому же правилу и по той же причине: он ставит
+ * против стола целиком, и принять его пари вправе любой. Отсюда проверка «не
+ * персональная», а не «общая»: владельцев без имени два, и оба означают, что
+ * играть это придётся кому-то из живых, а кому — заранее неизвестно.
  */
 function schemeBlocked(s: SimState, bet: number, owner: number): boolean {
   const mask = BETS[bet].schemeMask;
   if (mask === 0) return false;
-  if (owner !== SHARED) return (mask & (1 << s.pScheme[owner])) !== 0;
+  if (owner >= 0) return (mask & (1 << s.pScheme[owner])) !== 0;
   for (let p = 0; p < s.playerCount; p++) {
     if ((mask & (1 << s.pScheme[p])) !== 0) return true;
   }
@@ -661,6 +868,10 @@ const clamp01 = (v: Fx): Fx => (v < 0 ? 0 : v > FX_ONE ? FX_ONE : v);
  */
 export function cashOutValue(s: SimState, player: number, n: number): number {
   const k = slot(player, n);
+  // За Ставку Туза «Забрать» не платит ничего: кон чужой. Ноль здесь, а не
+  // только в самой кнопке, потому что этим числом интерфейс подписывает
+  // кнопку — и подписать её частью чужих денег он не имеет права.
+  if (s.aStake[k] < 0) return 0;
   const spec = BETS[s.aBet[k]];
   const q = progressOf(s, player, n);
   const half = div(sub(spec.multiplier, FX_ONE), fromUnits(2));
@@ -679,6 +890,10 @@ export function cashOutValue(s: SimState, player: number, n: number): number {
 export function cashOut(s: SimState, player: number, n: number): number {
   const k = slot(player, n);
   if (s.aState[k] !== BetState.Active) return 0;
+  // Ставку Туза не обналичить: «Забрать» возвращает СВОЙ кон с долей прибыли,
+  // а этот кон не твой. Соскочить с чужой ставки, забрав часть чужих денег, —
+  // не досрочный расчёт, а печатный станок.
+  if (s.aStake[k] < 0) return 0;
   const payout = cashOutValue(s, player, n);
   s.pChips[player] += payout;
   s.aState[k] = BetState.Cashed;
@@ -696,6 +911,9 @@ export function cashOutBest(s: SimState, player: number): number {
   let bestValue = 0;
   for (let i = 0; i < MAX_ACTIVE_BETS; i++) {
     if (s.aState[slot(player, i)] !== BetState.Active) continue;
+    // Ставка Туза обналичиванию не подлежит — и в выбор «самого выгодного»
+    // не входит: иначе одна кнопка молча пропускала бы ход.
+    if (s.aStake[slot(player, i)] < 0) continue;
     const v = cashOutValue(s, player, i);
     if (best < 0 || v > bestValue) {
       best = i;
@@ -765,6 +983,9 @@ function loseBet(s: SimState, player: number, n: number): void {
   s.aNearMiss[k] = progressOf(s, player, n);
   s.aState[k] = BetState.Lost;
   s.meta[Meta.BetsLost]++;
+  // Выиграл Туз — забирает эквивалент из кошелька игрока. У обычного пари кон
+  // списан ещё при подборе, и здесь не происходит ничего.
+  payAce(s, player, k);
   gesture(s, AceGesture.Applaud);
 }
 
@@ -996,7 +1217,16 @@ export function settleBets(s: SimState): void {
         alive && (spec.progress === BetProgress.Counter ? s.aCounter[k] >= spec.target : true);
       if (won) {
         s.aState[k] = BetState.Won;
-        s.pChips[p] += Math.trunc((s.aStake[k] * spec.multiplier) / FX_ONE);
+        /*
+         * Выплата Ставки Туза — ОДИН К ОДНОМУ и из его кармана (ECONOMY §10А).
+         *
+         * Не кон × множитель: множитель каталога посчитан для пари, где кон
+         * уже списан с игрока и возвращается вместе с прибылью. Здесь кон не
+         * списывался ни с кого, и та же формула отдала бы игроку тройную
+         * сумму за пари, в которое он не вложил ничего.
+         */
+        const ace = -s.aStake[k];
+        s.pChips[p] += ace > 0 ? ace : Math.trunc((s.aStake[k] * spec.multiplier) / FX_ONE);
         s.meta[Meta.BetsWon]++;
       } else {
         loseBet(s, p, i);

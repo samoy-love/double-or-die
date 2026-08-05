@@ -1,0 +1,27 @@
+{
+  "name": "Отказ от Ставки Туза не стоит ничего и не считается взятым пари",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "clear": true },
+    { "chips": { "amount": 100 } },
+    { "aceBet": { "id": "no_dash" } },
+    { "expect": { "ace": { "offer": true } } },
+    { "input": { "buttons": ["cancel"] } },
+    { "tick": 1 },
+    { "clearInput": {} },
+    {
+      "expect": {
+        "ace": { "offer": false, "paid": { "min": 0, "max": 0 } },
+        "chips": { "min": 100, "max": 100 },
+        "bets": {
+          "active": { "min": 0, "max": 0 },
+          "taken": { "min": 0, "max": 0 },
+          "lost": { "min": 0, "max": 0 }
+        }
+      }
+    },
+    { "tick": 900 },
+    { "expect": { "chips": { "min": 100, "max": 100 } } }
+  ]
+}

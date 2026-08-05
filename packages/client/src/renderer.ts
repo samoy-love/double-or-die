@@ -16,6 +16,7 @@
  */
 
 import {
+  ACE,
   AceGesture,
   ANGLE_FULL,
   BALL,
@@ -659,6 +660,15 @@ export class Renderer {
 
     for (let i = 0; i < MAX_CARDS; i++) {
       if (!s.kActive[i]) continue;
+      /*
+       * Карта Туза на полу не рисуется: её показывает свой экран.
+       *
+       * Она лежит в том же массиве и по тем же правилам живёт по сроку, но
+       * подобрать её нельзя (`tryTakeCard`), и нарисованная на арене она
+       * обещала бы кнопку, которой нет, — то есть врала бы ровно тем
+       * способом, который запрещает подсветка подбора ниже.
+       */
+      if (s.kOwner[i] === ACE) continue;
       const x = toFloat(s.kX[i]);
       const y = toFloat(s.kY[i]);
       const spec = BETS[s.kBet[i]];

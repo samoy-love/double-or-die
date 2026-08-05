@@ -10,8 +10,16 @@
  * тестом, а не жалобой в отзывах.
  */
 
+import { ACE } from './bets';
 import { BET_COUNT, InputScheme } from './bets.generated';
-import { APPETITE, BOSS, FLOORS_PER_RUN, MAX_ACTIVE_BETS, ROOMS_PER_FLOOR } from './config';
+import {
+  ACE_BET,
+  APPETITE,
+  BOSS,
+  FLOORS_PER_RUN,
+  MAX_ACTIVE_BETS,
+  ROOMS_PER_FLOOR,
+} from './config';
 import { onScreenCap } from './enemies';
 import {
   AceGesture,
@@ -22,6 +30,7 @@ import {
   DoorType,
   EntityFlag,
   MAX_BALLS,
+  MAX_CARDS,
   MAX_CHIPS,
   MAX_DOORS,
   MAX_ENEMIES,
@@ -251,9 +260,34 @@ function checkBets(s: SimState): void {
         fail(`пари ${i} игрока ${p} в состоянии ${state}`, s.tick);
       }
       if (state === BetState.None) continue;
-      // Кон отрицательным не бывает: он списывается с кошелька, а кошелёк не
-      // уходит в минус — Туз в кредит не принимает (GDD §11).
-      if (s.aStake[k] < 0) fail(`у пари ${i} игрока ${p} отрицательный кон`, s.tick);
+      /*
+       * Знак кона говорит, ЧЕЙ он (bets.ts, `aceStakeAt`).
+       *
+       * Положительный — кон игрока: он списан с кошелька при подборе, а
+       * кошелёк в минус не уходит, потому что Туз в кредит не принимает
+       * (GDD §11). Отрицательный — кон Туза в Ставке Туза: тот не списан ни с
+       * кого и потому потолком кошелька не ограничен. Ограничен он другим — и
+       * это проверяется здесь, потому что ошибка в нём не видна ни в бою, ни в
+       * логе, только в деньгах: `min(40 × этаж, 25% кошелька)` не может
+       * превысить первое слагаемое ни при каком кошельке (ECONOMY §10А).
+       */
+      const ace = -s.aStake[k];
+      if (ace > ACE_BET.stakePerFloor * s.meta[Meta.Floor]) {
+        fail(`Ставка Туза у игрока ${p} на ${ace} при потолке этажа`, s.tick);
+      }
+      /*
+       * Кон игрока ограничен сверху верхним тиром аппетита.
+       *
+       * Проверка вернулась намеренно. Знак кона стал признаком владельца, и
+       * прежний инвариант «кон не бывает отрицательным» пришлось снять — но
+       * вместе с ним со стороны игрока пропала ЛЮБАЯ граница, и кон в
+       * миллион перестал ловиться. Потолок здесь честный: `stakeFor` возвращает
+       * `min(тир, кошелёк)`, а тиров три и верхний известен (ECONOMY §7).
+       */
+      const top = APPETITE[APPETITE.length - 1];
+      if (s.aStake[k] > top) {
+        fail(`кон ${s.aStake[k]} у пари ${i} игрока ${p} выше верхнего тира ${top}`, s.tick);
+      }
       if (s.aBet[k] < 0 || s.aBet[k] >= BET_COUNT) {
         fail(`пари ${i} игрока ${p} ссылается на несуществующее пари ${s.aBet[k]}`, s.tick);
       }
@@ -262,10 +296,36 @@ function checkBets(s: SimState): void {
   }
 }
 
-/** Туз: жест и бюджет выходов. Жест вне перечисления — это дефект, а не мода. */
+/** Туз: жест, бюджет выходов и его собственная ставка. */
 function checkAce(s: SimState): void {
   const g = s.meta[Meta.AceGesture];
   if (g < AceGesture.None || g > AceGesture.Ovation) fail(`жест Туза ${g}`, s.tick);
+
+  /*
+   * Его карта на арене одна, и его ставок у игрока не больше одной.
+   *
+   * Ставит он раз в два-три боя, и второе предложение поверх первого означало
+   * бы либо потерянное решение игрока, либо два кона по четверти кошелька в
+   * одной комнате — то есть дисперсию, которой в ECONOMY §10А нет.
+   */
+  let offers = 0;
+  for (let i = 0; i < MAX_CARDS; i++) {
+    if (!s.kActive[i]) continue;
+    if (s.kOwner[i] < ACE || s.kOwner[i] >= s.playerCount) {
+      fail(`карта ${i} принадлежит ${s.kOwner[i]}`, s.tick);
+    }
+    if (s.kOwner[i] === ACE) offers++;
+  }
+  if (offers > 1) fail(`карт Туза на арене ${offers}, а бывает одна`, s.tick);
+
+  for (let p = 0; p < s.playerCount; p++) {
+    let taken = 0;
+    for (let i = 0; i < MAX_ACTIVE_BETS; i++) {
+      const k = p * MAX_ACTIVE_BETS + i;
+      if (s.aState[k] === BetState.Active && s.aStake[k] < 0) taken++;
+    }
+    if (taken > 1) fail(`у игрока ${p} ${taken} Ставки Туза сразу`, s.tick);
+  }
   if (s.meta[Meta.DeathStreak] < 0) fail('серия смертей ушла в минус', s.tick);
   if (s.meta[Meta.AceCameos] < 0) fail('счётчик выходов Туза ушёл в минус', s.tick);
   // Тело без позиции и позиция без тела — разные поломки, но обе означают,

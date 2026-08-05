@@ -9,6 +9,7 @@
  * `state.ts`).
  */
 
+import { payAceOnRunEnd } from './bets';
 import { KEYS, MAX_ACTIVE_BETS } from './config';
 import { BetState, Meta, RunPhase, type SimState } from './state';
 
@@ -55,6 +56,15 @@ export function endRun(s: SimState, victory: boolean): void {
   s.meta[Meta.Phase] = RunPhase.Summary;
   s.meta[Meta.PhaseUntil] = 0;
   s.meta[Meta.Victory] = victory ? 1 : 0;
+
+  /*
+   * Ставки Туза он забирает ДО подсчёта ключей.
+   *
+   * Непотраченные фишки конвертируются в ключи (§12), а проигранная Ставка
+   * Туза — это фишки, которые игроку уже не принадлежат. Обратный порядок
+   * выдавал бы ключи за деньги, ушедшие заведению в том же кадре.
+   */
+  payAceOnRunEnd(s);
   s.meta[Meta.Keys] = keysEarned(s);
 
   /*

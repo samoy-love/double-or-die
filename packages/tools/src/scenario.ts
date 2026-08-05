@@ -19,10 +19,13 @@
  */
 
 import {
+  ACE,
   BETS,
   BetState,
   Btn,
   CARD,
+  aceCardAt,
+  aceStakeFor,
   FX_ONE,
   MAX_ACTIVE_BETS,
   MAX_CARDS,
@@ -58,6 +61,7 @@ import {
   fromFloat,
   hashHex,
   type InputFrame,
+  layAceCard,
   makeFrame,
   setSpawning,
   startBoss,
@@ -99,6 +103,9 @@ const BUTTONS: Record<string, Btn> = {
   decline: Btn.Decline,
   revive: Btn.Revive,
   ping: Btn.Ping,
+  /** Экранные: ими принимают и отклоняют Ставку Туза (GDD §12А.1). */
+  confirm: Btn.Confirm,
+  cancel: Btn.Cancel,
 };
 
 /** Состояния пари по именам: число в протоколе не читается. */
@@ -125,10 +132,12 @@ const APPETITE_TIERS: Record<string, number> = {
   big: 2,
 };
 
-/** Владелец карты: общая или именная. Номер игрока прячется за именем. */
+/** Владелец карты: общая, именная или его собственная. */
 const CARD_OWNERS: Record<string, number> = {
   shared: SHARED,
   общая: SHARED,
+  ace: ACE,
+  туз: ACE,
   player0: 0,
   player1: 1,
   player2: 2,
@@ -221,6 +230,23 @@ export interface BossExpectation {
   beaten?: Range;
 }
 
+/**
+ * Ставка Туза: висит ли предложение, на сколько и сколько ему уже отдано.
+ *
+ * Кон проверяется числом, а не формулой: формула живёт в одном месте
+ * (`aceStakeFor`), и сценарий, повторяющий её, зеленел бы вместе с ошибкой в
+ * ней. Здесь записан ОТВЕТ — «на первом этаже при кошельке в сто это 25», — и
+ * правка формулы обязана этот ответ уронить.
+ */
+export interface AceExpectation {
+  /** Лежит ли его карта: предложение висит и ждёт решения. */
+  offer?: boolean;
+  /** Его кон: по принятой ставке, а пока она не принята — по предложению. */
+  stake?: Range;
+  /** Отдано Тузу за забег. */
+  paid?: Range;
+}
+
 export interface Expectation {
   player?: number;
   /** Сколько врагов на арене. */
@@ -245,6 +271,7 @@ export interface Expectation {
   hash?: string;
   bets?: BetsExpectation;
   boss?: BossExpectation;
+  ace?: AceExpectation;
 }
 
 export type Step =
@@ -284,6 +311,14 @@ export type Step =
   | { cashOut: { id: string; player?: number } }
   /** Разложить карты так же, как это делает начало комнаты. */
   | { deal: true }
+  /**
+   * Туз выкладывает свою карту.
+   *
+   * Названным пари, а не тем, что выпадет: расписание выходов проверяется
+   * своим тестом, а сценарий про выплату обязан знать, какое условие он
+   * играет, иначе проверяет удачу броска.
+   */
+  | { aceBet: { id: string } }
   /** Провести расчёт комнаты: выигранное платит, оставшееся проваливается. */
   | { settle: true }
   /** Убрать с арены всё, кроме игроков. */
@@ -422,6 +457,12 @@ const BOSS_FIELDS: Record<keyof BossExpectation, Node> = {
   beaten: RANGE,
 };
 
+const ACE_FIELDS: Record<keyof AceExpectation, Node> = {
+  offer: bool(),
+  stake: RANGE,
+  paid: RANGE,
+};
+
 const EXPECT_FIELDS: Record<keyof Expectation, Node> = {
   player: PLAYER_IDX(),
   enemies: RANGE,
@@ -440,6 +481,7 @@ const EXPECT_FIELDS: Record<keyof Expectation, Node> = {
   hash: str(),
   bets: obj(BETS_FIELDS),
   boss: obj(BOSS_FIELDS),
+  ace: obj(ACE_FIELDS),
 };
 
 /** Ключи всех вариантов шага: по одному на вариант объединения. */
@@ -469,6 +511,7 @@ const STEP_SCHEMA: Record<StepKey, Node> = {
   explode: obj({ x: num(), y: num() }, ['x', 'y']),
   cashOut: obj({ id: BET_ID, player: PLAYER_IDX() }, ['id']),
   deal: TRUE,
+  aceBet: obj({ id: BET_ID }, ['id']),
   settle: TRUE,
   clear: TRUE,
   boss: TRUE,
@@ -721,14 +764,25 @@ function checkCards(s: SimState, e: CardsExpectation): string[] {
       return [...out, 'владелец задан без «id»: непонятно, о какой карте речь'];
     const bet = betIndex(e.id);
     const want = CARD_OWNERS[e.owner.toLowerCase()];
-    let found = -2;
+    /*
+     * «Карты нет» — отдельный флаг, а не значение владельца.
+     *
+     * Раньше здесь стояло −2 как заведомо невозможный владелец. Значение
+     * перестало быть невозможным ровно в тот день, когда карту начал класть
+     * Туз (`ACE`), — и сценарий, ждавший его карту, сообщал бы, что её нет,
+     * держа её в руках. Сентинел, который однажды становится законным
+     * значением, — это ошибка, ждущая своего коммита.
+     */
+    let found = -1;
+    let on = false;
     for (let i = 0; i < MAX_CARDS; i++) {
       if (s.kActive[i] && s.kBet[i] === bet) {
         found = s.kOwner[i];
+        on = true;
         break;
       }
     }
-    if (found === -2) out.push(`карты «${e.id}» на арене нет`);
+    if (!on) out.push(`карты «${e.id}» на арене нет`);
     else if (found !== want) {
       const actual = Object.keys(CARD_OWNERS).find((k) => CARD_OWNERS[k] === found) ?? found;
       out.push(`владелец карты «${e.id}» = ${String(actual)}, ожидался ${e.owner}`);
@@ -844,6 +898,34 @@ function checkBoss(s: SimState, e: BossExpectation): string[] {
   return out;
 }
 
+/**
+ * Ставка Туза.
+ *
+ * Кон ищется сперва среди принятых, и только потом среди предложенных: после
+ * принятия он ЗАФИКСИРОВАН, а кошелёк за бой меняется — и проверка по
+ * предложению показывала бы не ту сумму, о которой договорились.
+ */
+function checkAce(s: SimState, e: AceExpectation, player: number): string[] {
+  const out: string[] = [];
+  const card = aceCardAt(s);
+
+  if (e.offer !== undefined) {
+    const on = card >= 0;
+    if (on !== e.offer) out.push(`карта Туза на столе = ${on}, ожидалось ${e.offer}`);
+  }
+  if (e.stake) {
+    let stake = -1;
+    for (let i = 0; i < MAX_ACTIVE_BETS; i++) {
+      const k = player * MAX_ACTIVE_BETS + i;
+      if (s.aState[k] !== BetState.None && s.aStake[k] < 0) stake = -s.aStake[k];
+    }
+    if (stake < 0) stake = card >= 0 ? aceStakeFor(s, player) : 0;
+    push(out, checkRange(`кон Туза против игрока ${player}`, stake, e.stake));
+  }
+  if (e.paid) push(out, checkRange('отдано Тузу', s.meta[Meta.PaidToAce], e.paid));
+  return out;
+}
+
 function checkExpectation(
   s: SimState,
   e: Expectation,
@@ -862,6 +944,7 @@ function checkExpectation(
   if (e.cards) out.push(...checkCards(s, e.cards));
   if (e.bets) out.push(...checkBets(s, e.bets, e.player ?? 0));
   if (e.boss) out.push(...checkBoss(s, e.boss));
+  if (e.ace) out.push(...checkAce(s, e.ace, e.player ?? 0));
 
   const i = e.player ?? 0;
   if (i >= s.playerCount) return [`игрока ${i} нет: в забеге ${s.playerCount}`];
@@ -1004,6 +1087,11 @@ export function runScenario(sc: Scenario): ScenarioResult {
         cashOut(s, p, n);
       } else if ('deal' in st) {
         dealCards(s);
+      } else if ('aceBet' in st) {
+        // Срок тот же, что у обычной карты: в игре предложение живёт до первой
+        // волны, а сценарий волн по умолчанию не пускает — и часы паузы,
+        // которых он не заводил, съедали бы предложение на первом же тике.
+        layAceCard(s, betIndex(st.aceBet.id), s.tick + CARD.lifeTicks);
       } else if ('settle' in st) {
         settleBets(s);
       } else if ('clear' in st) {

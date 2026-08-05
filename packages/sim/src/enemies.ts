@@ -36,7 +36,14 @@ import {
   WEDGE,
   roomGapTicksFor,
 } from './config';
-import { aceAtSettlement, clearSettled, dealCards, resetAce, settleBets } from './bets';
+import {
+  aceAtSettlement,
+  clearSettled,
+  dealCards,
+  offerAceBet,
+  resetAce,
+  settleBets,
+} from './bets';
 import { flowTo, flowX, flowY, updateNav } from './nav';
 import { offerDoors } from './doors';
 import { endRun } from './run';
@@ -199,6 +206,9 @@ export function startRoom(s: SimState, room: number): void {
   s.meta[Meta.RoomThreat] = roomBudget(room, s.playerCount, s.meta[Meta.Floor]);
   s.meta[Meta.ThreatCleared] = 0;
   dealCards(s);
+  // И его собственная карта — раз в два-три боя (GDD §12А.1). Строго ПОСЛЕ
+  // раздачи: та начинается с очистки арены и стёрла бы её тем же движением.
+  offerAceBet(s);
 }
 
 function startWave(s: SimState, wave: number): void {

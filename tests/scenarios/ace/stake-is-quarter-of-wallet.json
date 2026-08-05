@@ -1,0 +1,18 @@
+{
+  "name": "Кон Туза — четверть кошелька, пока она меньше сорока за этаж",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "clear": true },
+    { "chips": { "amount": 100 } },
+    { "aceBet": { "id": "no_dash" } },
+    {
+      "expect": {
+        "ace": { "offer": true, "stake": { "min": 25, "max": 25 } },
+        "chips": { "min": 100, "max": 100 }
+      }
+    },
+    { "chips": { "amount": 400 } },
+    { "expect": { "ace": { "stake": { "min": 40, "max": 40 } } } }
+  ]
+}

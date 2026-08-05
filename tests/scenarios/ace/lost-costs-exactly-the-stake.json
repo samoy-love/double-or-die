@@ -1,0 +1,24 @@
+{
+  "name": "Проигранная Ставка Туза стоит ровно того же, что принесла бы выигранная",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "clear": true },
+    { "chips": { "amount": 100 } },
+    { "aceBet": { "id": "no_dash" } },
+    { "input": { "buttons": ["confirm"] } },
+    { "tick": 1 },
+    { "clearInput": {} },
+    { "expect": { "chips": { "min": 100, "max": 100 } } },
+    { "input": { "move": [1, 0], "buttons": ["dash"] } },
+    { "tick": 2 },
+    { "clearInput": {} },
+    {
+      "expect": {
+        "bets": { "id": "no_dash", "state": "lost", "lost": { "min": 1, "max": 1 } },
+        "chips": { "min": 75, "max": 75 },
+        "ace": { "paid": { "min": 25, "max": 25 } }
+      }
+    }
+  ]
+}
