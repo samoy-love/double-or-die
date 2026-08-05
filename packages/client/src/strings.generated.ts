@@ -48,7 +48,7 @@ export type StringKey =
   | 'door.type.shop'
   | 'error.webgl2'
   | 'haggle.bet'
-  | 'haggle.none'
+  | 'haggle.empty'
   | 'haggle.sell'
   | 'haggle.title'
   | 'house.cut'
@@ -72,6 +72,8 @@ export type StringKey =
   | 'screen.cancel.pad'
   | 'screen.confirm.key'
   | 'screen.confirm.pad'
+  | 'screen.sell.key'
+  | 'screen.sell.pad'
   | 'settlement.title'
   | 'shop.hint'
   | 'shop.leave'
@@ -127,7 +129,7 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
     'error.webgl2':
       'WebGL2 недоступен: без него игра не рисуется. Обновите браузер или включите аппаратное ускорение.',
     'haggle.bet': 'Взять пари в следующей комнате',
-    'haggle.none': 'Заведение пока не выкупает',
+    'haggle.empty': 'Продавать нечего',
     'haggle.sell': 'Продать апгрейд',
     'haggle.title': 'Туз предлагает выбор',
     'house.cut': 'Доля заведения',
@@ -153,6 +155,8 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
     'screen.cancel.pad': 'B — отказаться',
     'screen.confirm.key': 'Enter — подтвердить',
     'screen.confirm.pad': 'RB — подтвердить',
+    'screen.sell.key': 'Стрелка влево — продать',
+    'screen.sell.pad': 'Стик влево — продать',
     'settlement.title': 'Расчёт',
     'shop.hint': 'Заведение не торгуется',
     'shop.leave': 'Уйти без покупки',
@@ -207,7 +211,7 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
     'error.webgl2':
       'WebGL2 is unavailable: the game cannot draw without it. Update the browser or enable hardware acceleration.',
     'haggle.bet': 'Take a bet in the next room',
-    'haggle.none': 'The house does not buy back yet',
+    'haggle.empty': 'Nothing to sell',
     'haggle.sell': 'Sell an upgrade',
     'haggle.title': 'The Ace offers a choice',
     'house.cut': 'House cut',
@@ -233,6 +237,8 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
     'screen.cancel.pad': 'B to decline',
     'screen.confirm.key': 'Enter to confirm',
     'screen.confirm.pad': 'RB to confirm',
+    'screen.sell.key': 'Left arrow to sell',
+    'screen.sell.pad': 'Stick left to sell',
     'settlement.title': 'Settlement',
     'shop.hint': 'The house does not haggle',
     'shop.leave': 'Leave empty-handed',
