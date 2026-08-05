@@ -38,6 +38,7 @@ import {
 } from './config';
 import { aceAtSettlement, clearSettled, dealCards, resetAce, settleBets } from './bets';
 import { flowTo, flowX, flowY, updateNav } from './nav';
+import { offerDoors } from './doors';
 import { endRun } from './run';
 import { damagePlayer, explode, fireEnemy, killEnemy, statsOf } from './combat';
 import { add, type Fx, fromInt, mul, sub } from './fixed';
@@ -49,6 +50,7 @@ import {
   MAX_SPAWNS,
   Meta,
   RunPhase,
+  DoorType,
   type SimState,
 } from './state';
 import { ANGLE_FULL, cos, length, normalize, normX, normY, sin, within } from './trig';
@@ -139,10 +141,19 @@ export function startRoom(s: SimState, room: number): void {
   // шутить: правило дозировки защищает от добивания, а не запрещает юмор.
   if (room > 1) s.meta[Meta.DeathStreak] = 0;
 
-  // Аппетит держится всю комнату и сбрасывается только здесь (GDD §9.3):
-  // новая комната — новое решение о размере кона, и молчание игрока означает
-  // самый скромный тир, а не тот, которым он рискнул в прошлый раз.
-  s.pAppetite.fill(APPETITE_DEFAULT);
+  /*
+   * Аппетит сбрасывается только в первой комнате этажа.
+   *
+   * Раньше сброс стоял здесь безусловно, и это было верно: экрана двери не
+   * существовало, защёлка в бою его заменяла, и «новая комната — новое
+   * решение» означало «сбросить на старте комнаты». С приходом двери выбор
+   * делается ДО комнаты, и тот же сброс стирал его в тот же тик — игрок
+   * выбирал «По-крупному» и входил в бой со «Скромно».
+   *
+   * Теперь сброс живёт там, где открывается экран (`offerDoors`), а сюда
+   * попадает только случай, у которого двери нет вовсе: первая комната этажа.
+   */
+  if (room === 1) s.pAppetite.fill(APPETITE_DEFAULT);
 
   /*
    * Новая комната — новая арена.
@@ -159,6 +170,20 @@ export function startRoom(s: SimState, room: number): void {
    */
   s.meta[Meta.Template] = nextInt(s.rng, Stream.Layout, ARENA_TEMPLATES.length);
   s.meta[Meta.Flip] = nextInt(s.rng, Stream.Layout, FLIP_COUNT);
+
+  /*
+   * Тип комнаты приходит с выбранной двери.
+   *
+   * До первой двери (комната 1 каждого этажа) выбора не было — игрок только
+   * что вошёл на этаж, — и комната обычная. Гарантия «Лавка не позже пятой»
+   * считается по этому же полю, поэтому запоминать её надо здесь, а не на
+   * экране двери: подтверждение и начало комнаты разнесены по тикам.
+   */
+  const pick = s.meta[Meta.DoorPick];
+  s.meta[Meta.RoomType] = room > 1 && pick >= 0 ? s.doorType[pick] : DoorType.Fight;
+  s.meta[Meta.DoorPick] = -1;
+  if (s.meta[Meta.RoomType] === DoorType.Shop) s.meta[Meta.LastShopRoom] = room;
+  if (room === 1) s.meta[Meta.LastShopRoom] = 0;
 
   s.meta[Meta.Room] = room;
   s.meta[Meta.Wave] = 0;
@@ -484,7 +509,13 @@ function advanceRoom(s: SimState): void {
   if (s.meta[Meta.Phase] === RunPhase.Boss && s.meta[Meta.BossMaxHP] !== 0) return;
 
   if (s.meta[Meta.Room] < ROOMS_PER_FLOOR) {
-    startRoom(s, s.meta[Meta.Room] + 1);
+    /*
+     * Между комнатами встаёт экран двери, а не следующая комната сразу.
+     *
+     * Он ждёт игрока, а не часов, поэтому здесь только предложение: сама
+     * комната начнётся, когда выбор подтвердят (`stepDoors` → `enterDoor`).
+     */
+    offerDoors(s);
     return;
   }
   if (s.meta[Meta.Phase] !== RunPhase.Boss) {

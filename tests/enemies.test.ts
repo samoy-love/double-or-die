@@ -20,6 +20,7 @@ import {
   MAX_BULLETS,
   MAX_ENEMIES,
   Meta,
+  RunPhase,
   WEDGE,
   createState,
   explode,
@@ -346,17 +347,25 @@ describe('волны', () => {
     expect(roomBudget(1, 4)).toBe(1020);
   });
 
-  it('комната сменяется, когда арена очищена', () => {
+  /**
+   * Зачищенная комната доводит забег до выбора двери.
+   *
+   * Раньше здесь проверялось, что комната сразу сменяется следующей. С 0.4.0
+   * между ними стоит экран, который ждёт игрока, — и «комната сменилась сама»
+   * стало бы признаком того, что дверь решает за него.
+   */
+  it('зачищенная комната доводит до выбора двери', () => {
     const s = createState(9, 1);
     spawnPlayers(s);
     // Убираем всё, что выпускают волны, сразу: это заменяет идеального
     // стрелка и позволяет проверить сам ход комнат за разумное время.
-    for (let t = 0; t < 4000 && s.meta[Meta.Room] < 2; t++) {
+    for (let t = 0; t < 4000 && s.meta[Meta.Phase] !== RunPhase.Door; t++) {
       step(s, idle(1));
       for (let i = 0; i < MAX_ENEMIES; i++) if (s.eActive[i]) s.eHP[i] = 1;
       for (let i = 0; i < MAX_ENEMIES; i++) if (s.eActive[i]) s.eActive[i] = 0;
     }
-    expect(s.meta[Meta.Room]).toBeGreaterThanOrEqual(2);
+    expect(s.meta[Meta.Phase]).toBe(RunPhase.Door);
+    expect(s.meta[Meta.Room]).toBe(1);
   });
 });
 
