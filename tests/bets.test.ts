@@ -30,7 +30,8 @@ import {
   MAX_CARDS,
   Meta,
   PLAYER,
-  RED_ZONE,
+  redZoneX,
+  redZoneY,
   RESTART_DELAY_TICKS,
   SCHEME_SHIFT,
   SHARED,
@@ -315,8 +316,8 @@ describe('условия пари', () => {
     run(s, 5);
     expect(stateOf(s, n), 'сорвалось снаружи зоны').toBe(BetState.Active);
 
-    s.pX[0] = RED_ZONE.x;
-    s.pY[0] = RED_ZONE.y;
+    s.pX[0] = redZoneX(s);
+    s.pY[0] = redZoneY(s);
     run(s, 1);
     expect(stateOf(s, n)).toBe(BetState.Lost);
   });

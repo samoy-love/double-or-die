@@ -28,14 +28,18 @@ import {
   nearMissOf,
   CARD,
   MAX_CARDS,
-  RED_ZONE,
+  RED_ZONE_RADIUS,
   ENEMIES,
   EnemyPhase,
   EnemyType,
   EntityFlag,
   FAIRNESS,
   InputScheme,
-  COLUMNS,
+  columnX,
+  columnY,
+  redZoneX,
+  redZoneY,
+  templateOf,
   FUSE,
   MAX_BULLETS,
   MAX_CHIPS,
@@ -45,7 +49,6 @@ import {
   Meta,
   PLAYER,
   WEDGE,
-  arenaScale,
   stakeFor,
   type SimState,
   toFloat,
@@ -368,7 +371,6 @@ export class Renderer {
 
   private drawFloor(w: number, h: number, s: SimState): void {
     const b = this.batch;
-    const k = arenaScale(s.playerCount) / 100;
     b.push(Shape.Box, w / 2, h / 2, w / 2, h / 2, 0, ...channels(PALETTE.floor), 1, 0, 0, 0, 0, 0);
 
     // Сетка: по ней читается масштаб и скорость собственного движения.
@@ -383,11 +385,14 @@ export class Renderer {
 
     this.drawRedZone(s);
 
-    for (const c of COLUMNS) {
+    // Колонны берутся из шаблона текущей комнаты и уже с отражением: рисовать
+    // их по базовым координатам значило бы показать не ту арену, на которой
+    // идёт бой.
+    for (const c of templateOf(s).columns) {
       b.push(
         Shape.Box,
-        toFloat(c.x) * k,
-        toFloat(c.y) * k,
+        toFloat(columnX(c, s)),
+        toFloat(columnY(c, s)),
         toFloat(c.halfW),
         toFloat(c.halfH),
         0,
@@ -426,9 +431,9 @@ export class Renderer {
   private drawRedZone(s: SimState): void {
     if (!redZoneInPlay(s)) return;
     const c = PALETTE.redZone;
-    const x = toFloat(RED_ZONE.x);
-    const y = toFloat(RED_ZONE.y);
-    const r = toFloat(RED_ZONE.radius);
+    const x = toFloat(redZoneX(s));
+    const y = toFloat(redZoneY(s));
+    const r = toFloat(RED_ZONE_RADIUS);
     this.batch.push(Shape.Circle, x, y, r, r, 0, c.r, c.g, c.b, 0.14, 3, c.r, c.g, c.b, 0.55);
   }
 

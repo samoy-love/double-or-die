@@ -57,6 +57,8 @@ import {
   spawnPlayers,
   step,
   toFloat,
+  redZoneX,
+  redZoneY,
 } from '@dod/sim';
 
 /** Враги по именам: номер типа в сценарии читается не лучше маски кнопок. */
@@ -224,7 +226,7 @@ export type Step =
   | { clearInput: { player?: number } }
   | { tick: number }
   /** Поставить игрока в точку — чтобы не описывать дорогу до неё вводом. */
-  | { place: { player?: number; x: number; y: number } }
+  | { place: { player?: number; x?: number; y?: number; redZone?: boolean } }
   /** Поставить врага. Имя типа, а не номер: номер в протоколе нечитаем. */
   | { spawn: { type: string; x: number; y: number; count?: number } }
   /** Положить карту пари на арену. Владелец по умолчанию — общая. */
@@ -395,7 +397,7 @@ const STEP_SCHEMA: Record<StepKey, Node> = {
   }),
   clearInput: obj({ player: PLAYER_IDX() }),
   tick: int(0, 1_000_000),
-  place: obj({ player: PLAYER_IDX(), x: num(), y: num() }, ['x', 'y']),
+  place: obj({ player: PLAYER_IDX(), x: num(), y: num(), redZone: bool() }, []),
   spawn: obj({ type: oneOf(ENEMY_TYPES), x: num(), y: num(), count: int(1, MAX_ENEMIES) }, [
     'type',
     'x',
@@ -829,8 +831,23 @@ export function runScenario(sc: Scenario): ScenarioResult {
         for (let t = 0; t < st.tick; t++) step(s, frames);
       } else if ('place' in st) {
         const i = st.place.player ?? 0;
-        s.pX[i] = fromFloat(st.place.x);
-        s.pY[i] = fromFloat(st.place.y);
+        /*
+         * Точку можно назвать координатами, а можно — смыслом.
+         *
+         * `redZone` ставит игрока в центр красной зоны ТЕКУЩЕЙ раскладки, и
+         * это не удобство: с двенадцатью шаблонами зона переезжает каждую
+         * комнату, а сценарий, прибитый к паре чисел, начинает проверять не
+         * то, что назван проверять. Первым же таким сценарием и был этот —
+         * он ставил игрока в точку прошлой единственной арены и после
+         * прихода шаблонов сообщал, что пари не срывается.
+         */
+        if (st.place.redZone === true) {
+          s.pX[i] = redZoneX(s);
+          s.pY[i] = redZoneY(s);
+        } else {
+          if (st.place.x !== undefined) s.pX[i] = fromFloat(st.place.x);
+          if (st.place.y !== undefined) s.pY[i] = fromFloat(st.place.y);
+        }
         s.pVX[i] = 0;
         s.pVY[i] = 0;
       } else if ('spawn' in st) {

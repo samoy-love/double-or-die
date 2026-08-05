@@ -131,8 +131,15 @@ export interface DebugState {
   hash: string;
   playerCount: number;
   /** Ход забега: комната, волна, счёт убийств. */
+  /** Номер этажа, с единицы. Комната нумеруется ВНУТРИ него. */
+  floor: number;
   room: number;
   wave: number;
+  /** Фаза забега: дверь, бой, расчёт, награда, босс, плата, итоги. */
+  phase: number;
+  /** Раскладка арены: номер шаблона и его отражение (0..3). */
+  template: number;
+  flip: number;
   kills: number;
   enemies: { i: number; type: number; hp: number; x: number; y: number; phase: number }[];
   bullets: number;
@@ -355,8 +362,12 @@ function snapshot(s: SimState, hash: string, bark: string): DebugState {
     seed: s.seed,
     hash,
     playerCount: s.playerCount,
+    floor: s.meta[Meta.Floor],
     room: s.meta[Meta.Room],
     wave: s.meta[Meta.Wave],
+    phase: s.meta[Meta.Phase],
+    template: s.meta[Meta.Template],
+    flip: s.meta[Meta.Flip],
     kills: s.meta[Meta.Kills],
     enemies,
     bullets,

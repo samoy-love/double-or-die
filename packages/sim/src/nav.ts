@@ -51,7 +51,7 @@
 import { hitsColumn } from './arena';
 import { ARENA_PAD, NAV } from './config';
 import { type Fx, fromInt, sub } from './fixed';
-import { MAX_PLAYERS, type SimState, EntityFlag } from './state';
+import { MAX_PLAYERS, Meta, type SimState, EntityFlag } from './state';
 
 /** Сторона клетки сетки. Число живёт в конфиге: оно влияет на движение. */
 const CELL = NAV.cell;
@@ -240,7 +240,23 @@ export function updateNav(s: SimState): void {
   }
   lastTick = s.tick;
 
-  const key = s.arenaW ^ (s.arenaH << 1) ^ (s.playerCount << 3);
+  /*
+   * В ключ входит и раскладка арены, а не только её размер.
+   *
+   * До двенадцати шаблонов колонны были одной константой на всю игру, и
+   * размера с составом хватало: геометрия между комнатами не менялась. Теперь
+   * меняется каждую комнату — и сетка проходимости, посчитанная для прошлой
+   * арены, означала бы врагов, обходящих колонны, которых здесь нет, и
+   * идущих сквозь те, что есть. Хуже того, ошибка была бы тихой: поле потока
+   * не входит ни в снимок, ни в хеш, поэтому ни один golden-реплей её не
+   * поймал бы.
+   */
+  const key =
+    s.arenaW ^
+    (s.arenaH << 1) ^
+    (s.playerCount << 3) ^
+    (s.meta[Meta.Template] << 6) ^
+    (s.meta[Meta.Flip] << 11);
   if (key !== gridKey) {
     gridKey = key;
     buildGrid(s);

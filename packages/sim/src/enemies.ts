@@ -16,6 +16,7 @@ import {
   AI_SEPARATION_REACH,
   AI_SEPARATION_SPEED,
   ARENA_PAD,
+  ARENA_TEMPLATES,
   AGRO_CAP_PCT,
   AI_TARGET_MEMORY_TICKS,
   APPETITE_DEFAULT,
@@ -24,6 +25,7 @@ import {
   ENEMY_BULLET,
   ENEMY_TYPE_COUNT,
   EnemyPhase,
+  FLIP_COUNT,
   FLOORS_PER_RUN,
   EnemyType,
   FAIRNESS,
@@ -141,6 +143,22 @@ export function startRoom(s: SimState, room: number): void {
   // новая комната — новое решение о размере кона, и молчание игрока означает
   // самый скромный тир, а не тот, которым он рискнул в прошлый раз.
   s.pAppetite.fill(APPETITE_DEFAULT);
+
+  /*
+   * Новая комната — новая арена.
+   *
+   * Шаблон и его отражение берутся из потока `layout`, объявленного ещё в
+   * 0.1.0 и до сих пор не работавшего: расстановка колонн была единственной
+   * константой на всю игру. Отдельный поток обязателен — правка любой другой
+   * системы иначе сдвинула бы раскладку арен, и дейли перестали бы
+   * воспроизводиться между версиями (TECH §2.3).
+   *
+   * Два обращения, а не одно: шаблон и отражение — независимые решения, и
+   * упаковка их в одно число `t * 4 + f` связала бы соседние шаблоны с
+   * соседними отражениями на любом сдвиге потока.
+   */
+  s.meta[Meta.Template] = nextInt(s.rng, Stream.Layout, ARENA_TEMPLATES.length);
+  s.meta[Meta.Flip] = nextInt(s.rng, Stream.Layout, FLIP_COUNT);
 
   s.meta[Meta.Room] = room;
   s.meta[Meta.Wave] = 0;

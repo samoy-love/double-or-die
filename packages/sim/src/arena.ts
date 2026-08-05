@@ -15,11 +15,67 @@
  * что считает симуляция, ровно в тот момент, когда это труднее всего заметить.
  */
 
-import { ARENA_PAD, COLUMNS, type Column, arenaScale } from './config';
+import {
+  ARENA_PAD,
+  ARENA_TEMPLATES,
+  type ArenaTemplate,
+  type Column,
+  FLIP_COUNT,
+  Flip,
+  RED_ZONE_RADIUS,
+  arenaScale,
+} from './config';
 import { abs, add, clamp, type Fx, sub } from './fixed';
-import { type SimState } from './state';
+import { ARENA_H, ARENA_W, Meta, type SimState } from './state';
 
-export { COLUMNS, type Column };
+export { type Column };
+
+/**
+ * Шаблон текущей комнаты.
+ *
+ * Номер живёт в состоянии, а не в модуле, по той же причине, что и размеры
+ * арены: состояний в одном процессе бывает много — CI гоняет тысячи забегов
+ * подряд, — и общий «текущий шаблон» на модуле разошёлся бы с тем, что
+ * считает симуляция, ровно в тот момент, когда это труднее всего заметить.
+ */
+export const templateOf = (s: SimState): ArenaTemplate =>
+  ARENA_TEMPLATES[s.meta[Meta.Template] % ARENA_TEMPLATES.length];
+
+export const columnCount = (s: SimState): number => templateOf(s).columns.length;
+
+/**
+ * Закрепить раскладку арены. Только для тестов и сценариев.
+ *
+ * В игре шаблон выбирается на входе в комнату из потока `layout`, и трогать
+ * его руками нельзя. Но тест, проверяющий поведение НА геометрии — «таран не
+ * объявляется сквозь колонну», — обязан знать, где эта колонна стоит: иначе
+ * он проверяет не правило, а удачу броска. Раньше знать было неоткуда, потому
+ * что раскладка была одна на всю игру.
+ */
+export function setArena(s: SimState, template: number, flip = 0): void {
+  s.meta[Meta.Template] = template % ARENA_TEMPLATES.length;
+  s.meta[Meta.Flip] = flip % FLIP_COUNT;
+}
+
+/**
+ * Отражение по горизонтали и вертикали.
+ *
+ * Считается в БАЗОВЫХ координатах 1920×1080, до поправки на состав. Обратный
+ * порядок — отразить уже растянутое — дал бы разъезжающуюся с составом
+ * раскладку: зеркало относительно выросшей арены переносит колонну не туда,
+ * где она была бы у соло, и «тот же шаблон» вчетвером стал бы другим.
+ */
+const mirrorX = (s: SimState, x: Fx): Fx =>
+  (s.meta[Meta.Flip] & Flip.X) !== 0 ? sub(ARENA_W, x) : x;
+const mirrorY = (s: SimState, y: Fx): Fx =>
+  (s.meta[Meta.Flip] & Flip.Y) !== 0 ? sub(ARENA_H, y) : y;
+
+/** Центр красной зоны текущей раскладки, с отражением и поправкой на состав. */
+export const redZoneX = (s: SimState): Fx =>
+  Math.trunc((mirrorX(s, templateOf(s).redX) * arenaScale(s.playerCount)) / 100) | 0;
+export const redZoneY = (s: SimState): Fx =>
+  Math.trunc((mirrorY(s, templateOf(s).redY) * arenaScale(s.playerCount)) / 100) | 0;
+export { RED_ZONE_RADIUS };
 
 export const maxX = (s: SimState): Fx => sub(s.arenaW, ARENA_PAD);
 export const maxY = (s: SimState): Fx => sub(s.arenaH, ARENA_PAD);
@@ -37,17 +93,18 @@ export const clampY = (s: SimState, y: Fx, r: Fx): Fx =>
  * прикрывать одинаково при любом составе, иначе выученная дистанция «за
  * колонной меня не достанут» врёт вчетвером.
  */
-function columnX(c: Column, s: SimState): Fx {
-  return Math.trunc((c.x * arenaScale(s.playerCount)) / 100) | 0;
+export function columnX(c: Column, s: SimState): Fx {
+  return Math.trunc((mirrorX(s, c.x) * arenaScale(s.playerCount)) / 100) | 0;
 }
-function columnY(c: Column, s: SimState): Fx {
-  return Math.trunc((c.y * arenaScale(s.playerCount)) / 100) | 0;
+export function columnY(c: Column, s: SimState): Fx {
+  return Math.trunc((mirrorY(s, c.y) * arenaScale(s.playerCount)) / 100) | 0;
 }
 
 /** Пересекает ли круг колонну. */
 export function hitsColumn(s: SimState, x: Fx, y: Fx, r: Fx): boolean {
-  for (let i = 0; i < COLUMNS.length; i++) {
-    const c = COLUMNS[i];
+  const cols = templateOf(s).columns;
+  for (let i = 0; i < cols.length; i++) {
+    const c = cols[i];
     if (
       abs(sub(x, columnX(c, s))) < add(c.halfW, r) &&
       abs(sub(y, columnY(c, s))) < add(c.halfH, r)
@@ -76,8 +133,9 @@ export function pushOutOfColumns(s: SimState, x: Fx, y: Fx, r: Fx): void {
   pushedX = x;
   pushedY = y;
 
-  for (let i = 0; i < COLUMNS.length; i++) {
-    const c = COLUMNS[i];
+  const cols = templateOf(s).columns;
+  for (let i = 0; i < cols.length; i++) {
+    const c = cols[i];
     const dx = sub(pushedX, columnX(c, s));
     const dy = sub(pushedY, columnY(c, s));
     const overlapX = sub(add(c.halfW, r), abs(dx));
