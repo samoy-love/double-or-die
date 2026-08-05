@@ -20,7 +20,15 @@ import {
   WAVE,
   roomGapTicksFor,
 } from './config';
-import { BetId, cashOutBest, failBetId, stepBets, tryTakeCard } from './bets';
+import {
+  BetId,
+  acceptAceBet,
+  cashOutBest,
+  declineAceBet,
+  failBetId,
+  stepBets,
+  tryTakeCard,
+} from './bets';
 import { stepBoss } from './boss';
 import { fire, stepBullets, stepChips } from './combat';
 import { stepDoors } from './doors';
@@ -325,6 +333,21 @@ function stepBetInput(s: SimState, i: number, inp: InputFrame): void {
   if ((pressed & Btn.Take) !== 0) tryTakeCard(s, i);
   if ((pressed & Btn.CashOut) !== 0) cashOutBest(s, i);
   if ((pressed & Btn.Accept) !== 0) skipSettlement(s);
+
+  /*
+   * Ставка Туза: экранное решение, а не боевое действие (GDD §12А.1).
+   *
+   * Экранные биты, а не `Accept`/`Decline`: те принадлежат «Удвоим?», и
+   * смысл бита не имеет права зависеть от того, что сейчас на экране, — кадр
+   * ввода обязан читаться сам по себе (input.ts). Оба — по фронту нажатия:
+   * зажатый курок не должен подписывать за игрока пари на четверть кошелька.
+   *
+   * Когда карты Туза нет, оба вызова не делают ничего, и это не расточительно:
+   * два сравнения на игрока против отдельного признака «идёт ли предложение»,
+   * который пришлось бы держать слотом состояния.
+   */
+  if ((pressed & Btn.Confirm) !== 0) acceptAceBet(s, i);
+  if ((pressed & Btn.Cancel) !== 0) declineAceBet(s);
 }
 
 /**

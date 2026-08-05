@@ -1,0 +1,24 @@
+{
+  "name": "Ставку Туза не обналичить: «Забрать» возвращает свой кон, а этот чужой",
+  "seed": 1,
+  "players": 1,
+  "steps": [
+    { "clear": true },
+    { "chips": { "amount": 100 } },
+    { "aceBet": { "id": "no_damage" } },
+    { "input": { "buttons": ["confirm"] } },
+    { "tick": 1 },
+    { "clearInput": {} },
+    { "tick": 120 },
+    { "expect": { "bets": { "id": "no_damage", "state": "active", "cashOut": { "max": 0 } } } },
+    { "input": { "buttons": ["cashout"] } },
+    { "tick": 1 },
+    { "clearInput": {} },
+    {
+      "expect": {
+        "bets": { "id": "no_damage", "state": "active", "cashed": { "min": 0, "max": 0 } },
+        "chips": { "min": 100, "max": 100 }
+      }
+    }
+  ]
+}
