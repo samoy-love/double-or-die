@@ -14,7 +14,8 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { CHECKPOINT_EVERY, type Golden, verifyGolden } from '@dod/tools/golden';
+import { EnemyType, RunPhase } from '@dod/sim';
+import { CHECKPOINT_EVERY, type Golden, scanCoverage, verifyGolden } from '@dod/tools/golden';
 
 const DIR = join(__dirname, 'golden');
 
@@ -39,10 +40,15 @@ describe('golden-реплеи', () => {
     expect(result.ok).toBe(true);
   });
 
-  it('хеши сняты не только в конце', () => {
+  it('хеши сняты не только в конце — там, где есть что бисектить', () => {
     for (const f of files) {
       const g = load(f);
-      expect(g.checkpoints.length).toBeGreaterThan(1);
+      // Требование «больше одной точки» осмысленно только на записи длиннее
+      // интервала: короткая запись с подготовленного состояния (см. `setup`)
+      // может быть короче CHECKPOINT_EVERY целиком, и на ней бисектить
+      // нечего — расхождение в 150 тиках ищут глазами, а не точками.
+      const last = g.checkpoints.at(-1)?.tick ?? 0;
+      if (last >= CHECKPOINT_EVERY) expect(g.checkpoints.length).toBeGreaterThan(1);
       for (const c of g.checkpoints.slice(0, -1)) {
         expect(c.tick % CHECKPOINT_EVERY).toBe(0);
       }
@@ -75,5 +81,46 @@ describe('golden-реплеи', () => {
     const replay = JSON.parse(g.replay) as { configVersion: string };
     replay.configVersion = '0.0.1-иная';
     expect(() => verifyGolden({ ...g, replay: JSON.stringify(replay) })).toThrow(/ре-бейзлайн/);
+  });
+
+  /**
+   * Покрытие, а не только сходимость хешей.
+   *
+   * «Хеш сошёлся» и «эталон видел этаж» — разные вопросы: изначальный корпус
+   * (двадцать записей ботом `random`, 3600 тиков) сходился сам с собой на
+   * каждой правке, включая ту, что видел только Клин в первой комнате, — ни
+   * дверь, ни лавка, ни плата, ни босс в нём не появлялись НИКОГДА. Правка HP
+   * Фитиля прошла все двадцать эталонов молча зелёными именно поэтому.
+   *
+   * Проверка суммирует покрытие по ВСЕМУ корпусу, а не по одному файлу: цена
+   * дыры была в том, что её ловил только осознанный ре-бейзлайн руками, а не
+   * тест. Корпус обязан свалиться сам, если снова скатится к первой комнате.
+   */
+  describe('покрытие корпуса', () => {
+    const coverage = files.map((f) => scanCoverage(load(f)));
+    const seenTypes = coverage.reduce((acc, c) => acc | c.seenTypes, 0);
+    const phases = new Set<number>();
+    const bossPhases = new Set<number>();
+    for (const c of coverage) {
+      for (const p of c.phases) phases.add(p);
+      for (const p of c.bossPhases) bossPhases.add(p);
+    }
+
+    it('видел все три типа врагов версии', () => {
+      expect(seenTypes & (1 << EnemyType.Wedge)).not.toBe(0);
+      expect(seenTypes & (1 << EnemyType.Brick)).not.toBe(0);
+      expect(seenTypes & (1 << EnemyType.Fuse)).not.toBe(0);
+    });
+
+    it('видел дверь, лавку и плату заведению', () => {
+      expect(phases.has(RunPhase.Door)).toBe(true);
+      expect(phases.has(RunPhase.Reward)).toBe(true);
+      expect(phases.has(RunPhase.HouseCut)).toBe(true);
+    });
+
+    it('видел бой с боссом и хотя бы одну смену его фазы', () => {
+      expect(phases.has(RunPhase.Boss)).toBe(true);
+      expect(bossPhases.size).toBeGreaterThan(1);
+    });
   });
 });

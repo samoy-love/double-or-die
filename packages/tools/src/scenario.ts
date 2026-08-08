@@ -72,8 +72,10 @@ import {
   type InputFrame,
   layAceCard,
   makeFrame,
+  offerDoors,
   setSpawning,
   startBoss,
+  startRoom,
   type SimState,
   spawnEnemy,
   spawnPlayers,
@@ -372,6 +374,24 @@ export type Step =
   /** Перевести забег на названный этаж: цены и плата считаются от него. */
   | { floor: number }
   /**
+   * Начать названную комнату этажа — той же функцией, которой это делает
+   * обычный ход забега после двери.
+   *
+   * Не обход хода забега, а способ начать проверку с любой комнаты, минуя
+   * дорогу до неё: комната не обязана идти следом за предыдущей — `startRoom`
+   * этого не проверяет, — и шаг этим пользуется, чтобы, например, открыть
+   * сразу комнату, где расписание врагов (DIFFICULTY §7) впервые допускает
+   * все типы сразу.
+   */
+  | { room: number }
+  /**
+   * Предложить дверь — то же, что делает конец боя в комнате не первой.
+   *
+   * Не обход хода забега, а способ проверить экран двери отдельно от того,
+   * что до неё нужно дочистить комнату: это проверяется своим тестом.
+   */
+  | { door: true }
+  /**
    * Открыть экран платы: то же, что делает смерть босса в конце этажа.
    *
    * Не обход хода забега, а другой предмет проверки: то, что этаж кончается
@@ -597,6 +617,8 @@ const STEP_SCHEMA: Record<StepKey, Node> = {
   gift: TRUE,
   upgrade: obj({ id: UPGRADE_ID, player: PLAYER_IDX() }, ['id']),
   floor: int(1, FLOORS_PER_RUN),
+  room: int(1, ROOMS_PER_FLOOR),
+  door: TRUE,
   houseCut: TRUE,
   aceBet: obj({ id: BET_ID }, ['id']),
   settle: TRUE,
@@ -1129,6 +1151,138 @@ const push = (out: string[], msg: string | null): void => {
   if (msg !== null) out.push(msg);
 };
 
+/** Шаг сценария, который меняет состояние: все варианты `Step`, кроме `expect`. */
+export type ActionStep = Exclude<Step, { expect: Expectation }>;
+
+/**
+ * Применить один шаг сценария к состоянию — всё, что не проверка.
+ *
+ * Вынесено отдельно от `runScenario`, потому что подготовка golden-эталона с
+ * заданной стартовой точки (`recordGolden` в `golden.ts`) — это тот же набор
+ * действий «положить карту», «открыть лавку», «начать комнату», применённый
+ * ДО начала записи ввода бота, а не во время сценарной проверки. Тексту
+ * шагов незачем знать, кто их читает: и сценарий, и подготовка golden-эталона
+ * читают протокол одинаково.
+ */
+export function applyStep(s: SimState, frames: InputFrame[], st: ActionStep): void {
+  if ('input' in st) {
+    const f = frames[st.input.player ?? 0];
+    if (st.input.move) {
+      f.moveX = fromFloat(st.input.move[0]);
+      f.moveY = fromFloat(st.input.move[1]);
+    }
+    if (st.input.aim) {
+      f.aimX = fromFloat(st.input.aim[0]);
+      f.aimY = fromFloat(st.input.aim[1]);
+    }
+    if (st.input.buttons) f.buttons = buttonMask(st.input.buttons);
+  } else if ('clearInput' in st) {
+    const f = frames[st.clearInput.player ?? 0];
+    f.moveX = f.moveY = f.aimX = f.aimY = f.buttons = 0;
+  } else if ('tick' in st) {
+    for (let t = 0; t < st.tick; t++) step(s, frames);
+  } else if ('place' in st) {
+    const i = st.place.player ?? 0;
+    /*
+     * Точку можно назвать координатами, а можно — смыслом.
+     *
+     * `redZone` ставит игрока в центр красной зоны ТЕКУЩЕЙ раскладки, и
+     * это не удобство: с двенадцатью шаблонами зона переезжает каждую
+     * комнату, а сценарий, прибитый к паре чисел, начинает проверять не
+     * то, что назван проверять. Первым же таким сценарием и был этот —
+     * он ставил игрока в точку прошлой единственной арены и после
+     * прихода шаблонов сообщал, что пари не срывается.
+     */
+    if (st.place.redZone === true) {
+      s.pX[i] = redZoneX(s);
+      s.pY[i] = redZoneY(s);
+    } else {
+      if (st.place.x !== undefined) s.pX[i] = fromFloat(st.place.x);
+      if (st.place.y !== undefined) s.pY[i] = fromFloat(st.place.y);
+    }
+    s.pVX[i] = 0;
+    s.pVY[i] = 0;
+  } else if ('spawn' in st) {
+    const type = ENEMY_TYPES[st.spawn.type.toLowerCase()];
+    if (type === undefined) throw new Error(`неизвестный враг «${st.spawn.type}»`);
+    for (let n = 0; n < (st.spawn.count ?? 1); n++) {
+      spawnEnemy(s, type, fromFloat(st.spawn.x), fromFloat(st.spawn.y));
+    }
+  } else if ('card' in st) {
+    putCard(
+      s,
+      betIndex(st.card.id),
+      st.card.player ?? SHARED,
+      s.tick + CARD.lifeTicks,
+      fromFloat(st.card.x),
+      fromFloat(st.card.y),
+    );
+  } else if ('bet' in st) {
+    const p = st.bet.player ?? 0;
+    const stake = st.bet.stake ?? 10;
+    // Кон никогда не превышает кошелёк — Туз в кредит не принимает
+    // (GDD §11). Сценарий, ставящий больше, чем есть, проверял бы
+    // экономику, которой не бывает, поэтому это ошибка сценария.
+    if (stake > s.pChips[p]) {
+      throw new Error(`кон ${stake} больше кошелька игрока ${p} (${s.pChips[p]})`);
+    }
+    if (!takeBet(s, p, betIndex(st.bet.id), stake)) {
+      throw new Error(`пари «${st.bet.id}» не взялось: лимит активных пари`);
+    }
+    // Кон списывается и здесь: в игре его снимает подбор карты, и
+    // сценарий, обошедший карту, не должен получать пари даром — иначе
+    // он проверяет экономику, которой не бывает.
+    s.pChips[p] -= stake;
+  } else if ('chips' in st) {
+    s.pChips[st.chips.player ?? 0] = st.chips.amount;
+  } else if ('appetite' in st) {
+    s.pAppetite[st.appetite.player ?? 0] = APPETITE_TIERS[st.appetite.tier.toLowerCase()];
+  } else if ('dropChip' in st) {
+    dropChip(s, fromFloat(st.dropChip.x), fromFloat(st.dropChip.y));
+  } else if ('explode' in st) {
+    explode(s, fromFloat(st.explode.x), fromFloat(st.explode.y), -1);
+  } else if ('cashOut' in st) {
+    const p = st.cashOut.player ?? 0;
+    const n = betSlot(s, p, st.cashOut.id);
+    if (n < 0) throw new Error(`пари «${st.cashOut.id}» у игрока ${p} нет`);
+    cashOut(s, p, n);
+  } else if ('deal' in st) {
+    dealCards(s);
+  } else if ('shop' in st) {
+    openShop(s);
+  } else if ('gift' in st) {
+    // Отказ открыться — не молчаливая пустота, а ошибка сценария: шаги
+    // после него проверяли бы прилавок, которого нет, и зеленели бы зря.
+    if (!openGift(s)) throw new Error('Дар не открылся: все шесть апгрейдов уже у стола');
+  } else if ('upgrade' in st) {
+    const p = st.upgrade.player ?? 0;
+    if (!grantUpgrade(s, p, upgradeIndex(st.upgrade.id))) {
+      throw new Error(`апгрейд «${st.upgrade.id}» не выдался: уже есть или слоты кончились`);
+    }
+  } else if ('floor' in st) {
+    s.meta[Meta.Floor] = st.floor;
+  } else if ('room' in st) {
+    startRoom(s, st.room);
+  } else if ('door' in st) {
+    offerDoors(s);
+  } else if ('houseCut' in st) {
+    enterHouseCut(s);
+  } else if ('aceBet' in st) {
+    // Срок тот же, что у обычной карты: в игре предложение живёт до первой
+    // волны, а сценарий волн по умолчанию не пускает — и часы паузы,
+    // которых он не заводил, съедали бы предложение на первом же тике.
+    layAceCard(s, betIndex(st.aceBet.id), s.tick + CARD.lifeTicks);
+  } else if ('settle' in st) {
+    settleBets(s);
+  } else if ('clear' in st) {
+    clearArena(s);
+  } else if ('boss' in st) {
+    startBossRoom(s);
+  } else {
+    damageBoss(s, st.damageBoss.amount);
+  }
+}
+
 /**
  * Прогнать сценарий.
  *
@@ -1151,121 +1305,12 @@ export function runScenario(sc: Scenario): ScenarioResult {
   for (const [n, st] of sc.steps.entries()) {
     const where = `шаг ${n + 1}`;
     try {
-      if ('input' in st) {
-        const f = frames[st.input.player ?? 0];
-        if (st.input.move) {
-          f.moveX = fromFloat(st.input.move[0]);
-          f.moveY = fromFloat(st.input.move[1]);
-        }
-        if (st.input.aim) {
-          f.aimX = fromFloat(st.input.aim[0]);
-          f.aimY = fromFloat(st.input.aim[1]);
-        }
-        if (st.input.buttons) f.buttons = buttonMask(st.input.buttons);
-      } else if ('clearInput' in st) {
-        const f = frames[st.clearInput.player ?? 0];
-        f.moveX = f.moveY = f.aimX = f.aimY = f.buttons = 0;
-      } else if ('tick' in st) {
-        for (let t = 0; t < st.tick; t++) step(s, frames);
-      } else if ('place' in st) {
-        const i = st.place.player ?? 0;
-        /*
-         * Точку можно назвать координатами, а можно — смыслом.
-         *
-         * `redZone` ставит игрока в центр красной зоны ТЕКУЩЕЙ раскладки, и
-         * это не удобство: с двенадцатью шаблонами зона переезжает каждую
-         * комнату, а сценарий, прибитый к паре чисел, начинает проверять не
-         * то, что назван проверять. Первым же таким сценарием и был этот —
-         * он ставил игрока в точку прошлой единственной арены и после
-         * прихода шаблонов сообщал, что пари не срывается.
-         */
-        if (st.place.redZone === true) {
-          s.pX[i] = redZoneX(s);
-          s.pY[i] = redZoneY(s);
-        } else {
-          if (st.place.x !== undefined) s.pX[i] = fromFloat(st.place.x);
-          if (st.place.y !== undefined) s.pY[i] = fromFloat(st.place.y);
-        }
-        s.pVX[i] = 0;
-        s.pVY[i] = 0;
-      } else if ('spawn' in st) {
-        const type = ENEMY_TYPES[st.spawn.type.toLowerCase()];
-        if (type === undefined) throw new Error(`неизвестный враг «${st.spawn.type}»`);
-        for (let n = 0; n < (st.spawn.count ?? 1); n++) {
-          spawnEnemy(s, type, fromFloat(st.spawn.x), fromFloat(st.spawn.y));
-        }
-      } else if ('card' in st) {
-        putCard(
-          s,
-          betIndex(st.card.id),
-          st.card.player ?? SHARED,
-          s.tick + CARD.lifeTicks,
-          fromFloat(st.card.x),
-          fromFloat(st.card.y),
-        );
-      } else if ('bet' in st) {
-        const p = st.bet.player ?? 0;
-        const stake = st.bet.stake ?? 10;
-        // Кон никогда не превышает кошелёк — Туз в кредит не принимает
-        // (GDD §11). Сценарий, ставящий больше, чем есть, проверял бы
-        // экономику, которой не бывает, поэтому это ошибка сценария.
-        if (stake > s.pChips[p]) {
-          throw new Error(`кон ${stake} больше кошелька игрока ${p} (${s.pChips[p]})`);
-        }
-        if (!takeBet(s, p, betIndex(st.bet.id), stake)) {
-          throw new Error(`пари «${st.bet.id}» не взялось: лимит активных пари`);
-        }
-        // Кон списывается и здесь: в игре его снимает подбор карты, и
-        // сценарий, обошедший карту, не должен получать пари даром — иначе
-        // он проверяет экономику, которой не бывает.
-        s.pChips[p] -= stake;
-      } else if ('chips' in st) {
-        s.pChips[st.chips.player ?? 0] = st.chips.amount;
-      } else if ('appetite' in st) {
-        s.pAppetite[st.appetite.player ?? 0] = APPETITE_TIERS[st.appetite.tier.toLowerCase()];
-      } else if ('dropChip' in st) {
-        dropChip(s, fromFloat(st.dropChip.x), fromFloat(st.dropChip.y));
-      } else if ('explode' in st) {
-        explode(s, fromFloat(st.explode.x), fromFloat(st.explode.y), -1);
-      } else if ('cashOut' in st) {
-        const p = st.cashOut.player ?? 0;
-        const n = betSlot(s, p, st.cashOut.id);
-        if (n < 0) throw new Error(`пари «${st.cashOut.id}» у игрока ${p} нет`);
-        cashOut(s, p, n);
-      } else if ('deal' in st) {
-        dealCards(s);
-      } else if ('shop' in st) {
-        openShop(s);
-      } else if ('gift' in st) {
-        // Отказ открыться — не молчаливая пустота, а ошибка сценария: шаги
-        // после него проверяли бы прилавок, которого нет, и зеленели бы зря.
-        if (!openGift(s)) throw new Error('Дар не открылся: все шесть апгрейдов уже у стола');
-      } else if ('upgrade' in st) {
-        const p = st.upgrade.player ?? 0;
-        if (!grantUpgrade(s, p, upgradeIndex(st.upgrade.id))) {
-          throw new Error(`апгрейд «${st.upgrade.id}» не выдался: уже есть или слоты кончились`);
-        }
-      } else if ('floor' in st) {
-        s.meta[Meta.Floor] = st.floor;
-      } else if ('houseCut' in st) {
-        enterHouseCut(s);
-      } else if ('aceBet' in st) {
-        // Срок тот же, что у обычной карты: в игре предложение живёт до первой
-        // волны, а сценарий волн по умолчанию не пускает — и часы паузы,
-        // которых он не заводил, съедали бы предложение на первом же тике.
-        layAceCard(s, betIndex(st.aceBet.id), s.tick + CARD.lifeTicks);
-      } else if ('settle' in st) {
-        settleBets(s);
-      } else if ('clear' in st) {
-        clearArena(s);
-      } else if ('boss' in st) {
-        startBossRoom(s);
-      } else if ('damageBoss' in st) {
-        damageBoss(s, st.damageBoss.amount);
-      } else {
+      if ('expect' in st) {
         for (const msg of checkExpectation(s, st.expect, spawn)) {
           failures.push(`${where} (тик ${s.tick}): ${msg}`);
         }
+      } else {
+        applyStep(s, frames, st);
       }
     } catch (err) {
       failures.push(`${where}: ${String(err)}`);
