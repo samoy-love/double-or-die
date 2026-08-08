@@ -15,6 +15,7 @@ import {
   Btn,
   CHIP,
   DoorType,
+  ENEMIES,
   EnemyType,
   FLOORS_PER_RUN,
   MAX_UPGRADE_SLOTS,
@@ -25,6 +26,7 @@ import {
   SHOP_SLOTS,
   UPGRADES,
   UPGRADE_COUNT,
+  UpgradeEffect,
   UpgradeId,
   WAVE,
   buyUpgrade,
@@ -88,6 +90,37 @@ describe('цены лавки', () => {
   it('среднее по каталогу — ровно 45, из него посчитан бюджет игрока', () => {
     const sum = UPGRADES.reduce((acc, u) => acc + u.base, 0);
     expect(sum / UPGRADES.length).toBe(45);
+  });
+
+  /*
+   * Витрина обязана совпадать с боем.
+   *
+   * Проценты каталога умножаются на целую базу и усекаются вниз — и «+25%» от
+   * урона 10 давало 12.5, то есть 12: апгрейд молча стоил на 4% меньше
+   * обещанного, а «+50%» дропа — на 1.3%. Ловится это не глазами при правке
+   * одного товара, а проверкой всего каталога сразу, потому что промахнуться
+   * имеет право любой процент, а видно промах только в отчёте балансировщика.
+   *
+   * Порог в один процент, а не ноль: откат рывка задан в тиках (72 × 70% =
+   * 50.4 → 50), и требовать от него делимости значило бы двигать длительность
+   * рывка ради арифметики. Восемь миллисекунд неощутимы, четыре процента
+   * урона — нет.
+   */
+  it('процент каталога делится нацело: обещанное на витрине выдаётся в бою', () => {
+    const bases: Partial<Record<UpgradeEffect, number>> = {
+      [UpgradeEffect.Damage]: PISTOL.damage,
+      [UpgradeEffect.DashCooldown]: PLAYER.dashCooldownTicks,
+      [UpgradeEffect.Drop]: CHIP.dropChancePct,
+      [UpgradeEffect.Speed]: PLAYER.speed,
+    };
+
+    for (const u of UPGRADES) {
+      const base = bases[u.effect];
+      if (base === undefined) continue;
+      const exact = (base * u.value) / 100;
+      const applied = Math.trunc(exact);
+      expect(Math.abs(exact - applied) / exact).toBeLessThan(0.01);
+    }
   });
 
   it('шесть апгрейдов с базами из ECONOMY §5', () => {
@@ -237,7 +270,32 @@ describe('эффекты в бою', () => {
     expect(dropChancePctOf(s)).toBe(CHIP.dropChancePct);
   });
 
-  it('«Урон +25%» снимает с врага больше за ту же пулю', () => {
+  /*
+   * Урон меряется выстрелами, а не очками, и покупается именно выстрел.
+   *
+   * Проверка снятого за пулю необходима, но недостаточна: бой дискретен, и
+   * апгрейд, снимающий на два очка больше, не даёт игроку ровно ничего, пока
+   * число выстрелов на убийство то же самое. Ровно так и было — при HP 15 у
+   * Фитиля два выстрела уходили и с апгрейдом, и без него, а платил игрок
+   * шестьдесят фишек, самую дорогую цену каталога.
+   *
+   * Поэтому сторожится не арифметика, а покупка: на каком-то из врагов этажа
+   * апгрейд обязан снимать выстрел. Иначе он работает только по боссу, о чём
+   * витрина не сообщает.
+   */
+  it('«Урон +20%» снимает выстрел хотя бы с одного врага этажа', () => {
+    const shots = (hp: number, dmg: number): number => Math.ceil(hp / dmg);
+    const s = fresh();
+    const upgraded = fresh();
+    grantUpgrade(upgraded, 0, UpgradeId.DamageUp);
+
+    const cheaper = ENEMIES.filter(
+      (e) => shots(e.hp, damageOf(upgraded, 0)) < shots(e.hp, damageOf(s, 0)),
+    );
+    expect(cheaper.map((e) => e.type)).toContain(EnemyType.Fuse);
+  });
+
+  it('«Урон +20%» снимает с врага больше за ту же пулю', () => {
     const hit = (upgraded: boolean): number => {
       const s = fresh();
       s.pX[0] = fromInt(960);
@@ -305,11 +363,11 @@ describe('эффекты в бою', () => {
     expect(s.pChips[0]).toBe(1);
   });
 
-  it('«Дроп +50%» поднимает шанс выпадения, не трогая размер броска', () => {
+  it('«Дроп +48%» поднимает шанс выпадения, не трогая размер броска', () => {
     const s = fresh();
     grantUpgrade(s, 0, UpgradeId.DropUp);
-    // 25% × 1.5 = 37.5, и половина процента усекается: бросок идёт по сотне,
-    // и дробить её нельзя — это сдвинуло бы каждый уже записанный реплей.
+    // 25 × 148% = ровно 37: бросок идёт по сотне, дробить её нельзя, поэтому
+    // целым подобран сам процент, а не округлён результат.
     expect(dropChancePctOf(s)).toBe(37);
   });
 });
