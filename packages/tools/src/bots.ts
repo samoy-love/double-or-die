@@ -23,10 +23,13 @@ import {
   ANGLE_FULL,
   BetState,
   Btn,
+  DoorType,
   EnemyPhase,
   EnemyType,
   PLAYER,
   Stream,
+  UPGRADES,
+  UpgradeEffect,
   aceCardAt,
   add,
   cos,
@@ -45,6 +48,7 @@ import {
   EntityFlag,
   MAX_ACTIVE_BETS,
   MAX_CARDS,
+  MAX_DOORS,
   Meta,
   RunPhase,
   MAX_CHIPS,
@@ -185,6 +189,14 @@ export interface Bot {
    */
   readonly profile: string;
   inputs(s: SimState): readonly InputFrame[];
+  /**
+   * Стратегия, которой сыгран забег — источник для осмысленного выбора двери
+   * и товара в лавке (задача 2.5). Не задана у ботов, не описывающих профиль
+   * игрока (`idle`, `random`, `greedy`, `cautious`, `runner`): им нечем
+   * определить выбор, и `passDoors`/`passReward` берут для них прежнее
+   * поведение — первую дверь, первый доступный товар слева направо.
+   */
+  readonly strategyName?: StrategyName;
 }
 
 class IdleBot implements Bot {
@@ -543,6 +555,7 @@ const DODGE_RANGE = 260;
 
 class ProfileBot implements Bot {
   readonly profile: string;
+  readonly strategyName: StrategyName;
   private readonly frames: InputFrame[];
   private readonly rng: RngState;
   private readonly skill: Skill;
@@ -560,6 +573,7 @@ class ProfileBot implements Bot {
 
   constructor(skill: SkillName, strategy: StrategyName, seed: number, players: number) {
     this.profile = `${skill}:${strategy}`;
+    this.strategyName = strategy;
     this.skill = SKILLS[skill];
     this.strategy = STRATEGIES[strategy];
     this.frames = Array.from({ length: players }, makeFrame);
@@ -1038,8 +1052,14 @@ export function makeBot(name: BotName, seed: number, players: number): Bot {
   // Экран двери проходится одинаково всеми, поэтому обёрнут здесь один раз, а
   // не продублирован в шести реализациях `inputs`. Профиль пробрасывается как
   // есть: обёртка не меняет того, кем сыгран забег, а отчёт спрашивает именно
-  // это.
-  return { profile: bot.profile, inputs: (s) => passReward(s, passDoors(s, bot.inputs(s))) };
+  // это. Стратегия пробрасывается тем же путём — ею выбирается дверь и товар
+  // в лавке (задача 2.5); ботам без профиля передавать нечего, и они получают
+  // `undefined`, то есть прежнее поведение.
+  return {
+    profile: bot.profile,
+    ...(bot.strategyName !== undefined ? { strategyName: bot.strategyName } : {}),
+    inputs: (s) => passReward(s, passDoors(s, bot.inputs(s), bot.strategyName), bot.strategyName),
+  };
 }
 
 function makeRawBot(name: BotName, seed: number, players: number): Bot {
@@ -1066,6 +1086,44 @@ function makeRawBot(name: BotName, seed: number, players: number): Bot {
 }
 
 /**
+ * Порядок предпочтения дверей по стратегии (ECONOMY §6, задача 2.5).
+ *
+ * Числа в документах нет — ECONOMY описывает профили результатом («осторожный
+ * позволяет себе один апгрейд за забег», «наглый берёт стак на кону 50»), а не
+ * порядком выбора двери, — и порядок здесь выведен из этого результата, а не
+ * назначен произвольно:
+ *
+ *   — **Жирный бой** удваивает выплату комнаты и добавляет карту (GDD §5), то
+ *     есть повышает и доход, и число ставок разом. Это ровно то, подо что
+ *     `stack`/`chips` держат максимальный стак ставок (ECONOMY §9) — они
+ *     ставят её первой. `none` не берёт карт вовсе, и лишняя карта ему не
+ *     нужна ни разу — жирный бой для него не риск, а бой без всякой отдачи,
+ *     и он ставит его последним; `single` держит одно пари и не гонится за
+ *     дисперсией — жирный бой ему нейтрален, а не желанен.
+ *   — **Лавка и Дар** — единственный способ купить силу. `none` может
+ *     позволить себе один апгрейд за весь забег (ECONOМY §6) и обязан ловить
+ *     каждый шанс, поэтому ставит их первыми; `single`, у которого апгрейдов
+ *     больше (три-четыре за забег), тоже предпочитает их обычному бою, но не
+ *     так безусловно.
+ */
+const DOOR_PRIORITY: Record<StrategyName, readonly number[]> = {
+  none: [DoorType.Shop, DoorType.Gift, DoorType.Fight, DoorType.DebtPit, DoorType.Fat],
+  single: [DoorType.Gift, DoorType.Shop, DoorType.Fight, DoorType.DebtPit, DoorType.Fat],
+  stack: [DoorType.Fat, DoorType.Fight, DoorType.Shop, DoorType.Gift, DoorType.DebtPit],
+  chips: [DoorType.Fat, DoorType.Fight, DoorType.Shop, DoorType.Gift, DoorType.DebtPit],
+};
+
+/** Слот из предложенных дверей, ближе всего к вершине приоритета стратегии. */
+function pickDoorSlot(s: SimState, strategyName: StrategyName): number {
+  for (const type of DOOR_PRIORITY[strategyName]) {
+    for (let i = 0; i < MAX_DOORS; i++) {
+      if (s.doorType[i] === type) return i;
+    }
+  }
+  return 0;
+}
+
+/**
  * Экран двери: бот обязан его пройти, иначе headless-прогон встаёт навсегда.
  *
  * Дверь ждёт игрока, а не часов — это несущее правило экрана (UX §3), и
@@ -1077,20 +1135,102 @@ function makeRawBot(name: BotName, seed: number, players: number): Bot {
  * профиле, которым реже пользуются. Первый же `npm run safety` после дверей
  * висел бы пять тысяч тиков молча.
  *
- * Выбор двери — предмет СТРАТЕГИИ, и здесь он намеренно простейший: фокус
- * ставится на первую дверь и подтверждается. Осмысленный выбор («жадный идёт
- * в Лавку, осторожный в обычный бой») приедет вместе с абстрактной моделью,
- * которой он и нужен; до неё любая эвристика была бы выдумкой, влияющей на
- * все балансные замеры.
+ * Выбор двери — предмет СТРАТЕГИИ (задача 2.5): бот без профиля (`strategyName`
+ * не задан) по-прежнему берёт первую дверь — это ботов, не изображающих игрока
+ * (idle, random, greedy, cautious, runner), не касается ни один ограничитель
+ * ECONOMY §13. Профильный бот двигает фокус к слоту, который меньше всего
+ * противоречит стратегии, и лишь затем подтверждает — кнопка нажимается через
+ * тик, потому что экран читает нажатия по фронту, а держать её — значит
+ * нажать один раз.
  */
-export function passDoors(s: SimState, frames: readonly InputFrame[]): readonly InputFrame[] {
+export function passDoors(
+  s: SimState,
+  frames: readonly InputFrame[],
+  strategyName?: StrategyName,
+): readonly InputFrame[] {
   if (s.meta[Meta.Phase] !== RunPhase.Door) return frames;
 
-  const out = frames.map((f) => ({ ...f }));
-  // Фокус ставится нажатием вправо, подтверждение — следующим кадром: оба
-  // действия читаются по фронту, и слить их в один кадр нельзя.
-  out[0].buttons |= s.meta[Meta.DoorPick] < 0 ? Btn.NavRight : Btn.Confirm;
+  const focus = s.meta[Meta.DoorPick];
+  const target = strategyName ? pickDoorSlot(s, strategyName) : 0;
+
+  let button: number;
+  if (focus < 0 || focus < target) button = Btn.NavRight;
+  else if (focus > target) button = Btn.NavLeft;
+  else button = Btn.Confirm;
+
+  const out = frames.map((f) => ({ ...f, buttons: 0 }));
+  if (s.tick % 2 === 0) out[0].buttons = button;
   return out;
+}
+
+/**
+ * Порядок предпочтения эффектов на прилавке по стратегии (ECONOMY §5, задача
+ * 2.5). Каждая строка — не выдумка, а причина, записанная в таблице апгрейдов
+ * ECONOMY §5, применённая к тому, чем отличается стратегия от остальных трёх:
+ *
+ *   — `none`: сердце — «единственная покупка, работающая после ошибки, а не
+ *     до неё» (ECONOMY §5), и осторожный, копящий на единственный апгрейд за
+ *     забег, берёт именно её. Кулдаун рывка — следующий: рывок «главный
+ *     инструмент выживания» у того, кто не лечится ставками.
+ *   — `single`: одно пари, обналичивает при потере сердца (`cashOutOnHurt`) —
+ *     то есть боится урона больше прочих. Урон пули «прямее всех двигает
+ *     время убийства», то есть время под угрозой (ECONOMY §5) — ему первым.
+ *   — `stack`: держит стак ставок и не обналичивает никогда — карты его не
+ *     отпускают до расчёта, поэтому не терять кулдаун важнее, чем у прочих:
+ *     рывок «главный инструмент выживания» (ECONOMY §5) стоит первым, сердце
+ *     вторым.
+ *   — `chips`: ходит за фишками на полу — «Магнит» и «Дроп» прямо умножают то,
+ *     ради чего профиль заведён (ECONOMY §4), и стоят первыми только у него.
+ */
+const SHOP_PRIORITY: Record<StrategyName, readonly UpgradeEffect[]> = {
+  none: [
+    UpgradeEffect.Heart,
+    UpgradeEffect.DashCooldown,
+    UpgradeEffect.Damage,
+    UpgradeEffect.Magnet,
+    UpgradeEffect.Drop,
+    UpgradeEffect.Speed,
+  ],
+  single: [
+    UpgradeEffect.Damage,
+    UpgradeEffect.Heart,
+    UpgradeEffect.DashCooldown,
+    UpgradeEffect.Speed,
+    UpgradeEffect.Magnet,
+    UpgradeEffect.Drop,
+  ],
+  stack: [
+    UpgradeEffect.DashCooldown,
+    UpgradeEffect.Heart,
+    UpgradeEffect.Damage,
+    UpgradeEffect.Speed,
+    UpgradeEffect.Magnet,
+    UpgradeEffect.Drop,
+  ],
+  chips: [
+    UpgradeEffect.Magnet,
+    UpgradeEffect.Drop,
+    UpgradeEffect.Damage,
+    UpgradeEffect.DashCooldown,
+    UpgradeEffect.Heart,
+    UpgradeEffect.Speed,
+  ],
+};
+
+/**
+ * Слот прилавка, ближе всего к вершине приоритета стратегии и по карману.
+ * Минус один — приоритетного и доступного нет, вызывающий берёт прежнее
+ * поведение (первый доступный слева направо).
+ */
+function pickShopSlot(s: SimState, strategyName: StrategyName): number {
+  for (const effect of SHOP_PRIORITY[strategyName]) {
+    for (let i = 0; i < SHOP_SLOTS; i++) {
+      const item = s.shopItem[i];
+      if (item === 0 || UPGRADES[item - 1].effect !== effect) continue;
+      if (canBuy(s, 0, i)) return i;
+    }
+  }
+  return -1;
 }
 
 /**
@@ -1103,12 +1243,13 @@ export function passDoors(s: SimState, frames: readonly InputFrame[]): readonly 
  * Дар проходится тем же кодом: ценник у него нулевой, `canBuy` пропускает
  * первое же предложение, а взятый апгрейд закрывает экран сам.
  *
- * Поведение простейшее и намеренно жадное: слева направо купить всё, на что
- * хватает, и уйти. Осмысленный выбор («сначала сердце, потом урон») — предмет
- * стратегии и приедет вместе с абстрактной моделью; до неё любая эвристика
- * была бы выдумкой, влияющей на все балансные замеры. Но НЕ покупать нельзя:
- * ограничители G2 и G3 считают купленное за забег, и бот, уходящий с полным
- * кошельком, обнулял бы оба.
+ * Выбор товара — предмет СТРАТЕГИИ (задача 2.5): бот без профиля идёт слева
+ * направо и берёт первое доступное, как и раньше — это ботов, не изображающих
+ * игрока, не касается ни один ограничитель ECONOMY §13. Профильный бот сперва
+ * ищет слот с товаром по вершине своего приоритета (`pickShopSlot`); нет
+ * такого — падает на то же поведение слева направо, потому что НЕ купить
+ * нельзя: ограничители G2 и G3 считают купленное за забег, и бот, уходящий с
+ * полным кошельком, обнулял бы оба.
  *
  * Кнопка отпускается через тик, и это не стиль, а условие работоспособности:
  * экран читает нажатия по фронту, а удержанная кнопка срабатывает ровно
@@ -1116,12 +1257,19 @@ export function passDoors(s: SimState, frames: readonly InputFrame[]): readonly 
  * товаре навсегда — и прогон вместе с ним. `canBuy` при этом спрашивается тот
  * же самый, что и в покупке: разъедься они, бот жал бы «купить» вечно.
  */
-export function passReward(s: SimState, frames: readonly InputFrame[]): readonly InputFrame[] {
+export function passReward(
+  s: SimState,
+  frames: readonly InputFrame[],
+  strategyName?: StrategyName,
+): readonly InputFrame[] {
   if (s.meta[Meta.Phase] !== RunPhase.Reward) return frames;
 
   const focus = s.meta[Meta.DoorPick];
+  const target = strategyName ? pickShopSlot(s, strategyName) : -1;
+
   let button: number;
   if (focus < 0) button = Btn.NavRight;
+  else if (target >= 0 && focus !== target) button = focus < target ? Btn.NavRight : Btn.NavLeft;
   else if (canBuy(s, 0, focus)) button = Btn.Confirm;
   else if (focus < SHOP_SLOTS - 1) button = Btn.NavRight;
   else button = Btn.Cancel;
