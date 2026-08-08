@@ -20,6 +20,10 @@ import {
   createState,
   deserialize,
   hashHex,
+  makeFrame,
+  Meta,
+  RunPhase,
+  type InputFrame,
   type Replay,
   ReplayPlayer,
   ReplayRecorder,
@@ -29,6 +33,7 @@ import {
 } from '@dod/sim';
 import { CONFIG_VERSION } from '@dod/shared';
 import { type BotName, makeBot } from './bots';
+import { applyStep, type ActionStep } from './scenario';
 
 export const GOLDEN_FORMAT = 1;
 
@@ -44,7 +49,24 @@ export interface Golden {
   format: number;
   name: string;
   bot: BotName;
-  /** Сериализованный лог ввода: сам забег. */
+  /**
+   * Шаги подготовки, пройденные ДО начала записи ввода бота, — та же
+   * машинерия, что читает сценарий (`applyStep` в `scenario.ts`).
+   *
+   * Забег не обязан начинаться с тика 0. Комната первого этажа длится
+   * 38–60 с (DIFFICULTY §4), а расписание врагов открывает Фитиля в
+   * комнате 1–3, Кирпича в 1–5 (DIFFICULTY §7) — эталон, пишущий забег с
+   * начала, должен либо тянуться десятки тысяч тиков, чтобы дожить до
+   * двери, лавки, платы и босса, либо не видеть их вовсе. Подготовленный
+   * старт снимает это противоречие: запись короткая, а начинается сразу с
+   * места, которое нужно покрыть.
+   *
+   * Поле необязательное, а не пустой массив по умолчанию: старые эталоны
+   * без него как читаются, так и остаются читаемы — `undefined` значит
+   * «подготовки не было», а не «была, но нулевая».
+   */
+  setup?: ActionStep[];
+  /** Сериализованный лог ввода: сам забег, начиная с подготовленной точки. */
   replay: string;
   checkpoints: Checkpoint[];
 }
@@ -75,9 +97,18 @@ export function recordGolden(
   players: number,
   bot: BotName,
   ticks: number,
+  setup: ActionStep[] = [],
 ): Golden {
   const s = createState(seed, players);
   spawnPlayers(s);
+
+  // Подготовка проходит ДО начала записи: она не часть лога ввода бота, а
+  // условие, из которого он стартует. Кадры для неё свои — сценарные шаги
+  // `input`/`tick` пишут в них, — а не те, которыми управляет бот ниже.
+  if (setup.length > 0) {
+    const frames: InputFrame[] = Array.from({ length: players }, makeFrame);
+    for (const st of setup) applyStep(s, frames, st);
+  }
 
   const rec = new ReplayRecorder({
     seed,
@@ -98,7 +129,14 @@ export function recordGolden(
   // иначе хвост забега остаётся непокрытым.
   if (checkpoints.at(-1)?.tick !== s.tick) checkpoints.push({ tick: s.tick, hash: hashHex(s) });
 
-  return { format: GOLDEN_FORMAT, name, bot, replay: serialize(rec.finish()), checkpoints };
+  return {
+    format: GOLDEN_FORMAT,
+    name,
+    bot,
+    ...(setup.length > 0 ? { setup } : {}),
+    replay: serialize(rec.finish()),
+    checkpoints,
+  };
 }
 
 /**
@@ -122,6 +160,13 @@ export function verifyGolden(g: Golden): GoldenResult {
   const s = createState(replay.seed, replay.playerCount);
   spawnPlayers(s);
 
+  // Та же подготовка, что при записи, и в том же порядке: реплей начинается
+  // не с чистого старта, а с точки, куда её довели шаги `setup`.
+  if (g.setup && g.setup.length > 0) {
+    const frames: InputFrame[] = Array.from({ length: replay.playerCount }, makeFrame);
+    for (const st of g.setup) applyStep(s, frames, st);
+  }
+
   const want = new Map(g.checkpoints.map((c) => [c.tick, c.hash]));
   const player = new ReplayPlayer(replay);
   const failures: GoldenFailure[] = [];
@@ -139,6 +184,57 @@ export function verifyGolden(g: Golden): GoldenResult {
 }
 
 /**
+ * Что видел один эталон: типы врагов, фазы забега, фазы босса.
+ *
+ * Проверка «хеш сошёлся» ловит расхождение с прошлым, но ничего не говорит о
+ * том, расходиться было ЧЕМУ, — эталон, застрявший в первой комнате, сходится
+ * так же зелёно, как эталон, дошедший до платы. Ровно эта слепота и была
+ * дырой гейта (см. 0.3.10 в истории ниже): двадцать эталонов совпадали сами с
+ * собой на каждой правке, включая ту, что видел ни один из них.
+ */
+export interface CoverageReport {
+  /** Битовая маска `EnemyType`, объединённая по `Meta.SeenTypes` за весь эталон. */
+  seenTypes: number;
+  /** Все фазы `RunPhase`, в которых эталон побывал хоть один тик. */
+  phases: Set<number>;
+  /** Все фазы босса (1..3), в которых эталон побывал хоть один тик. */
+  bossPhases: Set<number>;
+}
+
+/**
+ * Переиграть эталон и снять покрытие, а не хеши.
+ *
+ * Не переиспользует `verifyGolden`: та останавливается на первом же
+ * несовпадении хеша и не обязана проходить реплей целиком, а покрытие нужно
+ * снять со всего, что в нём есть, независимо от исхода сверки.
+ */
+export function scanCoverage(g: Golden): CoverageReport {
+  const replay: Replay = deserialize(g.replay);
+  const s = createState(replay.seed, replay.playerCount);
+  spawnPlayers(s);
+
+  if (g.setup && g.setup.length > 0) {
+    const frames: InputFrame[] = Array.from({ length: replay.playerCount }, makeFrame);
+    for (const st of g.setup) applyStep(s, frames, st);
+  }
+
+  const phases = new Set<number>([s.meta[Meta.Phase]]);
+  const bossPhases = new Set<number>();
+  if (s.meta[Meta.BossPhase] !== 0) bossPhases.add(s.meta[Meta.BossPhase]);
+
+  const player = new ReplayPlayer(replay);
+  while (!player.done) {
+    step(s, player.next());
+    phases.add(s.meta[Meta.Phase]);
+    if (s.meta[Meta.Phase] === RunPhase.Boss && s.meta[Meta.BossPhase] !== 0) {
+      bossPhases.add(s.meta[Meta.BossPhase]);
+    }
+  }
+
+  return { seenTypes: s.meta[Meta.SeenTypes], phases, bossPhases };
+}
+
+/**
  * История ре-бейзлайнов эталонов.
  *
  * Сама версия живёт в `packages/shared` — её знают и клиент, и сервер, и хеш
@@ -146,6 +242,65 @@ export function verifyGolden(g: Golden): GoldenResult {
  * проверкой, которая от неё падает: строка версии без причины не говорит
  * ничего, а причина без проверки теряется.
  *
+ *   0.3.11 — Golden-корпус научился стартовать не с тика 0.
+ *
+ *           Пятый ре-бейзлайн версии, второй за сутки после 0.3.10 — та
+ *           запись прямо предупреждала о дыре и обещала её закрыть. Дыра
+ *           была измерена, а не предположена: все двадцать эталонов
+ *           (`random`, 3600 тиков) гибли в комнате 1 на тиках 802–1711, 68%
+ *           тиков корпуса были снимками замороженного мира после экрана
+ *           итогов, а правка HP Фитиля прошла все двадцать зелёными молча.
+ *           Гейт, поставленный на слом детерминизма, не видел ни двери, ни
+ *           лавки, ни платы, ни босса и ни одного врага, кроме Клина.
+ *
+ *           Путь «научить бота проходить этаж» закрыт отдельно и не сюда:
+ *           два дня разбора `RunnerBot` вскрывали независимые причины, по
+ *           которым он не доживает до пятой комнаты, — и после трёх починок
+ *           (в их числе честный баг D4 в `packages/tools/src/safety.ts`,
+ *           7f4310d, полезный сам по себе) слепота осталась той же. Слоёв
+ *           оказалось больше, чем времени на них.
+ *
+ *           Решение — не длина, а точка старта. `Golden.setup` (см. выше)
+ *           хранит шаги подготовки — ту же машинерию `applyStep`, что читает
+ *           сценарий (`scenario.ts`), — и прогоняет их ДО начала записи
+ *           ввода бота. Пять новых эталонов (`scenario-*.json`) стартуют не
+ *           с пустой арены, а с уже открытой двери, лавки, платы или боя с
+ *           боссом: `startRoom`/`offerDoors` — те же функции, которыми это
+ *           делает обычный ход забега, а не имитация россыпью прямых правок
+ *           состояния. Дописаны два новых шага сценария — `room` и `door` —
+ *           обёртки над `startRoom`/`offerDoors`, которых сценариям раньше
+ *           не требовалось, потому что ни один не начинал проверку с
+ *           середины этажа.
+ *
+ *           Двадцать прежних эталонов не тронуты по геймплею и оставлены
+ *           короткими нарочно: они дёшевы и стабильно ловят слом в первой
+ *           комнате, которую пятеро новых не покрывают вовсе — та комната
+ *           не входит ни в один из их стартовых состояний. Ре-штампованы
+ *           только версией конфига: хеши до и после сверены — не изменились
+ *           ни на один, — потому что поведение симуляции этой правкой не
+ *           тронуто вовсе, обновилась только оснастка golden.
+ *
+ *           Покрытие подтверждено числами, а не на глаз:
+ *           `scenario-enemies-p1.json` (комната 5 этажа 1, где расписание
+ *           открывает Клина, Кирпича и Фитиля разом) видит все три типа за
+ *           1500 тиков; `scenario-door-p1.json` и `scenario-shop-p1.json` —
+ *           экраны двери и лавки за 150; `scenario-housecut-p1.json` — плату
+ *           заведению за 100; `scenario-boss-p1.json` — бой с боссом с живой
+ *           сменой фазы (не подставленной, а снятой стрельбой бота поверх
+ *           заранее ослабленного запаса) за 1500. Пять новых файлов — это
+ *           68 КБ против 380 КБ старых двадцати: цена, о которой
+ *           предупреждала запись 0.3.10 (байт на тик, а не ЦПУ), не
+ *           материализовалась — тики короткие, потому что стартуют не с
+ *           нуля. Проверка `tests/golden.test.ts` теперь падает, если
+ *           корпус ЦЕЛИКОМ перестанет видеть любой из типов врагов, любую
+ *           из этих фаз или больше одной фазы босса, — это и есть защита от
+ *           повторения дыры, а не только от расхождения хеша.
+ *
+ *           `RunnerBot` (`packages/tools/src/bots.ts`) оставлен в файле
+ *           служебным инструментом — годным ботом для юнит-тестов,
+ *           которым нужен живой участник боя, — но не как проходчик этажа
+ *           и не как записывающий бот: JSDoc над классом честно говорит,
+ *           что до комнаты 5 он не доходит.
  *   0.3.8 — Арена перестала быть одной раскладкой на всю игру: двенадцать
  *           рукотворных шаблонов, каждый в четырёх отражениях, выбираются на
  *           входе в комнату из потока `layout` — объявленного ещё в 0.1.0 и
