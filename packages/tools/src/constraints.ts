@@ -280,9 +280,22 @@ function netBetEarnings(bets: readonly BetRecord[], catalog: ReadonlyMap<string,
   return sum;
 }
 
-/** G6 считается по смеси профилей ровно как SIMULATION §3 велит: `--bot mixed`. */
+/**
+ * G6 считается по смеси профилей ровно как SIMULATION §3 велит: `--bot mixed`.
+ *
+ * Стратегия `none` исключается ЗДЕСЬ, а не только выбором того, что подать на
+ * вход: `none` не берёт пари никогда, и заметная её доля в выборке валила бы
+ * ограничитель составом смеси, а не балансом игры (SIMULATION §3, «Профиль
+ * `none` в смесь не входит, и это не забывчивость»). `mixed` сам `none` не
+ * порождает, но G1/G2 нужен отдельный прогон `novice:none` в той же выборке
+ * (SIMULATION §3 называет его по имени) — без фильтра здесь этот прогон
+ * подмешивался бы в знаменатель G6 и портил бы ограничитель тем самым
+ * способом, от которого его бережёт исключение `none` из `mixed`.
+ */
 function g6(samples: readonly Sample[]): ConstraintResult {
-  const s = samples.filter((r) => r.profile !== 'idle' && r.profile !== 'random');
+  const s = samples.filter(
+    (r) => r.profile !== 'idle' && r.profile !== 'random' && strategyOf(r.profile) !== 'none',
+  );
   return result('G6', 'Доля забегов с нулём взятых пари', '< 5%', s.length, () => {
     const zero = s.filter((r) => r.observed.bets.length === 0).length;
     const share = zero / s.length;

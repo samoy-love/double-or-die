@@ -48,6 +48,8 @@ import { parseScenario, runScenario, type ScenarioResult } from './scenario';
 import { Observer } from './observe';
 import { checkSafety } from './safety';
 import { diagnoseCorpus } from './goldenCorpus';
+import { runBalance } from './balance';
+import { runSearch, formatSearchReport, DEFAULT_SEARCH_OPTIONS } from './search';
 
 interface Args {
   seed: number;
@@ -68,6 +70,8 @@ interface Args {
   safety: boolean;
   observe: boolean;
   timing: boolean;
+  balance: boolean;
+  search: boolean;
 }
 
 /**
@@ -180,6 +184,8 @@ function parseArgs(argv: string[]): Args {
     safety: false,
     observe: false,
     timing: false,
+    balance: false,
+    search: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
@@ -251,6 +257,12 @@ function parseArgs(argv: string[]): Args {
       case '--timing':
         a.timing = true;
         break;
+      case '--balance':
+        a.balance = true;
+        break;
+      case '--search':
+        a.search = true;
+        break;
       case '--json':
         a.json = true;
         break;
@@ -295,6 +307,15 @@ Headless-раннер Double or Die
                         (ROADMAP §0.4.0). --bot задаёт профиль skill:strategy
                         или остаётся пустым — тогда мерят все 16 профилей.
                         --runs — забегов НА ПРОФИЛЬ, обязателен и больше 1.
+  --balance             ГЕЙТ: ограничители G1–G17/D1–D10 (ECONOMY §13,
+                        DIFFICULTY §10) полной симуляцией, состав N=1.
+                        --runs — прогонов бота mixed (умолчание 1000, ~30 с);
+                        к ним добавляется фиксированный прогон novice:none
+                        для G1/G2. Красный ограничитель — код выхода 1.
+  --search              первый эволюционный поиск оптимума по рычагам
+                        ECONOMY §15 на абстрактной модели (SIMULATION §6):
+                        4 стадии по порядку рычагов, не гейт, не падает.
+                        Печатает рекомендацию, ничего не правит.
 
   --scenario <путь>     прогнать сценарий: файл или каталог
   --golden <путь>       сверить эталонные реплеи: файл или каталог
@@ -714,6 +735,62 @@ function doTiming(a: Args): never {
 }
 
 /**
+ * Гейт баланса (задача 2.3): `runBalance` уже собрал выборку и посчитал
+ * ограничители — здесь только печать и код выхода, тем же путём, что у
+ * остальных команд раннера.
+ */
+function doBalance(a: Args): never {
+  // Умолчание CLI (1) для --balance бессмысленно мало. 1000 замерено на этой
+  // машине: ~30 с (DEVLOOP §2, «разумное время» — задача 2.3) — достаточно и
+  // для редких срезов (G12 — Ставка Туза, G5 — median+stack), и для того,
+  // чтобы не превращать гейт в привычку, которую жалко запускать лишний раз.
+  const runs = a.runs === 1 ? 1000 : a.runs;
+  const outcome = runBalance({ runs, seed: a.seed });
+  console.log(outcome.text);
+  if (a.json || a.out) {
+    emit(a, {
+      ok: outcome.ok,
+      samples: outcome.samples,
+      mixedRuns: outcome.mixedRuns,
+      noneRuns: outcome.noneRuns,
+      report: outcome.report,
+    });
+  }
+  process.exit(outcome.ok ? 0 : 1);
+}
+
+/**
+ * Первый эволюционный поиск оптимума (задача 2.3, SIMULATION §6). Не гейт:
+ * печатает рекомендацию по рычагам ECONOMY §15 и всегда выходит нулём —
+ * правка чисел решением поиска не становится автоматически (SIMULATION §8,
+ * «рекомендации — это направление, а не приказ»).
+ */
+function doSearch(a: Args): never {
+  const opts = { ...DEFAULT_SEARCH_OPTIONS, seed: a.seed };
+  const res = runSearch(opts);
+  console.log(formatSearchReport(res, opts));
+  if (a.json || a.out) {
+    emit(a, {
+      baseline: res.baseline,
+      finalLevers: res.finalLevers,
+      baselineScore: res.baselineReport.softScore,
+      finalScore: res.finalReport.softScore,
+      baselineHardOk: res.baselineReport.hardOk,
+      finalHardOk: res.finalReport.hardOk,
+      stages: res.stages.map((s) => ({
+        name: s.name,
+        params: s.params,
+        startLevers: s.startLevers,
+        bestLevers: s.bestLevers,
+        startScore: s.startScore,
+        bestScore: s.bestScore,
+      })),
+    });
+  }
+  process.exit(0);
+}
+
+/**
  * Отдать отчёт: в файл, если попросили, иначе в stdout.
  *
  * Файл пишем сами, а не через `> out.json` в оболочке: перенаправление
@@ -861,6 +938,8 @@ function main(): void {
   if (a.golden) doGolden(a, a.golden);
   if (a.replay) doReplay(a, a.replay);
   if (a.timing) doTiming(a);
+  if (a.balance) doBalance(a);
+  if (a.search) doSearch(a);
 
   if (a.determinismCheck) {
     const mismatches: { seed: number; a: string; b: string }[] = [];

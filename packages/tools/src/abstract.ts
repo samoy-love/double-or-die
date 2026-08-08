@@ -76,13 +76,56 @@ export interface RoomSample {
 // ---------------------------------------------------------------------------
 
 /**
- * Бюджет угрозы `T(F, R, N)` — DIFFICULTY §4, формула воспроизведена без
- * изменений. Число живёт в конфиге симуляции; здесь оно нужно только затем,
- * чтобы модель считала длительность той же формулой, что и дизайн-документ,
- * а не собственной оценкой.
+ * Рычаги ECONOMY §15, которые ищет эволюционный поиск (`search.ts`) — не
+ * калибровка (та подгоняет модель ПОД факт полной симуляции, `CalibrationParams`
+ * выше), а design-параметры, которые сам факт меняют. Заведены отдельным типом
+ * от `CalibrationParams` намеренно: смешать их значило бы дать поиску крутить
+ * то же поле, которое калибровочный тест проверяет на расхождение с полной
+ * симуляцией, и красный тест перестал бы отличать «модель не откалибрована»
+ * от «поиск подвинул рычаг».
+ *
+ * Необязательные, все по умолчанию `undefined` → поведение `sampleRoom`
+ * идентично версии без рычагов: старые вызовы (калибровочный тест,
+ * `calibrationChecks`) ничего не передают и ничего не теряют.
+ *
+ * Двух из четырёх рычагов ECONOMY §15 здесь нет — «кривая доли заведения» и
+ * «цены магазина» действуют на границе этажа и на экране лавки, а не внутри
+ * одной комнаты, и в сэмплирование комнаты не попадают вовсе; `search.ts`
+ * считает их поверх результатов `sampleRoom`, не трогая эту функцию.
  */
-const threatBudget = (floor: number, room: number, players: number): number =>
-  300 * (1 + 0.08 * (room - 1)) * 2 ** (floor - 1) * (1 + 0.8 * (players - 1));
+export interface LeverOverrides {
+  /** Множитель поверх `WAVE.baseBudget` (300, DIFFICULTY §4). `undefined` = 1. */
+  threatBudgetScale?: number;
+  /** Замена `WAVE.roomGrowthPct` (8, DIFFICULTY §4), в процентах. `undefined` = 8. */
+  roomGrowthPct?: number;
+  /**
+   * Множитель поверх среднего каталожного множителя пари (`AVERAGE_MULTIPLIER`
+   * ниже). Эффективный множитель идёт в ТУ ЖЕ интерполяцию `targetP`, что и
+   * немодифицированная модель — design-кривая ECONOMY §2 (чем наглее пари, тем
+   * выше целевой успех) читается на новой точке, а не изобретается заново.
+   * `undefined` = 1.
+   */
+  betMultiplierScale?: number;
+}
+
+const NO_LEVERS: LeverOverrides = {};
+
+/**
+ * Бюджет угрозы `T(F, R, N)` — DIFFICULTY §4, формула воспроизведена без
+ * изменений при `lev` по умолчанию. Число живёт в конфиге симуляции; здесь
+ * оно нужно только затем, чтобы модель считала длительность той же формулой,
+ * что и дизайн-документ, а не собственной оценкой.
+ */
+const threatBudget = (
+  floor: number,
+  room: number,
+  players: number,
+  lev: LeverOverrides = NO_LEVERS,
+): number => {
+  const base = 300 * (lev.threatBudgetScale ?? 1);
+  const roomGrowth = (lev.roomGrowthPct ?? 8) / 100;
+  return base * (1 + roomGrowth * (room - 1)) * 2 ** (floor - 1) * (1 + 0.8 * (players - 1));
+};
 
 /** Эффективная плотность прочности — DIFFICULTY §3: 0.31 выстрела на очко угрозы. */
 const EFFECTIVE_DENSITY = 3.1;
@@ -117,8 +160,8 @@ const floorDps = (floor: 1 | 2 | 3, skill: SkillName): number =>
   FLOOR_MEDIAN_DPS[floor] * (skillDps(skill) / skillDps('median'));
 
 /** Ожидаемая длительность комнаты в секундах — DIFFICULTY §4, "Бюджет × 3.1 / урон". */
-const meanRoomSeconds = (input: RoomInput): number =>
-  (threatBudget(input.floor, input.room, input.players) * EFFECTIVE_DENSITY) /
+const meanRoomSeconds = (input: RoomInput, lev: LeverOverrides = NO_LEVERS): number =>
+  (threatBudget(input.floor, input.room, input.players, lev) * EFFECTIVE_DENSITY) /
   floorDps(input.floor, input.skill);
 
 /**
@@ -323,7 +366,8 @@ function samplePoisson(rand: () => number, lambda: number): number {
  * нужен только счётчик и множитель, а не то, какое именно пари выпало.
  * Средний множитель каталога 0.4.0 (2, 2, 2, 2, 2.5, 3) — 2.25.
  */
-const AVERAGE_MULTIPLIER = BETS.reduce((sum, b) => sum + toFloat(b.multiplier), 0) / BETS.length;
+export const AVERAGE_MULTIPLIER =
+  BETS.reduce((sum, b) => sum + toFloat(b.multiplier), 0) / BETS.length;
 const STRATEGY_BETS_PER_ROOM: Record<StrategyName, number> = {
   none: 0,
   single: 1,
@@ -335,13 +379,20 @@ const STRATEGY_BETS_PER_ROOM: Record<StrategyName, number> = {
   chips: MAX_ACTIVE_BETS,
 };
 
-/** Один сэмпл комнаты. `rand` — уже созданный генератор, чтобы вызывающий код мог гнать батч без пересоздания. */
+/**
+ * Один сэмпл комнаты. `rand` — уже созданный генератор, чтобы вызывающий код
+ * мог гнать батч без пересоздания. `lev` — рычаги ECONOMY §15 (см. шапку
+ * `LeverOverrides`), по умолчанию пустой объект: тогда результат совпадает с
+ * версией без рычагов бит-в-бит, и калибровочный тест, зовущий эту функцию
+ * без пятого аргумента, ничего не теряет.
+ */
 export function sampleRoom(
   input: RoomInput,
   rand: () => number,
   cal: CalibrationParams = DEFAULT_CALIBRATION,
+  lev: LeverOverrides = NO_LEVERS,
 ): RoomSample {
-  const meanSeconds = meanRoomSeconds(input) * (cal.roomDurationScale[input.skill] ?? 1);
+  const meanSeconds = meanRoomSeconds(input, lev) * (cal.roomDurationScale[input.skill] ?? 1);
   const sigma = meanSeconds * cal.roomDurationCv;
   const shape = sigma > 0 ? (meanSeconds / sigma) ** 2 : 1e6;
   const scale = sigma > 0 ? sigma ** 2 / meanSeconds : meanSeconds;
@@ -355,9 +406,10 @@ export function sampleRoom(
   const chips = Math.max(0, Math.round(meanChips + sampleNormal(rand) * chipsSigma));
 
   const betsTaken = STRATEGY_BETS_PER_ROOM[input.strategy];
+  const effectiveMultiplier = AVERAGE_MULTIPLIER * (lev.betMultiplierScale ?? 1);
   let betsWon = 0;
   for (let i = 0; i < betsTaken; i++) {
-    if (rand() < betSuccessP(input, AVERAGE_MULTIPLIER)) betsWon++;
+    if (rand() < betSuccessP(input, effectiveMultiplier)) betsWon++;
   }
 
   return { ticks, hits, chips, betsTaken, betsWon };
@@ -369,9 +421,10 @@ export function sampleRoomBatch(
   n: number,
   seed: number,
   cal: CalibrationParams = DEFAULT_CALIBRATION,
+  lev: LeverOverrides = NO_LEVERS,
 ): RoomSample[] {
   const rand = mulberry32(seed);
-  return Array.from({ length: n }, () => sampleRoom(input, rand, cal));
+  return Array.from({ length: n }, () => sampleRoom(input, rand, cal, lev));
 }
 
 // ---------------------------------------------------------------------------
