@@ -15,6 +15,7 @@
     "dev": "vite",
     "sim": "tsx packages/tools/src/cli.ts",
     "safety": "tsx packages/tools/src/cli.ts --runs 20 --ticks 5400 --bot random --safety --json",
+    "timing": "tsx packages/tools/src/cli.ts --timing --runs 20",
     "bench": "tsx packages/tools/src/bench.ts",
     "test": "vitest run",
     "test:watch": "vitest",

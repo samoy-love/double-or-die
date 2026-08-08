@@ -20,6 +20,8 @@ import {
   MAX_PLAYERS,
   Meta,
   ReplayPlayer,
+  RunPhase,
+  TICK_HZ,
   type SimState,
   spawnPlayers,
   step,
@@ -27,11 +29,13 @@ import {
 import {
   BOT_NAMES,
   LEGACY_BOT_NAMES,
-  SKILL_NAMES,
-  STRATEGY_NAMES,
+  PROFILE_NAMES,
   isBotName,
   makeBot,
   type BotName,
+  type ProfileName,
+  SKILL_NAMES,
+  STRATEGY_NAMES,
 } from './bots';
 import {
   CONFIG_VERSION,
@@ -63,6 +67,7 @@ interface Args {
   rebaseline: boolean;
   safety: boolean;
   observe: boolean;
+  timing: boolean;
 }
 
 /**
@@ -174,6 +179,7 @@ function parseArgs(argv: string[]): Args {
     rebaseline: false,
     safety: false,
     observe: false,
+    timing: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
@@ -242,6 +248,9 @@ function parseArgs(argv: string[]): Args {
       case '--observe':
         a.observe = true;
         break;
+      case '--timing':
+        a.timing = true;
+        break;
       case '--json':
         a.json = true;
         break;
@@ -281,6 +290,11 @@ Headless-раннер Double or Die
   --safety              проверять достижимость безопасной точки (D4) каждый тик
   --observe             добавить к каждому забегу разбор: пари по id, тир,
                         исходы, длительности комнат, кто отнял сердце
+  --timing              хронометраж ПОЛНОГО забега (до итогов): медиана,
+                        квартили, доля дошедших до конца, ворота 12–18 мин
+                        (ROADMAP §0.4.0). --bot задаёт профиль skill:strategy
+                        или остаётся пустым — тогда мерят все 16 профилей.
+                        --runs — забегов НА ПРОФИЛЬ, обязателен и больше 1.
 
   --scenario <путь>     прогнать сценарий: файл или каталог
   --golden <путь>       сверить эталонные реплеи: файл или каталог
@@ -321,6 +335,27 @@ function median(xs: readonly number[]): number {
 /** Доля с тремя знаками: в JSON от 0.4383333333333333 никому не легче. */
 const share = (part: number, whole: number): number =>
   whole === 0 ? 0 : Math.round((part / whole) * 1000) / 1000;
+
+/**
+ * Перцентиль по отсортированному правилу «ближайший ранг».
+ *
+ * Не линейная интерполяция (как в Excel) — забег либо длился столько тиков,
+ * сколько длился, либо нет: дробного забега между двумя соседними не бывает,
+ * и интерполированное значение соответствовало бы прогону, которого не было.
+ */
+function percentile(xsSorted: readonly number[], p: number): number {
+  if (xsSorted.length === 0) return 0;
+  const idx = Math.min(xsSorted.length - 1, Math.ceil(p * xsSorted.length) - 1);
+  return xsSorted[Math.max(0, idx)];
+}
+
+/** Тики в `мм:сс` — секунды в отчёте о ворота никто в тиках не читает. */
+function mmss(ticks: number): string {
+  const totalSec = Math.round(ticks / TICK_HZ);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
 
 /**
  * Один забег.
@@ -484,6 +519,201 @@ function runOnce(
 }
 
 /**
+ * Потолок хронометража: 30 минут.
+ *
+ * Ворота — 12–18 минут, но ждать конца забега можно и дольше среднего:
+ * потолок вдвое выше верхней границы коридора, чтобы медленный, но живой
+ * забег не обрывался раньше своих итогов и не путался с зависшим.
+ * `--ticks` в замере полного забега не участвует намеренно (см. `doTiming`):
+ * пользователь может забыть его поднять, а тихо обрезанный на минуте забег
+ * выглядел бы как «не дошёл до конца» вместо «не успели измерить».
+ */
+const TIMING_TICK_CAP = 30 * 60 * TICK_HZ;
+
+interface TimingRun {
+  readonly profile: string;
+  readonly seed: number;
+  /** Забег дошёл до экрана итогов (`RunPhase.Summary`) в пределах потолка. */
+  readonly finished: boolean;
+  readonly victory: boolean;
+  readonly broken: boolean;
+  readonly ticks: number;
+  readonly error?: string;
+}
+
+/**
+ * Один полный забег: от `spawnPlayers` до `RunPhase.Summary` или до потолка.
+ *
+ * В отличие от `runOnce` (тест поведения за фиксированное окно), здесь важен
+ * сам момент, когда стол доходит до итогов — смертью или победой на третьем
+ * этаже (`endRun`, `packages/sim/src/run.ts`). Другого признака конца забега
+ * в ядре нет и заводить его здесь незачем: `Meta.Phase` уже несёт этот факт.
+ */
+function runToSummary(seed: number, players: number, bot: BotName): TimingRun {
+  const s = createState(seed, players);
+  spawnPlayers(s);
+  const b = makeBot(bot, seed, players);
+
+  for (let t = 0; t < TIMING_TICK_CAP; t++) {
+    step(s, b.inputs(s));
+    try {
+      checkInvariants(s);
+    } catch (e) {
+      return {
+        profile: b.profile,
+        seed,
+        finished: false,
+        victory: false,
+        broken: true,
+        ticks: s.tick,
+        error: String(e),
+      };
+    }
+    if (s.meta[Meta.Phase] === RunPhase.Summary) {
+      return {
+        profile: b.profile,
+        seed,
+        finished: true,
+        victory: s.meta[Meta.Victory] === 1,
+        broken: false,
+        ticks: s.tick,
+      };
+    }
+  }
+  return {
+    profile: b.profile,
+    seed,
+    finished: false,
+    victory: false,
+    broken: false,
+    ticks: s.tick,
+  };
+}
+
+/** Профиль ли это «навык:стратегия», а не легаси-бот или `mixed`. */
+function isProfileName(name: BotName): name is ProfileName {
+  return (PROFILE_NAMES as readonly string[]).includes(name);
+}
+
+/**
+ * Хронометраж полного забега — измеритель ворот 0.4.0 («12–18 минут»,
+ * ROADMAP §0.4.0).
+ *
+ * Мерить обязаны профили «навык:стратегия» (DEVLOOP §3), а не `RunnerBot`:
+ * тот служебный, стреляет в колонну без проверки линии огня и застревает —
+ * он не описывает, как проходит этаж играющий человек, и любая цифра из
+ * него врала бы ограничителю, для которого её посчитали. `mixed` из той же
+ * причины отклоняется: у него профиль свой на каждый забег, а нужен разбор
+ * по каждому в отдельности, а не смесь с непрозрачными весами.
+ */
+function doTiming(a: Args): never {
+  if (a.runs <= 1) {
+    die(
+      '--timing: один забег ничего не измеряет о распределении, укажите ' +
+        '--runs (например 20) — забегов НА ПРОФИЛЬ',
+    );
+  }
+  if (a.bot !== 'idle' && !isProfileName(a.bot)) {
+    die(
+      `--timing: измеряется профилями «навык:стратегия» (DEVLOOP §3), а «${a.bot}» — ` +
+        'не профиль игрока. Укажите --bot вида master:stack или уберите --bot ' +
+        'вовсе, чтобы измерить все 16 профилей.',
+    );
+  }
+  const profiles: readonly BotName[] = a.bot === 'idle' ? PROFILE_NAMES : [a.bot];
+
+  const runs: TimingRun[] = [];
+  for (const profile of profiles) {
+    for (let i = 0; i < a.runs; i++) runs.push(runToSummary(a.seed + i, a.players, profile));
+  }
+
+  const finished = runs.filter((r) => r.finished);
+  const broken = runs.filter((r) => r.broken);
+  const finishedTicks = finished.map((r) => r.ticks).sort((x, y) => x - y);
+
+  const q1 = percentile(finishedTicks, 0.25);
+  const med = percentile(finishedTicks, 0.5);
+  const q3 = percentile(finishedTicks, 0.75);
+  const finishedShare = share(finished.length, runs.length);
+  const wonShare = share(finished.filter((r) => r.victory).length, Math.max(1, finished.length));
+
+  const GATE_MIN_TICKS = 12 * 60 * TICK_HZ;
+  const GATE_MAX_TICKS = 18 * 60 * TICK_HZ;
+  const inGate = finished.length > 0 && med >= GATE_MIN_TICKS && med <= GATE_MAX_TICKS;
+  const gateVerdict =
+    finished.length === 0
+      ? 'НЕ ПРОВЕРЕНО — ни один забег не дошёл до итогов'
+      : inGate
+        ? `ПРОХОДИТ — медиана ${mmss(med)} внутри коридора 12:00–18:00`
+        : `НЕ ПРОХОДИТ — медиана ${mmss(med)} вне коридора 12:00–18:00`;
+
+  // Разбивка по профилю — чтобы неровный медианный результат по всем не
+  // прятал профиль, который проходит забег втрое быстрее или вовсе не
+  // доходит. Печатается только при нескольких профилях: с одним она была бы
+  // повтором общей строки.
+  const perProfile = profiles.map((profile) => {
+    const rs = runs.filter((r) => r.profile === profile);
+    const fin = rs
+      .filter((r) => r.finished)
+      .map((r) => r.ticks)
+      .sort((x, y) => x - y);
+    return {
+      profile,
+      runs: rs.length,
+      finishedShare: share(fin.length, rs.length),
+      medianTicks: percentile(fin, 0.5),
+    };
+  });
+
+  console.log(`Хронометраж полного забега — ворота 0.4.0 (ROADMAP §0.4.0)`);
+  console.log(`Профилей: ${profiles.length}, забегов на профиль: ${a.runs}, всего: ${runs.length}`);
+  console.log('');
+  console.log(`Медиана:        ${mmss(med)}  (${med} тиков)`);
+  console.log(`Квартили:       ${mmss(q1)} … ${mmss(q3)}`);
+  console.log(
+    `Дошли до конца: ${(finishedShare * 100).toFixed(1)}%  (${finished.length} из ${runs.length})`,
+  );
+  console.log(`Победили:       ${(wonShare * 100).toFixed(1)}% от дошедших`);
+  if (broken.length > 0) {
+    console.log(`Сломались:      ${broken.length} — нарушение инварианта, см. поле errors`);
+  }
+  console.log('');
+  console.log(`Ворота «12–18 минут»: ${gateVerdict}`);
+
+  if (profiles.length > 1) {
+    console.log('');
+    console.log('По профилям (медиана среди дошедших):');
+    for (const p of perProfile) {
+      const label = p.finishedShare > 0 ? mmss(p.medianTicks) : '—';
+      console.log(
+        `  ${p.profile.padEnd(14)} дошли ${(p.finishedShare * 100).toFixed(0).padStart(3)}%   медиана ${label}`,
+      );
+    }
+  }
+
+  const out = {
+    ok: inGate,
+    gate: { min: '12:00', max: '18:00', verdict: gateVerdict },
+    profiles: profiles.length,
+    runsPerProfile: a.runs,
+    totalRuns: runs.length,
+    finishedShare,
+    wonShare,
+    brokenCount: broken.length,
+    medianTicks: med,
+    q1Ticks: q1,
+    q3Ticks: q3,
+    medianTime: mmss(med),
+    q1Time: mmss(q1),
+    q3Time: mmss(q3),
+    perProfile,
+    ...(a.out || a.json ? { runs } : {}),
+  };
+  if (a.json || a.out) emit(a, out);
+  process.exit(0);
+}
+
+/**
  * Отдать отчёт: в файл, если попросили, иначе в stdout.
  *
  * Файл пишем сами, а не через `> out.json` в оболочке: перенаправление
@@ -630,6 +860,7 @@ function main(): void {
   if (a.scenario) doScenarios(a, a.scenario);
   if (a.golden) doGolden(a, a.golden);
   if (a.replay) doReplay(a, a.replay);
+  if (a.timing) doTiming(a);
 
   if (a.determinismCheck) {
     const mismatches: { seed: number; a: string; b: string }[] = [];
