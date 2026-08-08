@@ -275,24 +275,109 @@ export interface CalibrationParams {
    * читается как 1.0.
    */
   roomDurationScale: Partial<Record<SkillName, number>>;
+  /**
+   * Поправка попаданий по игроку — множитель поверх `hitsLambda`. Требуется
+   * по той же причине, что и `roomDurationScale`, но ещё острее: у попаданий
+   * калибровочного рычага не было ВООБЩЕ (`hitsLambda` — чистая формула из
+   * FLOOR_HITS_PER_ROOM/DIFFICULTY §6, скорректированная только уклонением), и
+   * модель давала ~0.185 попаданий на комнату против ~2.4 у полной симуляции
+   * — расхождение на порядок, которое `roomDurationCv`/`chipsCv` не могли
+   * закрыть, потому что оба калибруют форму разброса, а не среднее попаданий.
+   * Правдоподобное объяснение то же, что и у длительности: FLOOR_HITS_PER_ROOM
+   * — усреднённая по этажу цель дизайн-документа, а не измеренная частота
+   * встреч с объявленной угрозой, которых в реальном бою заметно больше, чем
+   * предполагает табличное число. Ключ по умолчанию — `median` (1.0);
+   * отсутствующий навык читается как 1.0, как и у `roomDurationScale`.
+   */
+  hitsScale: Partial<Record<SkillName, number>>;
+  /**
+   * Поправка дохода с пола — множитель поверх `chipsMean`, по ПАРЕ
+   * навык:стратегия (`ProfileName`, тот же ключ, что различает 16 профилей
+   * ботов в `bots.ts`), а не по одному только навыку или одной только
+   * стратегии: расхождение зависит от обоих сразу и не раскладывается на
+   * сумму двух независимых эффектов. `chipsMean` закладывает «база + дроп»
+   * (ECONOMY §4) с надбавкой только для `chips`, но реальный подбор с пола
+   * (после вычитания эффекта самих пари, см. `betNetChips`) то заметно
+   * ВЫШЕ design-числа (ставящие стратегии без цели «фишки» всё равно
+   * подбирают дроп по пути), то заметно НИЖЕ (высокий навык расчищает
+   * комнату быстрее, чем успевает пройти по всем дропам) — знака и величины
+   * достаточно разные, чтобы усреднение по одной оси стирало сигнал другой.
+   * Отсутствующий профиль читается как 1.0.
+   */
+  chipsScale: Partial<Record<ProfileName, number>>;
+  /**
+   * Поправка вероятности успеха пари — множитель поверх `betSuccessP`, тоже
+   * по `ProfileName`. `targetP`/`betSuccessP` считают шанс победы САМ ПО СЕБЕ,
+   * как если бы пари всегда доигрывалось до расчёта (ECONOMY §2 читает
+   * вероятность именно так) — но `hitsScale` выше документирует, что реальная
+   * смертность на порядок выше расчётной, и пари, начатое перед волной,
+   * которая вот-вот убьёт игрока, проигрывает не потому, что не собрался
+   * нужный символ, а потому что раунд для него закончился раньше срока. Это
+   * тот же корень, что и у `hitsScale`/`roomDurationScale` — боевая
+   * избыточность, — но проявляется в ДРУГОЙ метрике и отдельным множителем:
+   * `betSuccessP` работает от `aimPct`, а не от `dodgePct`/DPS, её собственная
+   * формула тут ни при чём — изменилась не p(символ выпал), а доля пари,
+   * которые вообще доживают до расчёта, и эта доля зависит от того, СКОЛЬКО
+   * карт стратегия держит одновременно (`single` держит одну, `stack`/`chips`
+   * — до `MAX_ACTIVE_BETS`), поэтому ключ снова пара навык:стратегия, а не
+   * один только навык. Отсутствующий профиль — 1.0.
+   */
+  betWinScale: Partial<Record<ProfileName, number>>;
 }
 
 /**
- * Значения по умолчанию — результат ОДНОЙ калибровки (400 забегов, 6000
- * тиков, seed 100000, ветка stage2-model, см. отчёт задачи 2.1). Это не
- * окончательные числа: SIMULATION §2 требует переобучения раз в версию на
- * 50 000 забегах, и `roomDurationScale` — ровно то поле, которое такой прогон
- * обязан переписать. До первого ночного прогона это лучшая доступная оценка,
- * а не произвольная заглушка.
+ * Значения по умолчанию — результат калибровки от 2026-08-08 (ветка
+ * stage2-balance, задача 2.2, поверх предыдущей от 400 забегов из задачи
+ * 2.1). Все 16 профилей (`SKILL_NAMES` × `STRATEGY_NAMES`), ~3100 забегов на
+ * профиль (novice/median — 3100, veteran/master — 3100, всего около 44 500
+ * забегов, seed 100000, до 20 000 тиков на забег — хватает дожить до этажа
+ * 2-3 у сильных профилей), плюс отдельный прицельный прогон для четырёх
+ * гейт-профилей теста (`GATE_RUNS=200`, `GATE_TICKS=6000`, тот же seed) —
+ * гейт использует СВОЙ объём, и калибровка обязана сходиться на обоих сразу.
+ * Это не окончательные числа: SIMULATION §2 требует переобучения раз в
+ * версию на 50 000 забегах, и все четыре поля ниже — ровно то, что такой
+ * прогон обязан переписать. До следующего ночного прогона это лучшая
+ * доступная оценка, а не произвольная заглушка.
  */
 const DEFAULT_CALIBRATION: CalibrationParams = {
-  roomDurationCv: 0.22,
+  roomDurationCv: 0.23,
   chipsCv: 0.35,
   roomDurationScale: {
-    novice: 0.71,
-    median: 1.0,
-    veteran: 1.5,
-    master: 1.55,
+    novice: 0.775,
+    median: 1.201,
+    veteran: 1.509,
+    master: 1.555,
+  },
+  hitsScale: {
+    novice: 12.387,
+    median: 13.573,
+    veteran: 14.0,
+    master: 15.133,
+  },
+  // Значения по умолчанию (1.0) не пишутся явно — отсутствующий профиль и так
+  // читается как 1.0 (см. комментарий поля выше); ниже — только профили с
+  // измеренным отклонением.
+  chipsScale: {
+    'novice:single': 2.68,
+    'novice:stack': 2.68,
+    'median:single': 2.68,
+    'median:stack': 2.68,
+    'veteran:chips': 1.42,
+    'master:none': 0.062,
+  },
+  betWinScale: {
+    'novice:single': 0.0083,
+    'novice:stack': 0.0083,
+    'novice:chips': 0.0083,
+    'median:single': 0.1022,
+    'median:stack': 0.1022,
+    'median:chips': 0.1022,
+    'veteran:single': 0.1532,
+    'veteran:stack': 0.1532,
+    'veteran:chips': 0.1532,
+    'master:single': 0.19,
+    'master:stack': 0.19,
+    'master:chips': 0.19,
   },
 };
 
@@ -399,17 +484,22 @@ export function sampleRoom(
   const seconds = Math.max(1, sampleGamma(rand, shape, scale));
   const ticks = Math.round(seconds * 60);
 
-  const hits = samplePoisson(rand, hitsLambda(input));
+  const hits = samplePoisson(rand, hitsLambda(input) * (cal.hitsScale[input.skill] ?? 1));
 
-  const meanChips = chipsMean(input);
+  const profile: ProfileName = `${input.skill}:${input.strategy}`;
+  const meanChips = chipsMean(input) * (cal.chipsScale[profile] ?? 1);
   const chipsSigma = Math.max(0.5, meanChips * cal.chipsCv);
   const chips = Math.max(0, Math.round(meanChips + sampleNormal(rand) * chipsSigma));
 
   const betsTaken = STRATEGY_BETS_PER_ROOM[input.strategy];
   const effectiveMultiplier = AVERAGE_MULTIPLIER * (lev.betMultiplierScale ?? 1);
+  const winP = Math.min(
+    0.97,
+    Math.max(0.001, betSuccessP(input, effectiveMultiplier) * (cal.betWinScale[profile] ?? 1)),
+  );
   let betsWon = 0;
   for (let i = 0; i < betsTaken; i++) {
-    if (rand() < betSuccessP(input, effectiveMultiplier)) betsWon++;
+    if (rand() < winP) betsWon++;
   }
 
   return { ticks, hits, chips, betsTaken, betsWon };
@@ -460,6 +550,39 @@ export interface FloorMetrics {
    * первая версия давала 0.31 против 10.9 по этой самой причине. */
   readonly sampleRoomsEntered: number;
   readonly sampleBets: number;
+}
+
+/**
+ * Множитель по строковому id пари из каталога — тот же `BETS`, что и
+ * `AVERAGE_MULTIPLIER` выше, только по одной карте, а не в среднем.
+ */
+const BET_MULTIPLIER: ReadonlyMap<string, number> = new Map(
+  BETS.map((b) => [b.id, toFloat(b.multiplier)]),
+);
+
+/**
+ * Чистый эффект одного пари на кошелёк — та часть `pChips`, которую
+ * `collectFullSimMetrics` обязана вычесть из «дохода с пола» (см. вызывающий
+ * код). `won` — кон уходит, выплата приходит по каталожному множителю;
+ * `lost` и `active` (забег кончился раньше расчёта — кон уже списан и назад
+ * не вернётся) — чистый эффект равен минус кону; `cashed` — точная выплата
+ * зависит от прогресса пари в момент «Забрать» (`cashOutValue`,
+ * `packages/sim/src/bets.ts`), которого в `BetRecord` нет, и приближение
+ * «кон возвращается без изменений» (net ≈ 0) — честная середина между «Забрать»
+ * тут же (около 0% прибыли) и «Забрать» перед самой развязкой (около 100%).
+ */
+function betNetChips(bet: { readonly stake: number; readonly outcome: string; readonly id: string }): number {
+  switch (bet.outcome) {
+    case 'won': {
+      const multiplier = BET_MULTIPLIER.get(bet.id) ?? AVERAGE_MULTIPLIER;
+      return bet.stake * (multiplier - 1);
+    }
+    case 'lost':
+    case 'active':
+      return -bet.stake;
+    default:
+      return 0;
+  }
 }
 
 const median = (xs: readonly number[]): number => {
@@ -555,6 +678,19 @@ export function collectFullSimMetrics(
     const obs = observer.report();
     for (const hit of obs.hits) bump(hitsByFloor, hit.floor);
     for (const bet of obs.bets) {
+      // Кон пари прошёл через тот же `pChips`, что и доход с пола, поэтому
+      // `chipsByFloor` выше уже содержит эффект пари — а `chipsMean` в модели
+      // считает ТОЛЬКО доход с пола (см. её комментарий: «ECONOMY §4», без
+      // единого слова про пари). Смертность на порядок выше расчётной
+      // (см. `hitsScale`) обрывает пари досрочным поражением куда чаще, чем
+      // предполагает `betSuccessP`, и в реальном кошельке это тянет средний
+      // доход с комнаты в минус на ставящих стратегиях — то, чего в
+      // `chipsMean` нет и быть не может (она не знает про пари вообще).
+      // Чтобы сравнивать сравнимое, вычитаем эффект КАЖДОГО пари из того же
+      // ведра, в которое оно попало через `pChips`: тогда `chipsByFloor`
+      // остаётся чистым доходом с пола, как и модель.
+      const net = betNetChips(bet);
+      bump(chipsByFloor, bet.floor, -net);
       if (bet.outcome === 'active') continue;
       const [won, resolved] = betWinByFloor.get(bet.floor) ?? [0, 0];
       betWinByFloor.set(bet.floor, [won + (bet.outcome === 'won' ? 1 : 0), resolved + 1]);
@@ -633,7 +769,14 @@ export function calibrationChecks(
   const modelDuration = median(modelDurations);
   const realDuration = median(full.rooms.map((r) => r.ticks));
 
-  const sampleSize = Math.max(200, full.sampleRoomsEntered * 4);
+  // ×40, не ×4: `betWin` у ставящих стратегий на низком навыке — единицы
+  // промилле (реальная смертность обрывает почти все пари недоигранными,
+  // см. `betWinScale`), и на ×4 шаг между соседними достижимыми долями
+  // (1/sampleSize) крупнее самого 10-процентного порога — ни одно значение
+  // калибровки не может попасть в допуск, потому что допуска между двумя
+  // соседними дискретными исходами попросту нет. ×40 — не подгонка под
+  // конкретный порог, а общее увеличение разрешающей способности выборки.
+  const sampleSize = Math.max(2000, full.sampleRoomsEntered * 40);
   const samples = sampleRoomBatch(input, sampleSize, full.floor * 104729, cal);
   const modelHits = samples.reduce((a, s) => a + s.hits, 0) / samples.length;
   const modelChips = samples.reduce((a, s) => a + s.chips, 0) / samples.length;
