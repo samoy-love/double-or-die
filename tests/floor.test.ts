@@ -16,12 +16,17 @@ import {
   Meta,
   Obligation,
   RunPhase,
+  UpgradeId,
+  buybackPriceOf,
   canPay,
   createState,
   debtOnBet,
   enterHouseCut,
+  grantUpgrade,
+  hasUpgrade,
   houseCut,
   makeFrame,
+  priceOf,
   setSpawning,
   markLegUp,
   settleForcedBet,
@@ -29,12 +34,16 @@ import {
   startRoom,
   step,
   takeDebt,
+  upgradeCount,
+  UPGRADES,
   type SimState,
 } from '@dod/sim';
 
 const idle = [makeFrame()];
 const confirm = [{ ...makeFrame(), buttons: Btn.Confirm }];
 const cancel = [{ ...makeFrame(), buttons: Btn.Cancel }];
+/** Третий выход торга сидит на навигации: списка на экране платы нет. */
+const sell = [{ ...makeFrame(), buttons: Btn.NavRight }];
 
 function fresh(players = 1): SimState {
   const s = createState(1, players);
@@ -284,5 +293,179 @@ describe('торг: принудительное пари', () => {
 
     markLegUp(s);
     expect(s.meta[Meta.LegUp]).toBe(Obligation.Forced);
+  });
+});
+
+/**
+ * Второй выход торга: отдать заведению купленную силу.
+ *
+ * Проверяются правила, а не ценники: базы цен — данные и меняются
+ * балансировщиком, поэтому ожидания считаются той же формулой, что и лавка.
+ * Исключение одно — привязка к ТЕКУЩЕМУ этажу: это решение ECONOMY §10, и
+ * съехать оно обязано только вместе с документом.
+ */
+describe('торг: обратный выкуп апгрейда', () => {
+  const base = (u: UpgradeId): number => UPGRADES[u].base;
+
+  it('цена выкупа — половина цены этажа, на котором торгуются', () => {
+    for (let floor = 1; floor <= FLOORS_PER_RUN; floor++) {
+      const full = priceOf(base(UpgradeId.DamageUp), floor);
+      expect(buybackPriceOf(base(UpgradeId.DamageUp), floor)).toBe(
+        Math.trunc((full * HOUSE.buybackPct) / 100),
+      );
+    }
+  });
+
+  /**
+   * Апгрейд, купленный на первом этаже, на третьем стоит дороже.
+   *
+   * Правило проще (не надо помнить, где что куплено) и щедрее там, где игрок и
+   * беднеет; обратное превращало бы ранние покупки в ловушку (ECONOMY §10).
+   */
+  it('считается по текущему этажу, а не по этажу покупки', () => {
+    const s = fresh();
+    grantUpgrade(s, 0, UpgradeId.DamageUp);
+    expect(buybackPriceOf(base(UpgradeId.DamageUp), 3)).toBeGreaterThan(
+      buybackPriceOf(base(UpgradeId.DamageUp), 1),
+    );
+
+    s.meta[Meta.Floor] = 3;
+    const gain = buybackPriceOf(base(UpgradeId.DamageUp), 3);
+    s.pChips[0] = houseCut(3, 1) - gain;
+    enterHouseCut(s);
+
+    step(s, sell);
+    expect(s.meta[Meta.PaidToAce]).toBe(houseCut(3, 1));
+    expect(s.pChips[0]).toBe(0);
+  });
+
+  it('продажа закрывает недостачу целиком и платит сама', () => {
+    // Торг — размен долга на что-то другое, а не рассрочка: апгрейд, отданный
+    // без расчёта, был бы отдан зря.
+    const s = fresh();
+    grantUpgrade(s, 0, UpgradeId.DamageUp);
+    s.pChips[0] = houseCut(1, 1) - buybackPriceOf(base(UpgradeId.DamageUp), 1);
+    enterHouseCut(s);
+
+    step(s, sell);
+    expect(s.meta[Meta.Phase]).not.toBe(RunPhase.HouseCut);
+    expect(s.meta[Meta.Debt]).toBe(0);
+    expect(s.meta[Meta.Curse]).toBe(Curse.None);
+    expect(s.meta[Meta.LegUp]).toBe(Obligation.None);
+  });
+
+  it('слот освобождается — проданное больше не у игрока', () => {
+    const s = fresh();
+    grantUpgrade(s, 0, UpgradeId.DamageUp);
+    s.pChips[0] = houseCut(1, 1) - buybackPriceOf(base(UpgradeId.DamageUp), 1);
+    enterHouseCut(s);
+
+    step(s, sell);
+    expect(hasUpgrade(s, 0, UpgradeId.DamageUp)).toBe(false);
+    expect(upgradeCount(s, 0)).toBe(0);
+  });
+
+  it('выручки не хватило — выбор остаётся, а экран открыт', () => {
+    const s = fresh();
+    grantUpgrade(s, 0, UpgradeId.SpeedUp);
+    s.pChips[0] = 0;
+    enterHouseCut(s);
+
+    step(s, sell);
+    expect(s.meta[Meta.Phase]).toBe(RunPhase.HouseCut);
+    expect(s.pChips[0]).toBe(buybackPriceOf(base(UpgradeId.SpeedUp), 1));
+    expect(s.meta[Meta.Debt]).toBe(0);
+    expect(s.meta[Meta.Curse]).toBe(Curse.None);
+
+    // Остальные два выхода никуда не делись.
+    step(s, cancel);
+    expect(s.meta[Meta.Curse]).not.toBe(Curse.None);
+  });
+
+  /**
+   * Продавать нечего — нажатие не считается решением.
+   *
+   * Предложение продать несуществующее — это обещание выхода, которого нет:
+   * закрыв на нём экран, Туз забрал бы решение у того, кому и так нечем
+   * платить.
+   */
+  it('продавать нечего — не происходит ничего', () => {
+    const s = fresh();
+    s.pChips[0] = 30;
+    enterHouseCut(s);
+
+    step(s, sell);
+    expect(s.meta[Meta.Phase]).toBe(RunPhase.HouseCut);
+    expect(s.pChips[0]).toBe(30);
+    expect(s.meta[Meta.Debt]).toBe(0);
+    expect(s.meta[Meta.Curse]).toBe(Curse.None);
+    expect(s.meta[Meta.LegUp]).toBe(Obligation.None);
+  });
+
+  /**
+   * Выбирает правило, а не игрок: списка и фокуса на экране платы нет.
+   *
+   * Поэтому выбирать оно обязано то же, что выбрал бы игрок — самый дешёвый из
+   * тех, кого хватает на расчёт.
+   */
+  it('уходит самый дешёвый из достаточных', () => {
+    const s = fresh();
+    grantUpgrade(s, 0, UpgradeId.SpeedUp);
+    grantUpgrade(s, 0, UpgradeId.Magnet);
+    grantUpgrade(s, 0, UpgradeId.DamageUp);
+    s.pChips[0] = houseCut(1, 1) - buybackPriceOf(base(UpgradeId.Magnet), 1);
+    enterHouseCut(s);
+
+    step(s, sell);
+    expect(hasUpgrade(s, 0, UpgradeId.Magnet)).toBe(false);
+    expect(hasUpgrade(s, 0, UpgradeId.SpeedUp)).toBe(true);
+    expect(hasUpgrade(s, 0, UpgradeId.DamageUp)).toBe(true);
+  });
+
+  it('не хватает ни одного — уходит самый дорогой', () => {
+    // Недостача обязана сократиться сильнее всего: иначе игрок продаёт дважды
+    // и всё равно остаётся должен.
+    const s = fresh();
+    grantUpgrade(s, 0, UpgradeId.SpeedUp);
+    grantUpgrade(s, 0, UpgradeId.DamageUp);
+    s.pChips[0] = 0;
+    enterHouseCut(s);
+
+    step(s, sell);
+    expect(hasUpgrade(s, 0, UpgradeId.DamageUp)).toBe(false);
+    expect(hasUpgrade(s, 0, UpgradeId.SpeedUp)).toBe(true);
+  });
+
+  /**
+   * Сердце уходит вместе с апгрейдом.
+   *
+   * Оставленное, оно превратило бы торг в станок: купить сердце, продать его
+   * обратно и оставить себе здоровье стоило бы половины ценника и повторялось
+   * бы каждый этаж.
+   */
+  it('проданное сердце возвращается заведению', () => {
+    const s = fresh();
+    const before = s.pHearts[0];
+    grantUpgrade(s, 0, UpgradeId.ExtraHeart);
+    expect(s.pHearts[0]).toBe(before + 1);
+
+    s.pChips[0] = 0;
+    enterHouseCut(s);
+    step(s, sell);
+    expect(s.pHearts[0]).toBe(before);
+  });
+
+  it('последнее сердце не забирается: экран платы не убивает', () => {
+    // Смерть от нажатия кнопки на неборевом экране — это смерть в интерфейсе,
+    // а не в игре, и живой игрок без здоровья ловится инвариантом.
+    const s = fresh();
+    grantUpgrade(s, 0, UpgradeId.ExtraHeart);
+    s.pHearts[0] = 1;
+    s.pChips[0] = 0;
+    enterHouseCut(s);
+
+    step(s, sell);
+    expect(s.pHearts[0]).toBe(1);
+    expect(hasUpgrade(s, 0, UpgradeId.ExtraHeart)).toBe(false);
   });
 });

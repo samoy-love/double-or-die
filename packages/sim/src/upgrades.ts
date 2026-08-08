@@ -1,5 +1,5 @@
 /**
- * Лавка и апгрейды: что продаётся, почём и что от этого меняется в бою.
+ * Лавка, Дар и апгрейды: что продаётся, почём и что от этого меняется в бою.
  *
  * Дверь «Лавка» обещает **бой, а после него магазин** (GDD §5), поэтому лавка
  * — это фаза `Reward`, а не отдельный экран между комнатами: игрок платит за
@@ -16,16 +16,22 @@
  *   — **кошелёк не уходит в минус.** Туз в кредит не принимает (ECONOMY §10),
  *     и лавка здесь не исключение: не хватило — не продано.
  *
+ * Дверь «Дар» обещает то же самое бесплатно (GDD §5) и потому живёт здесь же,
+ * тем же прилавком и той же фазой: отличие ровно одно — цена не берётся. Всё
+ * остальное — три предложения, отказ от повторов, потолок слотов — Дару нужно
+ * ровно так же, как лавке, и разведённое по двум экранам разъехалось бы на
+ * первой же правке.
+ *
  * Сами товары, их цены и величины эффектов сюда не вписаны: они данные
  * (`content/upgrades.json`), и правит их балансировщик.
  */
 
-import { CHIP, PISTOL, PLAYER, UPGRADE } from './config';
+import { CHIP, HOUSE, PISTOL, PLAYER, UPGRADE } from './config';
 import { type Fx, fromInt } from './fixed';
 import { Btn, type InputFrame } from './input';
 import { Stream, nextInt } from './rng';
 import { freezeArena } from './run';
-import { MAX_UPGRADE_SLOTS, Meta, RunPhase, SHOP_SLOTS, type SimState } from './state';
+import { DoorType, MAX_UPGRADE_SLOTS, Meta, RunPhase, SHOP_SLOTS, type SimState } from './state';
 import { UPGRADES, UPGRADE_COUNT, UpgradeEffect, type UpgradeSpec } from './upgrades.generated';
 
 export {
@@ -54,6 +60,17 @@ export function priceOf(base: number, floor: number): number {
   }
   return Math.trunc(num / den);
 }
+
+/**
+ * Сколько заведение даёт за апгрейд: половина цены ТЕКУЩЕГО этажа (ECONOMY §10).
+ *
+ * Цена берётся от того этажа, на котором торгуются, а не от того, где купили:
+ * так правило проще (не надо помнить, где что куплено) и щедрее там, где игрок
+ * и беднеет. Обратное — считать по этажу покупки — превращало бы ранние
+ * покупки в ловушку.
+ */
+export const buybackPriceOf = (base: number, floor: number): number =>
+  Math.trunc((priceOf(base, floor) * HOUSE.buybackPct) / 100);
 
 // ---------------------------------------------------------------------------
 // Купленное
@@ -101,6 +118,74 @@ export function grantUpgrade(s: SimState, player: number, upgrade: number): bool
     return true;
   }
   return false;
+}
+
+/**
+ * Отдать апгрейд заведению: слот пустеет, эффект уходит вместе с ним.
+ *
+ * Сердце снимается ЗДЕСЬ по той же причине, по какой начисляется в
+ * `grantUpgrade`: оставленное, оно превратило бы торг в станок — купить сердце,
+ * продать его обратно и оставить себе здоровье стоило бы половины ценника и
+ * повторялось бы каждый этаж.
+ *
+ * Последнее сердце не забирается: экран платы не боевой, и смерть от нажатия
+ * кнопки на нём была бы смертью в интерфейсе, а не в игре. Ноль здесь означал
+ * бы ещё и живого игрока без здоровья — состояние, которое ловит инвариант.
+ */
+function revokeSlot(s: SimState, player: number, n: number): void {
+  const held = s.pUpgrades[slot(player, n)];
+  if (held === 0) return;
+  s.pUpgrades[slot(player, n)] = 0;
+
+  const spec = UPGRADES[held - 1];
+  if (spec.effect === UpgradeEffect.Heart) {
+    const left = s.pHearts[player] - spec.value;
+    s.pHearts[player] = left < 1 ? 1 : left;
+  }
+}
+
+/**
+ * Что дороже отдать: тот, кто ближе закрывает недостачу.
+ *
+ * Выбирать игроку нечем — на экране платы нет ни списка, ни фокуса (см.
+ * `stepHouseCut`), — поэтому выбирает правило, и оно обязано выбирать то же,
+ * что выбрал бы игрок: самый дешёвый из тех, кого хватает, а если не хватает
+ * никого — самый дорогой, чтобы недостача сократилась сильнее всего.
+ */
+function preferable(candidate: number, current: number, shortfall: number): boolean {
+  const candidateEnough = candidate >= shortfall;
+  const currentEnough = current >= shortfall;
+  if (candidateEnough !== currentEnough) return candidateEnough;
+  return candidateEnough ? candidate < current : candidate > current;
+}
+
+/**
+ * Продать апгрейд заведению. Возвращает выручку; ноль — продавать нечего.
+ *
+ * Третий выход торга (ECONOMY §10). Ноль — не ошибка вызывающего, а законный
+ * ответ: у игрока может не быть ни одного апгрейда, и торг обязан это пережить.
+ */
+export function sellUpgrade(s: SimState, player: number, shortfall: number): number {
+  const floor = s.meta[Meta.Floor];
+  let pick = -1;
+  let price = 0;
+
+  for (let i = 0; i < MAX_UPGRADE_SLOTS; i++) {
+    const held = s.pUpgrades[slot(player, i)];
+    if (held === 0) continue;
+    const offer = buybackPriceOf(UPGRADES[held - 1].base, floor);
+    // Равные ценники разрешаются младшим слотом: две базы по 40 в каталоге
+    // есть, и без этого порядок зависел бы от порядка покупок.
+    if (pick < 0 || preferable(offer, price, shortfall)) {
+      pick = i;
+      price = offer;
+    }
+  }
+
+  if (pick < 0) return 0;
+  revokeSlot(s, player, pick);
+  s.pChips[player] += price;
+  return price;
 }
 
 /**
@@ -194,7 +279,7 @@ export function dropChancePctOf(s: SimState): number {
 }
 
 // ---------------------------------------------------------------------------
-// Сама лавка
+// Прилавок: лавка и Дар
 // ---------------------------------------------------------------------------
 
 /**
@@ -222,7 +307,7 @@ function ownedByAll(s: SimState, upgrade: number): boolean {
 }
 
 /**
- * Открыть лавку: разложить три товара из шести и назначить цены.
+ * Разложить прилавок: три предложения из шести, с ценниками или без.
  *
  * Ассортимент берётся из потока `shop` и ниоткуда больше (TECH §2.3): правка
  * волн, раскладки карт или дропа не имеет права двигать то, что лежит на
@@ -231,7 +316,7 @@ function ownedByAll(s: SimState, upgrade: number): boolean {
  * Выбор без возврата: вытянутый товар заменяется последним из оставшихся, и
  * два одинаковых ценника на одном прилавке невозможны.
  */
-export function openShop(s: SimState): void {
+function layOut(s: SimState, priced: boolean): void {
   // Комната кончена — гасим летящее (см. freezeArena в run.ts).
   freezeArena(s);
   s.meta[Meta.Phase] = RunPhase.Reward;
@@ -253,9 +338,52 @@ export function openShop(s: SimState): void {
     const upgrade = pool[pick];
     pool[pick] = pool[--free];
     s.shopItem[i] = upgrade + 1;
-    s.shopPrice[i] = priceOf(UPGRADES[upgrade].base, floor);
+    if (priced) s.shopPrice[i] = priceOf(UPGRADES[upgrade].base, floor);
   }
 }
+
+/** Открыть лавку: три товара из шести по ценам текущего этажа. */
+export function openShop(s: SimState): void {
+  layOut(s, true);
+}
+
+/**
+ * Открыть Дар: те же три предложения, но даром. Возвращает false, если экрана
+ * не будет.
+ *
+ * **Ценника нет вовсе, а не «ноль фишек».** Показывать цену там, где её не
+ * берут, значит показывать столбец, который между тремя предложениями не
+ * различает ничего, — а игрок читает его первым, потому что на соседнем экране
+ * читает именно его. Пустой `shopPrice` при занятом `shopItem` и есть тот
+ * признак, по которому экран рисует «бесплатно»: отдельный флаг стоил бы слота
+ * в хеше ради того, что и так видно.
+ *
+ * **Давать нечего — экран не открывается.** Все шесть апгрейдов у стола —
+ * случай редкий, но не невозможный (две лавки на этаж плюс Дары), и прилавок,
+ * открытый пустым, обещал бы выбор из трёх и не дал бы ни одного. Комната
+ * тогда остаётся обычным боем, и забег идёт к следующей двери.
+ */
+export function openGift(s: SimState): boolean {
+  let any = false;
+  for (let u = 0; u < UPGRADE_COUNT && !any; u++) any = !ownedByAll(s, u);
+  if (!any) return false;
+
+  /*
+   * Тип комнаты — единственное, чем Дар отличается от лавки в состоянии.
+   *
+   * Своего слота у экрана нет и не будет: свободных в `Meta` не осталось, а
+   * расширение раскладки валит все двадцать эталонов. Проставляется он здесь,
+   * рядом с открытием, а не только в конце боя, чтобы признак и его смысл
+   * нельзя было развести по разным файлам.
+   */
+  s.meta[Meta.RoomType] = DoorType.Gift;
+  layOut(s, false);
+  return true;
+}
+
+/** Открыт ли Дар, а не лавка: за Дар не платят и берут с него ровно одно. */
+export const giftOpen = (s: SimState): boolean =>
+  s.meta[Meta.Phase] === RunPhase.Reward && s.meta[Meta.RoomType] === DoorType.Gift;
 
 /**
  * Убрать прилавок.
@@ -264,13 +392,19 @@ export function openShop(s: SimState): void {
  * читает начало комнаты, решая, какую дверь выбрали. Фокус, оставшийся от
  * лавки, назначил бы следующей комнате тип двери, которую никто не выбирал.
  */
-export function closeShop(s: SimState): void {
+export function closeReward(s: SimState): void {
   s.shopItem.fill(0);
   s.shopPrice.fill(0);
   s.meta[Meta.DoorPick] = -1;
 }
 
-/** Можно ли купить то, что лежит в слоте: товар, деньги, слот и без повтора. */
+/**
+ * Можно ли взять то, что лежит в слоте: товар, деньги, слот и без повтора.
+ *
+ * Дар проверяется тем же кодом, и это не экономия на строчках: проверка на
+ * кошелёк при нулевом ценнике проходит сама, а вот отказ от второго экземпляра
+ * и потолок двенадцати слотов нужны подарку ровно так же, как покупке.
+ */
 export function canBuy(s: SimState, player: number, index: number): boolean {
   if (index < 0 || index >= SHOP_SLOTS) return false;
   const item = s.shopItem[index];
@@ -301,14 +435,26 @@ export function buyUpgrade(s: SimState, player: number, index: number): boolean 
 }
 
 /**
- * Экран лавки: фокус крестовиной, покупка подтверждением, выход отказом.
+ * Экран награды: фокус крестовиной, взятие подтверждением, выход отказом.
  *
- * Ждёт игрока, а не часов, по той же причине, что дверь и экран платы: лавка,
- * закрывающаяся сама, превращает выбор в реакцию. Возвращает true в тот тик,
- * когда из неё уходят.
+ * Ждёт игрока, а не часов, по той же причине, что дверь и экран платы: экран,
+ * закрывающийся сам, превращает выбор в реакцию. Возвращает true в тот тик,
+ * когда с него уходят.
+ *
+ * ДАР ЗАКРЫВАЕТСЯ ВЗЯТЫМ АПГРЕЙДОМ, лавка — нет. Дверь обещала «бесплатный
+ * апгрейд на выбор из 3» (GDD §5), то есть один из трёх, а не три из трёх:
+ * прилавок с нулевыми ценниками, из которого можно не уходить, выдал бы
+ * половину каталога разом — и Лавка перестала бы быть стоком фишек, ради
+ * которого она стоит на пути к доле заведения (ECONOMY §5). В лавке той же
+ * роли играет цена, и уходить оттуда после первой покупки не за что.
+ *
+ * Дар при этом один на стол, а не на игрока: экран закрывает первый взявший —
+ * то же правило, что у двери и у «Удвоим?», где Туз обращается к столу, а
+ * решает первый согласившийся (GDD §14).
  */
-export function stepShop(s: SimState, inputs: readonly InputFrame[]): boolean {
+export function stepReward(s: SimState, inputs: readonly InputFrame[]): boolean {
   if (s.meta[Meta.Phase] !== RunPhase.Reward) return false;
+  const gift = giftOpen(s);
 
   for (let i = 0; i < s.playerCount; i++) {
     const pressed = inputs[i].buttons & ~s.pPrevButtons[i];
@@ -316,13 +462,19 @@ export function stepShop(s: SimState, inputs: readonly InputFrame[]): boolean {
 
     if ((pressed & Btn.NavLeft) !== 0) moveFocus(s, -1);
     if ((pressed & Btn.NavRight) !== 0) moveFocus(s, 1);
-    if ((pressed & Btn.Confirm) !== 0) buyUpgrade(s, i, s.meta[Meta.DoorPick]);
+    if ((pressed & Btn.Confirm) !== 0 && buyUpgrade(s, i, s.meta[Meta.DoorPick]) && gift) {
+      return true;
+    }
     /*
      * Отказ — это выход, и он законный.
      *
      * Не купить — нормальное решение: фишки конвертируются в ключи в конце
      * забега (ECONOMY §12), и «унести» конкурирует с «потратить» на равных.
      * Экран, из которого нельзя уйти без покупки, отнял бы ровно это решение.
+     *
+     * С Дара уходить не за чем, но выход обязан быть и там: слоты когда-нибудь
+     * упрутся в потолок двенадцати, и экран, требующий взять то, что взять
+     * нельзя, встал бы намертво.
      */
     if ((pressed & Btn.Cancel) !== 0) return true;
   }

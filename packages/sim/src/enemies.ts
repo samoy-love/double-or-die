@@ -47,7 +47,7 @@ import {
 import { flowTo, flowX, flowY, updateNav } from './nav';
 import { offerDoors } from './doors';
 import { enterHouseCut, expireCurse } from './floor';
-import { closeShop, openShop } from './upgrades';
+import { closeReward, openGift, openShop } from './upgrades';
 import { endRun } from './run';
 import { damagePlayer, explode, fireEnemy, killEnemy, statsOf } from './combat';
 import { add, type Fx, fromInt, mul, sub } from './fixed';
@@ -528,7 +528,7 @@ function advanceRoom(s: SimState): void {
    * Дверь «Лавка» обещала бой И магазин после него (GDD §5) — вот он.
    *
    * Второй раз сюда с тем же типом комнаты не попасть: из лавки выходят через
-   * `leaveShop`, а он идёт в `nextRoom` мимо этой развилки, и следующий вход
+   * `leaveReward`, а он идёт в `nextRoom` мимо этой развилки, и следующий вход
    * случится уже после `startRoom`, который тип комнаты переназначит.
    */
   if (s.meta[Meta.RoomType] === DoorType.Shop) {
@@ -536,18 +536,32 @@ function advanceRoom(s: SimState): void {
     return;
   }
 
+  /*
+   * Дверь «Дар» обещала бой И бесплатный апгрейд на выбор из трёх (GDD §5).
+   *
+   * Тот же прилавок и та же фаза, что у лавки: за Даром не стоит ни отдельного
+   * экрана, ни отдельного состояния, потому что отличие у него ровно одно —
+   * цена не берётся.
+   *
+   * Открыться Дар может отказаться: если все шесть апгрейдов уже у стола,
+   * давать нечего, и прилавок, открытый пустым, обещал бы выбор из трёх и не
+   * дал бы ни одного. Тогда комната кончается как обычный бой — забег идёт к
+   * следующей двери, ничего не потеряв.
+   */
+  if (s.meta[Meta.RoomType] === DoorType.Gift && openGift(s)) return;
+
   nextRoom(s);
 }
 
 /**
- * Лавка закрылась — забег идёт дальше ровно туда, куда шёл бы без неё.
+ * Экран награды закрылся — забег идёт дальше ровно туда, куда шёл бы без него.
  *
  * Отдельно от `advanceRoom` по той же причине, что и `leaveFloor`: экран ждёт
  * игрока, и переход случается в тот тик, когда он ушёл, а не когда кончилась
  * комната.
  */
-export function leaveShop(s: SimState): void {
-  closeShop(s);
+export function leaveReward(s: SimState): void {
+  closeReward(s);
   s.meta[Meta.Phase] = RunPhase.Fight;
   nextRoom(s);
 }

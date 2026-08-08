@@ -58,8 +58,10 @@ import {
   FLOORS_PER_RUN,
   grantUpgrade,
   hasUpgrade,
+  openGift,
   openShop,
   upgradeCount,
+  enterHouseCut,
   bossRoomBudget,
   bossStunned,
   clearArena,
@@ -257,7 +259,7 @@ export interface AceExpectation {
 }
 
 /**
- * Лавка: что лежит на прилавке, почём и что из этого куплено.
+ * Прилавок лавки или Дара: что лежит, почём и что из этого взято.
  *
  * Цена проверяется числом, а не формулой: формула живёт в одном месте
  * (`priceOf`), и сценарий, повторяющий её, зеленел бы вместе с ошибкой в ней.
@@ -353,6 +355,14 @@ export type Step =
    */
   | { shop: true }
   /**
+   * Открыть Дар: то же, что делает конец боя за дверью «Дар».
+   *
+   * Отдельным шагом от лавки, а не флагом при ней: у прилавков разные правила
+   * — с одного берут за деньги и сколько угодно раз, с другого даром и ровно
+   * один, — и шаг, различающий их параметром, читался бы как одно и то же.
+   */
+  | { gift: true }
+  /**
    * Выдать апгрейд напрямую, не беря денег.
    *
    * Эффект в бою и покупка — разные предметы: проверять первый через второй
@@ -361,6 +371,14 @@ export type Step =
   | { upgrade: { id: string; player?: number } }
   /** Перевести забег на названный этаж: цены и плата считаются от него. */
   | { floor: number }
+  /**
+   * Открыть экран платы: то же, что делает смерть босса в конце этажа.
+   *
+   * Не обход хода забега, а другой предмет проверки: то, что этаж кончается
+   * платой, проверяется своим тестом, а торг — этим шагом, без похода через
+   * восемь комнат и босса до него.
+   */
+  | { houseCut: true }
   /**
    * Туз выкладывает свою карту.
    *
@@ -576,8 +594,10 @@ const STEP_SCHEMA: Record<StepKey, Node> = {
   cashOut: obj({ id: BET_ID, player: PLAYER_IDX() }, ['id']),
   deal: TRUE,
   shop: TRUE,
+  gift: TRUE,
   upgrade: obj({ id: UPGRADE_ID, player: PLAYER_IDX() }, ['id']),
   floor: int(1, FLOORS_PER_RUN),
+  houseCut: TRUE,
   aceBet: obj({ id: BET_ID }, ['id']),
   settle: TRUE,
   clear: TRUE,
@@ -1216,6 +1236,10 @@ export function runScenario(sc: Scenario): ScenarioResult {
         dealCards(s);
       } else if ('shop' in st) {
         openShop(s);
+      } else if ('gift' in st) {
+        // Отказ открыться — не молчаливая пустота, а ошибка сценария: шаги
+        // после него проверяли бы прилавок, которого нет, и зеленели бы зря.
+        if (!openGift(s)) throw new Error('Дар не открылся: все шесть апгрейдов уже у стола');
       } else if ('upgrade' in st) {
         const p = st.upgrade.player ?? 0;
         if (!grantUpgrade(s, p, upgradeIndex(st.upgrade.id))) {
@@ -1223,6 +1247,8 @@ export function runScenario(sc: Scenario): ScenarioResult {
         }
       } else if ('floor' in st) {
         s.meta[Meta.Floor] = st.floor;
+      } else if ('houseCut' in st) {
+        enterHouseCut(s);
       } else if ('aceBet' in st) {
         // Срок тот же, что у обычной карты: в игре предложение живёт до первой
         // волны, а сценарий волн по умолчанию не пускает — и часы паузы,

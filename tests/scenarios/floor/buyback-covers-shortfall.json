@@ -1,0 +1,13 @@
+{
+  "name": "Проданный апгрейд закрывает недостачу целиком и уходит из слотов",
+  "seed": 4,
+  "players": 1,
+  "steps": [
+    { "upgrade": { "id": "damage_up" } },
+    { "chips": { "amount": 50 } },
+    { "houseCut": true },
+    { "input": { "buttons": ["navright"] } },
+    { "tick": 1 },
+    { "expect": { "shop": { "owned": { "min": 0, "max": 0 } }, "chips": { "min": 0, "max": 0 } } }
+  ]
+}
