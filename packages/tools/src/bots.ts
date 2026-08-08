@@ -96,12 +96,18 @@ interface Skill {
   readonly dodgePct: number;
 }
 
-const SKILLS: Record<SkillName, Skill> = {
+/**
+ * Экспортирована: абстрактная модель (`abstract.ts`) выводит урон и попадания
+ * по навыку из тех же чисел, что и бот, — единственный источник, а не две
+ * копии таблицы SIMULATION §3, которые могут разъехаться порознь.
+ */
+export const SKILL_TABLE: Record<SkillName, Skill> = {
   novice: { aimPct: 60, firePct: 35, dodgePct: 30 },
   median: { aimPct: 75, firePct: 50, dodgePct: 50 },
   veteran: { aimPct: 85, firePct: 60, dodgePct: 70 },
   master: { aimPct: 93, firePct: 70, dodgePct: 85 },
 };
+const SKILLS = SKILL_TABLE;
 
 /**
  * Ось стратегии ставок. Соответствие профилям игрока из ECONOMY §6:
