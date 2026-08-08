@@ -51,13 +51,14 @@ jobs:
     secrets: inherit
 
   game:
-    needs: dev
-    # Обе цели используют один переиспользуемый workflow с общей очередью на
-    # репозиторий: запущенные параллельно, они вытесняют друг друга.
-    if: >-
-      !cancelled()
-      && (needs.dev.result == 'success' || needs.dev.result == 'skipped')
-      && (inputs.target == '' || inputs.target == 'all' || inputs.target == 'game')
+    # Раньше game ждал dev (needs: dev), хотя гейты у обеих целей одинаковые,
+    # а деплоятся они на разные хосты (dev.die.samoy.love и die.samoy.love) —
+    # общих ресурсов и порядка миграций между ними нет. Последовательность
+    # добавляла ~1 минуту ожидания на каждый деплой без всякой причины.
+    # Общая очередь на репозиторий и так не даёт им столкнуться: она уже
+    # встроена в static-site.yml и ключ включает цель (target), так что dev и
+    # game — это разные группы concurrency и катятся параллельно.
+    if: inputs.target == '' || inputs.target == 'all' || inputs.target == 'game'
     uses: tr0llex/deploy-kit/.github/workflows/static-site.yml@main
     with:
       config: .deploy-kit/game.env

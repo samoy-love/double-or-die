@@ -31,6 +31,13 @@ env:
   NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: '10000'
   NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: '60000'
 
+# Только pull_request (см. блок on:), поэтому на main это не бежит никогда —
+# отменять свежим прогоном старый безопасно всегда, без условия по ветке
+# (как в snakes и tr0llex).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 # Сторонние actions запиннены по полному коммит-SHA, тег — комментарием рядом
 # (SECURITY §7).
 #
@@ -58,6 +65,7 @@ jobs:
     # `origin/..HEAD` уронил бы работу на пустом месте.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -82,6 +90,7 @@ jobs:
   quality:
     name: Линт, типы, границы
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -152,6 +161,7 @@ jobs:
     # Только на PR: у ручного запуска нет базовой ветки, и сравнивать не с чем.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -172,6 +182,7 @@ jobs:
   supply-chain:
     name: 'Зависимости: аудит и лицензии'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -206,6 +217,9 @@ jobs:
   determinism:
     name: Детерминизм (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Windows заметно медленнее (~1 мин) mac/ubuntu (~37-38с) на одном и том же
+    # наборе шагов; запас общий для всей матрицы, а не подобран по ОС.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -257,6 +271,7 @@ jobs:
     name: Платформы согласны
     needs: determinism
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -315,6 +330,7 @@ jobs:
   hooks:
     name: Хуки разбираются
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -347,6 +363,7 @@ jobs:
   workflows:
     name: Сами workflow разбираются
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -368,6 +385,8 @@ jobs:
   e2e:
     name: Сквозные тесты и бенч рендера
     runs-on: ubuntu-latest
+    # Реально ~1m21s, запас на холодный кэш Playwright и общую загрузку раннера.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -418,6 +437,7 @@ jobs:
   build:
     name: Сборка
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
