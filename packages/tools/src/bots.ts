@@ -42,6 +42,7 @@ import {
   sin,
   sub,
   withAppetite,
+  EntityFlag,
   MAX_ACTIVE_BETS,
   MAX_CARDS,
   Meta,
@@ -52,8 +53,12 @@ import {
   SHOP_SLOTS,
   canBuy,
   toFloat,
+  wheelX,
+  wheelY,
   type RngState,
 } from '@dod/sim';
+
+import { findSafePoint } from './safety';
 
 /**
  * Тир аппетита «По-крупному».
@@ -133,8 +138,14 @@ const STRATEGIES: Record<StrategyName, Strategy> = {
 /**
  * Прежние имена, названные в DEVLOOP §3. Остаются как есть: на них записан
  * корпус golden-эталонов и ссылаются проверки версий 0.1.0–0.3.0.
+ *
+ * `runner` — не профиль игрока и в замерах баланса не участвует, см. шапку
+ * `RunnerBot`. Он стоит в этом списке, а не среди пар «навык:стратегия»,
+ * именно потому, что осью навыка не описывается: его навык — не «мастер», а
+ * «лучше любого человека», и приписать ему долю попаданий из ECONOMY §6
+ * значило бы завести пятый профиль игрока, которого не существует.
  */
-export const LEGACY_BOT_NAMES = ['idle', 'random', 'greedy', 'cautious'] as const;
+export const LEGACY_BOT_NAMES = ['idle', 'random', 'greedy', 'cautious', 'runner'] as const;
 export type LegacyBotName = (typeof LEGACY_BOT_NAMES)[number];
 
 /** Профиль — пара «навык:стратегия», например `master:stack`. */
@@ -482,6 +493,15 @@ class CautiousBot implements Bot {
 // Профильный бот: навык × стратегия
 // ---------------------------------------------------------------------------
 
+/** Сколько пари сейчас держит игрок. */
+function activeBets(s: SimState, player: number): number {
+  let count = 0;
+  for (let n = 0; n < MAX_ACTIVE_BETS; n++) {
+    if (s.aState[player * MAX_ACTIVE_BETS + n] === BetState.Active) count++;
+  }
+  return count;
+}
+
 /**
  * Как часто бот принимает решения: раз в 10 тиков, то есть 6 Гц.
  *
@@ -555,15 +575,6 @@ class ProfileBot implements Bot {
     return nextInt(this.rng, Stream.Waves, 100) < pct;
   }
 
-  /** Сколько пари сейчас держит игрок. */
-  private static activeBets(s: SimState, player: number): number {
-    let count = 0;
-    for (let n = 0; n < MAX_ACTIVE_BETS; n++) {
-      if (s.aState[player * MAX_ACTIVE_BETS + n] === BetState.Active) count++;
-    }
-    return count;
-  }
-
   private decide(player: number): void {
     this.firing[player] = this.roll(this.skill.firePct) ? 1 : 0;
     this.evading[player] = this.roll(this.skill.dodgePct) ? 1 : 0;
@@ -583,7 +594,7 @@ class ProfileBot implements Bot {
       const f = this.frames[i];
       const px = toFloat(s.pX[i]);
       const py = toFloat(s.pY[i]);
-      const held = ProfileBot.activeBets(s, i);
+      const held = activeBets(s, i);
 
       // Аппетит объявляется каждый тик: защёлка ядра держит его до следующего
       // явного нажатия, но переживёт ли она смену комнаты — не дело бота.
@@ -702,6 +713,264 @@ class ProfileBot implements Bot {
 }
 
 // ---------------------------------------------------------------------------
+// Проходчик: бот, доигрывающий этаж до конца
+// ---------------------------------------------------------------------------
+
+/**
+ * На какой дистанции проходчик держит ближайшего врага.
+ *
+ * Пуля живёт 1.2 с при скорости 900, то есть достаёт на 1080 единиц — больше
+ * половины арены. Значит подходить не нужно вовсе, и вся дистанция выбирается
+ * из выживания: 420 — это два тарана Клина (490 за рывок) минус то, что он
+ * успевает пройти шагом, и с такого расстояния объявленный таран уводится
+ * шагом вбок, без рывка.
+ */
+const KEEP_RANGE = 420;
+
+/** Ближе этого проходчик отступает, даже если никто ничего не объявил. */
+const TOO_CLOSE = 260;
+
+/**
+ * Дистанция уверенного огня: до неё проходчик идёт сам, если волна не
+ * добита, а не ждёт, пока враг подойдёт.
+ *
+ * `KEEP_RANGE` держит дистанцию от того, кто идёт на игрока сам — таран,
+ * снаряд. Против пассивного или далёкого врага (тот же Кирпич, отходящий,
+ * чтобы стрелять издали) держать 420 бессмысленно: тот, кто не приближается,
+ * с этой дистанции просто не добивается, а комната не считается зачищенной,
+ * пока жив хоть один. `ENGAGE_RANGE` меньше `TOO_CLOSE` больше не может — иначе
+ * подход сам включал бы отступление, — и меньше `KEEP_RANGE`, чтобы охота
+ * заканчивалась раньше, чем гистерезис снова потребует держаться подальше.
+ */
+const ENGAGE_RANGE = 300;
+
+/**
+ * Запас к расстоянию до безопасной точки, при котором тратится рывок.
+ *
+ * Рывок — не «кнопка паники»: он даёт неуязвимость на 14 тиков и 240 единиц
+ * хода, но перезаряжается 72 тика. Потраченный на угрозу, от которой уходит
+ * шаг, он не готов к той, от которой не уходит.
+ */
+const DASH_IF_FARTHER = 200;
+
+/**
+ * Проходчик — служебный боец, а не игрок и, вопреки имени, НЕ средство
+ * пройти этаж.
+ *
+ * Задуман он был именно как проходчик записи: прогон, который ДОХОДИТ ДО
+ * КОНЦА ЭТАЖА, чтобы golden-эталоны видели дверь, лавку, плату и босса, а не
+ * только первую комнату (замер, с которого всё началось: все двадцать
+ * эталонов `random` гибли в комнате 1 между тиками 802 и 1711, а лучший из
+ * шестнадцати профилей «навык:стратегия» не добирался до пятой). Замысел не
+ * состоялся: три независимые причины простоя починены по очереди —
+ * уклонение, никогда не уступавшее бою, отсутствие добивания волны, слепота
+ * к перекрытой линии огня, — и после всех трёх idleShare застрял на 95–98%.
+ * Слоёв оказалось больше, чем времени на них, и дальше этот путь не ведётся
+ * (см. запись 0.3.11 в `golden.ts`).
+ *
+ * Golden-корпус эту дыру закрыл ДРУГИМ путём — записью с подготовленного
+ * состояния (`Golden.setup`, `packages/tools/src/scenario.ts`), а не этим
+ * ботом. Класс оставлен не как заброшенный код, а как рабочий инструмент:
+ * уклоняется он не эвристикой, а той самой проверкой, которой меряется
+ * ограничитель D4, — `findSafePoint` отвечает, куда игрок УСПЕВАЕТ уйти от
+ * всех объявленных угроз, и проходчик идёт туда. Для юнит- и
+ * scenario-тестов, которым нужен участник боя, честно уклоняющийся от
+ * объявленных угроз и не проходящий этаж целиком заведомо не обязанный, он
+ * годен и годнее прежних ботов, круживших ОТ угрозы по прямой — то есть
+ * остававшихся в коридоре тарана, летящего вдвое быстрее их самих.
+ *
+ * Профилем игрока он не является и в замерах баланса участвовать не должен:
+ * человек так не играет. Ограничители ECONOMY §13 считаются по `mixed` и по
+ * парам «навык:стратегия» — там ему места нет, и SIMULATION §3 говорит об
+ * этом прямо.
+ */
+class RunnerBot implements Bot {
+  readonly profile = 'runner';
+  private readonly frames: InputFrame[];
+  private readonly rng: RngState;
+
+  /**
+   * Пари он берёт, и это не жадность: эталон, обходящий карты стороной, не
+   * покрывал бы половину состояния — ни активных пари, ни расчёта, ни Туза.
+   * Тир средний: «По-крупному» на пустом кошельке не отличается от «Скромно»,
+   * а разорившийся проходчик не купит в лавке ничего.
+   */
+  private static readonly TIER = 1;
+
+  /**
+   * Отступает ли игрок прямо сейчас. Флаг, а не пересчёт с нуля каждый тик:
+   * «уклоняюсь, пока угроза ближе TOO_CLOSE, атакую, пока дальше KEEP_RANGE»
+   * — гистерезис, а не единый список приоритетов, которым отступление было
+   * раньше. Единый список ловил игрока в петле: стоит появиться в поле
+   * зрения хоть одной объявленной угрозе — и весь тик уходит в `findSafePoint`,
+   * а не в цель или карту, даже если та угроза далеко и торопиться некуда. Раз
+   * начав отступать, бот больше не подходил стрелять, комната переставала
+   * терять врагов, и `RoomThreat` вставал намертво — не из-за смерти, а из-за
+   * того, что осторожность никогда не уступала место бою.
+   *
+   * Зазор между порогами — не то же самое, что зазор внутри `findThreat`:
+   * дрожание на границе одного числа переключало бы режим по нескольку раз
+   * за тик из-за шага противника.
+   */
+  private readonly retreating: Uint8Array;
+
+  constructor(seed: number, players: number) {
+    this.frames = Array.from({ length: players }, makeFrame);
+    this.rng = createStreams(seed ^ 0x0f100d);
+    this.retreating = new Uint8Array(players);
+  }
+
+  inputs(s: SimState): readonly InputFrame[] {
+    for (let i = 0; i < this.frames.length; i++) {
+      const f = this.frames[i];
+      f.buttons = withAppetite(Btn.Fire, RunnerBot.TIER);
+      f.moveX = 0;
+      f.moveY = 0;
+
+      if ((s.pFlags[i] & EntityFlag.Alive) === 0) continue;
+
+      const px = toFloat(s.pX[i]);
+      const py = toFloat(s.pY[i]);
+
+      this.aim(s, f, px, py);
+      this.act(s, i, f, px, py);
+      this.move(s, i, f, px, py);
+    }
+    return this.frames;
+  }
+
+  /**
+   * Куда идти. Режим переключается гистерезисом (см. `retreating`), внутри
+   * режима — свой порядок: в отступлении сначала спастись, в бою сначала
+   * взять карту, потом добить волну, потом собрать сдачу, потом держать
+   * дистанцию.
+   *
+   * Охота за врагом стоит впереди фишек не случайно: фишка никуда не
+   * убежит, а зачистка волны — это то единственное, ради чего проходчик
+   * вообще существует (см. шапку класса). Гнаться за фишкой, пока жив
+   * последний враг волны, — значит платить временем комнаты за деньги,
+   * которые эталону не нужны ради самих себя.
+   *
+   * Порядок в бою не переставляется: карта, взятая под объявленный таран,
+   * стоит сердца, а сердец три на весь забег и добавить их можно только в
+   * лавке.
+   */
+  private move(s: SimState, i: number, f: InputFrame, px: number, py: number): void {
+    findThreat(s, px, py);
+    const threatDist = foundDist;
+
+    if (this.retreating[i]) {
+      if (threatDist > KEEP_RANGE) this.retreating[i] = 0;
+    } else if (threatDist < TOO_CLOSE) {
+      this.retreating[i] = 1;
+    }
+
+    if (this.retreating[i]) {
+      const safe = findSafePoint(s, i);
+      if (safe.horizon !== Infinity) {
+        const dx = safe.x - px;
+        const dy = safe.y - py;
+        const d = Math.hypot(dx, dy);
+        if (d > 1) {
+          f.moveX = fromFloat(dx / d);
+          f.moveY = fromFloat(dy / d);
+          // Рывок — на дальнюю точку и только на готовом кулдауне: он и
+          // неуязвимость, и скорость, но потраченный впустую он не готов к
+          // следующей угрозе.
+          if (d > DASH_IF_FARTHER && s.tick >= s.pDashReady[i]) f.buttons |= Btn.Dash;
+        }
+        return;
+      }
+      // D4 гарантирует выход только от ОБЪЯВЛЕННОЙ угрозы: гистерезис мог
+      // включить отступление раньше, чем что-то объявили (порог TOO_CLOSE —
+      // про приближение, а не про телеграф). Тогда идти уже некуда в смысле
+      // D4, и отступление доигрывается тем же кодом, что и бой ниже.
+    }
+
+    // В бою — карта первой: пари двигают всё остальное состояние, ради
+    // которого эталон и пишется.
+    findCard(s, i, px, py);
+    if (foundDist < Infinity && activeBets(s, i) < MAX_ACTIVE_BETS) {
+      const len = foundDist || 1;
+      f.moveX = fromFloat(foundDX / len);
+      f.moveY = fromFloat(foundDY / len);
+      return;
+    }
+
+    findEnemy(s, px, py);
+    const enemy = foundDist;
+    const enemyX = foundDX;
+    const enemyY = foundDY;
+
+    // Волна не добита, и ближайший враг дальше дистанции уверенного огня —
+    // идём к нему сами. `KEEP_RANGE` ниже держит расстояние от того, кто сам
+    // идёт на игрока; тот, кто не идёт (отстал, отходит, ещё не заметил),
+    // с той дистанции не добивается никогда, и комната стоит.
+    if (enemy < Infinity && enemy > ENGAGE_RANGE) {
+      const len = enemy || 1;
+      f.moveX = fromFloat(enemyX / len);
+      f.moveY = fromFloat(enemyY / len);
+      return;
+    }
+
+    // Фишки собираются, когда добивать некого: они и есть кошелёк, а
+    // кошелёк — это лавка и плата заведению, то есть ровно те экраны, до
+    // которых эталон обязан дожить.
+    findChip(s, px, py);
+    if (foundDist < Infinity) {
+      const len = foundDist || 1;
+      f.moveX = fromFloat(foundDX / len);
+      f.moveY = fromFloat(foundDY / len);
+      return;
+    }
+
+    // Идти некуда — бродим, а не стоим: неподвижная мишень не проверяет ни
+    // навигацию врагов, ни спавн, ни достижимость безопасной точки.
+    if (s.tick % 30 === 0) {
+      f.moveX = fromInt(nextInt(this.rng, Stream.Waves, 3) - 1);
+      f.moveY = fromInt(nextInt(this.rng, Stream.Waves, 3) - 1);
+    }
+  }
+
+  /** Кнопки, которые не про движение: подбор карты и ответ Тузу. */
+  private act(s: SimState, i: number, f: InputFrame, px: number, py: number): void {
+    findCard(s, i, px, py);
+    if (foundDist < 60 && s.tick % 4 === 0) f.buttons |= Btn.Take;
+    // Ставку Туза принимает: ожидание по ней положительное (ECONOMY §10А), и
+    // отказ был бы игрой хуже собственного профиля.
+    if (aceCardAt(s) >= 0 && s.tick % 4 === 0) f.buttons |= Btn.Confirm;
+  }
+
+  /**
+   * Куда целиться: в босса, если он на арене, иначе в ближайшего врага.
+   *
+   * Босс не лежит в пуле врагов (`stepHits` в `boss.ts` проверяет попадания
+   * отдельно), поэтому целиться в него надо отдельно — бот, ищущий только
+   * `eActive`, стрелял бы в свиту и не снял бы с босса ни очка.
+   */
+  private aim(s: SimState, f: InputFrame, px: number, py: number): void {
+    let dx: number;
+    let dy: number;
+    if (s.meta[Meta.BossMaxHP] !== 0) {
+      dx = toFloat(wheelX(s)) - px;
+      dy = toFloat(wheelY(s)) - py;
+    } else {
+      findEnemy(s, px, py);
+      if (foundDist === Infinity) {
+        f.aimX = fromInt(1);
+        f.aimY = 0;
+        return;
+      }
+      dx = foundDX;
+      dy = foundDY;
+    }
+    const len = Math.hypot(dx, dy) || 1;
+    f.aimX = fromFloat(dx / len);
+    f.aimY = fromFloat(dy / len);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Смесь профилей
 // ---------------------------------------------------------------------------
 
@@ -775,6 +1044,8 @@ function makeRawBot(name: BotName, seed: number, players: number): Bot {
       return new CautiousBot(seed, players);
     case 'random':
       return new RandomBot(seed, players);
+    case 'runner':
+      return new RunnerBot(seed, players);
     case 'idle':
       return new IdleBot(players);
     case 'mixed': {
