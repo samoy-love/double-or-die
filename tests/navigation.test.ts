@@ -42,7 +42,7 @@ import {
   spawnPlayers,
   stepDoors,
   stepHouseCut,
-  stepShop,
+  stepReward,
 } from '@dod/sim';
 import { SCREEN_BINDINGS } from '@dod/client/input';
 
@@ -179,40 +179,40 @@ describe.each(['pad', 'keys'] as const)('лавка с «%s»', (scheme) => {
 
   it('достижим каждый слот прилавка', () => {
     const s = atShop(1000);
-    tap(s, right, stepShop);
+    tap(s, right, stepReward);
     expect(s.meta[Meta.DoorPick]).toBe(0);
     for (let i = 1; i < SHOP_SLOTS; i++) {
-      tap(s, right, stepShop);
+      tap(s, right, stepReward);
       expect(s.meta[Meta.DoorPick]).toBe(i);
     }
     for (let i = SHOP_SLOTS - 2; i >= 0; i--) {
-      tap(s, left, stepShop);
+      tap(s, left, stepReward);
       expect(s.meta[Meta.DoorPick]).toBe(i);
     }
   });
 
   it('упор в край не роняет выбор', () => {
     const s = atShop(1000);
-    tap(s, right, stepShop);
-    for (let i = 0; i < 5; i++) tap(s, left, stepShop);
+    tap(s, right, stepReward);
+    for (let i = 0; i < 5; i++) tap(s, left, stepReward);
     expect(s.meta[Meta.DoorPick]).toBe(0);
-    for (let i = 0; i < 5 + SHOP_SLOTS; i++) tap(s, right, stepShop);
+    for (let i = 0; i < 5 + SHOP_SLOTS; i++) tap(s, right, stepReward);
     expect(s.meta[Meta.DoorPick]).toBe(SHOP_SLOTS - 1);
   });
 
   it('покупка идёт по фокусу, а выход — отказом', () => {
     const s = atShop(1000);
-    tap(s, right, stepShop);
+    tap(s, right, stepReward);
     const price = s.shopPrice[0];
     const before = s.pChips[0];
-    stepShop(s, [frame(confirm)]);
-    stepShop(s, [frame(0)]);
+    stepReward(s, [frame(confirm)]);
+    stepReward(s, [frame(0)]);
     expect(s.pChips[0], 'покупка не списала цену выбранного слота').toBe(before - price);
     expect(s.shopItem[0], 'товар остался на прилавке').toBe(0);
 
     // Уйти без покупки — законное решение, и оно обязано быть доступно с
     // обеих схем: экран, из которого нельзя выйти, отнимает выбор «унести».
-    expect(stepShop(s, [frame(cancel)]), 'из лавки не выйти отказом').toBe(true);
+    expect(stepReward(s, [frame(cancel)]), 'из лавки не выйти отказом').toBe(true);
   });
 });
 
