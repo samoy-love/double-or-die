@@ -29,7 +29,15 @@ describe('diagnoseCorpus', () => {
     const names = ['seed-1-p1', 'seed-2-p2', 'seed-3-p3', 'seed-4-p4'];
     for (const n of names) writeFileSync(join(dir, `${n}.json`), golden('random'));
 
-    expect(diagnoseCorpus(names.map((n) => `${n}.json`), dir, 4, 1, 'random')).toBeNull();
+    expect(
+      diagnoseCorpus(
+        names.map((n) => `${n}.json`),
+        dir,
+        4,
+        1,
+        'random',
+      ),
+    ).toBeNull();
   });
 
   it('отказывает на эталон другой схемы и не предлагает --runs его накрыть', () => {
