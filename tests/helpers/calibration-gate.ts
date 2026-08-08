@@ -15,7 +15,10 @@ export const GATE_TICKS = 6000;
 export const GATE_RUNS = 200;
 export const THRESHOLD = 0.1;
 
-export function runCalibrationGate(skill: RoomInput['skill'], strategy: RoomInput['strategy']): void {
+export function runCalibrationGate(
+  skill: RoomInput['skill'],
+  strategy: RoomInput['strategy'],
+): void {
   const full = collectFullSimMetrics(skill, strategy, GATE_RUNS, GATE_TICKS, 100_000);
 
   // Этаж 1 — единственный, до которого доживает достаточно забегов на

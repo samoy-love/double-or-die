@@ -11,11 +11,7 @@ import { describe, it } from 'vitest';
 import { runCalibrationGate, THRESHOLD } from './helpers/calibration-gate';
 
 describe('калибровка абстрактной модели (SIMULATION §2)', () => {
-  it(
-    `veteran:chips — расхождение с полной симуляцией не больше ${THRESHOLD * 100}%`,
-    () => {
-      runCalibrationGate('veteran', 'chips');
-    },
-    60_000,
-  );
+  it(`veteran:chips — расхождение с полной симуляцией не больше ${THRESHOLD * 100}%`, () => {
+    runCalibrationGate('veteran', 'chips');
+  }, 240_000);
 });

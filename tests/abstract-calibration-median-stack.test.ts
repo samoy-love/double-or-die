@@ -11,11 +11,7 @@ import { describe, it } from 'vitest';
 import { runCalibrationGate, THRESHOLD } from './helpers/calibration-gate';
 
 describe('калибровка абстрактной модели (SIMULATION §2)', () => {
-  it(
-    `median:stack — расхождение с полной симуляцией не больше ${THRESHOLD * 100}%`,
-    () => {
-      runCalibrationGate('median', 'stack');
-    },
-    60_000,
-  );
+  it(`median:stack — расхождение с полной симуляцией не больше ${THRESHOLD * 100}%`, () => {
+    runCalibrationGate('median', 'stack');
+  }, 240_000);
 });

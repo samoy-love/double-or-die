@@ -571,7 +571,11 @@ const BET_MULTIPLIER: ReadonlyMap<string, number> = new Map(
  * «кон возвращается без изменений» (net ≈ 0) — честная середина между «Забрать»
  * тут же (около 0% прибыли) и «Забрать» перед самой развязкой (около 100%).
  */
-function betNetChips(bet: { readonly stake: number; readonly outcome: string; readonly id: string }): number {
+function betNetChips(bet: {
+  readonly stake: number;
+  readonly outcome: string;
+  readonly id: string;
+}): number {
   switch (bet.outcome) {
     case 'won': {
       const multiplier = BET_MULTIPLIER.get(bet.id) ?? AVERAGE_MULTIPLIER;

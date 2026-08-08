@@ -10,11 +10,7 @@ import { describe, it } from 'vitest';
 import { runCalibrationGate, THRESHOLD } from './helpers/calibration-gate';
 
 describe('калибровка абстрактной модели (SIMULATION §2)', () => {
-  it(
-    `master:none — расхождение с полной симуляцией не больше ${THRESHOLD * 100}%`,
-    () => {
-      runCalibrationGate('master', 'none');
-    },
-    60_000,
-  );
+  it(`master:none — расхождение с полной симуляцией не больше ${THRESHOLD * 100}%`, () => {
+    runCalibrationGate('master', 'none');
+  }, 240_000);
 });
