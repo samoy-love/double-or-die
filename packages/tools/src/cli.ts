@@ -43,6 +43,7 @@ import {
 import { parseScenario, runScenario, type ScenarioResult } from './scenario';
 import { Observer } from './observe';
 import { checkSafety } from './safety';
+import { diagnoseCorpus } from './goldenCorpus';
 
 interface Args {
   seed: number;
@@ -594,24 +595,9 @@ function doRecordGolden(a: Args, dir: string): never {
    */
   const existing = readdirSync(dir).filter((f) => f.endsWith('.json'));
   if (existing.length > 0) {
-    const names = new Set<string>();
-    for (let i = 0; i < a.runs; i++) names.add(`seed-${a.seed + i}-p${(i % 4) + 1}`);
-    const orphans = existing.map((f) => f.slice(0, -5)).filter((n) => !names.has(n));
-    if (orphans.length > 0) {
-      console.error(
-        `отказ: пересъёмка накрывает ${names.size} эталонов, а в ${dir} их ${existing.length}.\n` +
-          `Осталось бы нетронутыми: ${orphans.slice(0, 5).join(', ')}${orphans.length > 5 ? ` и ещё ${orphans.length - 5}` : ''}.\n` +
-          `Нужен весь корпус — добавьте --runs ${existing.length} --seed 1; нужен другой — удалите старый руками.`,
-      );
-      process.exit(2);
-    }
-
-    const sample = JSON.parse(readFileSync(join(dir, existing[0]), 'utf8')) as { bot?: string };
-    if (sample.bot !== undefined && sample.bot !== a.bot) {
-      console.error(
-        `отказ: корпус записан ботом «${sample.bot}», а снимается ботом «${a.bot}».\n` +
-          `Эталон, переснятый другим ботом, проверяет уже другой забег, продолжая называться тем же именем.`,
-      );
+    const problem = diagnoseCorpus(existing, dir, a.runs, a.seed, a.bot);
+    if (problem !== null) {
+      console.error(`отказ: ${problem}`);
       process.exit(2);
     }
   }
