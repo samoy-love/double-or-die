@@ -51,32 +51,40 @@ const GATE_PROFILES: readonly [RoomInput['skill'], RoomInput['strategy']][] = [
 
 describe('калибровка абстрактной модели (SIMULATION §2)', () => {
   for (const [skill, strategy] of GATE_PROFILES) {
-    it(`${skill}:${strategy} — расхождение с полной симуляцией не больше ${THRESHOLD * 100}%`, () => {
-      const full = collectFullSimMetrics(skill, strategy, GATE_RUNS, GATE_TICKS, 100_000);
+    // 200 полных забегов до 6000 тиков честно занимают 15-30 секунд — больше
+    // дефолтного таймаута vitest (5000 мс). Без явного таймаута тест валится
+    // по времени раньше, чем успевает вычислить расхождение, и красный прогон
+    // выглядит как падение калибровки, а на деле это падение по таймауту.
+    it(
+      `${skill}:${strategy} — расхождение с полной симуляцией не больше ${THRESHOLD * 100}%`,
+      () => {
+        const full = collectFullSimMetrics(skill, strategy, GATE_RUNS, GATE_TICKS, 100_000);
 
-      // Этаж 1 — единственный, до которого доживает достаточно забегов на
-      // 200 прогонах при 6000 тиках: второй и третий этажи здесь дают
-      // считаные комнаты, и статистика по ним слишком шумная для 10-процентного
-      // порога. Ночной прогон (больше тиков, больше забегов) обязан снять
-      // это ограничение и проверить все три этажа.
-      const floor1 = full.find((f) => f.floor === 1);
-      expect(floor1).toBeDefined();
-      if (!floor1) return;
-      // Знаменатель попаданий и дохода — комнаты НАЧАТЫЕ, их всегда хватает
-      // (каждый забег даёт минимум одну). Длительность требует комнат
-      // ЗАКОНЧЕННЫХ, и с ними жёстче: `novice` часто гибнет на первой.
-      expect(floor1.sampleRoomsEntered).toBeGreaterThan(20);
+        // Этаж 1 — единственный, до которого доживает достаточно забегов на
+        // 200 прогонах при 6000 тиках: второй и третий этажи здесь дают
+        // считаные комнаты, и статистика по ним слишком шумная для 10-процентного
+        // порога. Ночной прогон (больше тиков, больше забегов) обязан снять
+        // это ограничение и проверить все три этажа.
+        const floor1 = full.find((f) => f.floor === 1);
+        expect(floor1).toBeDefined();
+        if (!floor1) return;
+        // Знаменатель попаданий и дохода — комнаты НАЧАТЫЕ, их всегда хватает
+        // (каждый забег даёт минимум одну). Длительность требует комнат
+        // ЗАКОНЧЕННЫХ, и с ними жёстче: `novice` часто гибнет на первой.
+        expect(floor1.sampleRoomsEntered).toBeGreaterThan(20);
 
-      const input: RoomInput = { floor: 1, room: 4, players: 1, skill, strategy };
-      const checks = calibrationChecks(input, floor1, undefined, THRESHOLD);
+        const input: RoomInput = { floor: 1, room: 4, players: 1, skill, strategy };
+        const checks = calibrationChecks(input, floor1, undefined, THRESHOLD);
 
-      for (const check of checks) {
-        expect(
-          check.ok,
-          `${check.metric}: модель ${check.model.toFixed(3)} vs симуляция ${check.real.toFixed(3)} ` +
-            `(расхождение ${(check.relativeError * 100).toFixed(1)}%)`,
-        ).toBe(true);
-      }
-    });
+        for (const check of checks) {
+          expect(
+            check.ok,
+            `${check.metric}: модель ${check.model.toFixed(3)} vs симуляция ${check.real.toFixed(3)} ` +
+              `(расхождение ${(check.relativeError * 100).toFixed(1)}%)`,
+          ).toBe(true);
+        }
+      },
+      60_000,
+    );
   }
 });
