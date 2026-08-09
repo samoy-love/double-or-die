@@ -95,7 +95,7 @@ export const SCREEN_BINDINGS: readonly ScreenBinding[] = [
   // эмоциям в 0.5.0 (UX §2), а стик и `A`/`D` дают тот же жест обеим схемам.
   { bit: Btn.NavLeft, pad: [], keys: ['ArrowLeft'], axis: -1 },
   { bit: Btn.NavRight, pad: [], keys: ['ArrowRight'], axis: 1 },
-  { bit: Btn.Confirm, pad: [PAD_CONFIRM_BTN], keys: ['Enter', 'NumpadEnter'], axis: 0 },
+  { bit: Btn.Confirm, pad: [PAD_CONFIRM_BTN], keys: ['Enter', 'NumpadEnter', 'Tab'], axis: 0 },
   { bit: Btn.Cancel, pad: [PAD_CANCEL_BTN], keys: ['KeyQ'], axis: 0 },
 ];
 
@@ -126,6 +126,7 @@ export class InputSource {
   private readonly held: Held = { dash: 0, take: 0, cashOut: 0 };
   private firstInput: (() => void) | null = null;
   private pauseToggle: (() => void) | null = null;
+  private screenClick: ((x: number, y: number) => void) | null = null;
 
   /**
    * Схема ввода — устройство ПОСЛЕДНЕГО действия, а не список подключённого.
@@ -171,6 +172,19 @@ export class InputSource {
     this.pauseToggle = fn;
   }
 
+  /**
+   * Клик по экранной кнопке — только для меню (UX §2, «Играть»).
+   *
+   * Не заведён как ещё один бит `Confirm`: ЛКМ в бою — это Огонь, и слить их
+   * в один смысл означало бы, что случайный клик по прицелу подтверждает
+   * что-то на экране, если он вдруг окажется открыт. Меню — единственный
+   * экран, где боя точно нет, поэтому клику здесь дан отдельный путь мимо
+   * маски ввода, а не общий с боевой кнопкой мыши.
+   */
+  onScreenClick(fn: (x: number, y: number) => void): void {
+    this.screenClick = fn;
+  }
+
   private touched(): void {
     if (!this.firstInput) return;
     const fn = this.firstInput;
@@ -194,8 +208,9 @@ export class InputSource {
         // доходит не всегда (UX §2).
         if (e.code === 'Escape' || e.code === 'KeyP') this.pauseToggle?.();
       }
-      // Пробел и стрелки скроллят страницу — в игре это раздражает.
-      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
+      // Пробел и стрелки скроллят страницу, а Tab уводит фокус с канваса —
+      // в игре это раздражает.
+      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.code)) {
         e.preventDefault();
       }
     });
@@ -240,7 +255,13 @@ export class InputSource {
     canvas.addEventListener('mousedown', (e) => {
       this.touched();
       this.scheme = InputScheme.Keyboard;
-      if (e.button === 0) this.mouseDown = true;
+      if (e.button === 0) {
+        this.mouseDown = true;
+        const r = canvas.getBoundingClientRect();
+        const x = ((e.clientX - r.left) / r.width) * 1920;
+        const y = ((e.clientY - r.top) / r.height) * 1080;
+        this.screenClick?.(x, y);
+      }
       // Рывок буферизуется по нажатию: удержание ПКМ не должно кувыркать
       // без остановки, как удержание Space его не кувыркает.
       if (e.button === 2) this.held.dash = BUFFER_TICKS;

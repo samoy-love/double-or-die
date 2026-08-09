@@ -57,6 +57,7 @@ export type StringKey =
   | 'house.purse'
   | 'house.short'
   | 'house.title'
+  | 'menu.confirm.key'
   | 'menu.play'
   | 'menu.tagline'
   | 'menu.title'
@@ -138,6 +139,7 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
     'house.purse': 'В кошельке',
     'house.short': 'Не хватает',
     'house.title': 'Стол берёт своё',
+    'menu.confirm.key': 'Enter/Tab или клик — играть',
     'menu.play': 'Играть',
     'menu.tagline': 'Сложность выбираете вы',
     'menu.title': 'Double or Die',
@@ -153,7 +155,7 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
     'overlay.update': 'Доступна новая версия ({build}) — обновите страницу',
     'screen.cancel.key': 'Q — отказаться',
     'screen.cancel.pad': 'B — отказаться',
-    'screen.confirm.key': 'Enter — подтвердить',
+    'screen.confirm.key': 'Enter/Tab — подтвердить',
     'screen.confirm.pad': 'RB — подтвердить',
     'screen.sell.key': 'Стрелка влево — продать',
     'screen.sell.pad': 'Стик влево — продать',
@@ -220,6 +222,7 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
     'house.purse': 'In the purse',
     'house.short': 'Short',
     'house.title': 'The house takes its cut',
+    'menu.confirm.key': 'Enter/Tab or click to play',
     'menu.play': 'Play',
     'menu.tagline': 'You pick the difficulty',
     'menu.title': 'Double or Die',
@@ -235,7 +238,7 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
     'overlay.update': 'A new build ({build}) is available — reload the page',
     'screen.cancel.key': 'Q to decline',
     'screen.cancel.pad': 'B to decline',
-    'screen.confirm.key': 'Enter to confirm',
+    'screen.confirm.key': 'Enter/Tab to confirm',
     'screen.confirm.pad': 'RB to confirm',
     'screen.sell.key': 'Left arrow to sell',
     'screen.sell.pad': 'Stick left to sell',
