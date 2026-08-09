@@ -70,7 +70,7 @@
       "source": "own",
       "license": "MIT (этот репозиторий)",
       "stage": "final",
-      "usedBy": "public/manifest.webmanifest, index.html (apple-touch-icon)",
+      "usedBy": "index.html",
       "note": "Растровая версия favicon.svg — единственное исключение из «растровых не держим»: экран установки и iOS Safari не читают SVG-иконки. Сгенерирована растеризатором той же геометрии, не рисована отдельно."
     },
     {
