@@ -62,7 +62,25 @@
       "license": "MIT (этот репозиторий)",
       "stage": "final",
       "usedBy": "index.html",
-      "note": "Даёт браузеру повод предложить установку на телефон/Deck (TECH §8.6). Иконка та же SVG, что у favicon — растровых версий не держим."
+      "note": "Даёт браузеру повод предложить установку на телефон/Deck (TECH §8.6)."
+    },
+    {
+      "id": "pwa-icon-192",
+      "file": "public/icon-192.png",
+      "source": "own",
+      "license": "MIT (этот репозиторий)",
+      "stage": "final",
+      "usedBy": "public/manifest.webmanifest, index.html (apple-touch-icon)",
+      "note": "Растровая версия favicon.svg — единственное исключение из «растровых не держим»: экран установки и iOS Safari не читают SVG-иконки. Сгенерирована растеризатором той же геометрии, не рисована отдельно."
+    },
+    {
+      "id": "pwa-icon-512",
+      "file": "public/icon-512.png",
+      "source": "own",
+      "license": "MIT (этот репозиторий)",
+      "stage": "final",
+      "usedBy": "public/manifest.webmanifest",
+      "note": "Тот же растр в размере, который просят чек-листы установки Android/Chrome (512×512)."
     }
   ]
 }

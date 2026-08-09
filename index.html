@@ -20,6 +20,11 @@
       существующего sw.js, полезный для плейтеста уже сейчас (TECH §8.6).
     -->
     <link rel="manifest" href="/manifest.webmanifest" />
+    <!--
+      iOS Safari манифест игнорирует целиком — своя иконка нужна отдельным
+      тегом, иначе на домашнем экране iPhone окажется скриншот страницы.
+    -->
+    <link rel="apple-touch-icon" href="/icon-192.png" />
     <!-- Цвет строки браузера на телефоне: тот же фон, что у арены. -->
     <meta name="theme-color" content="#1a1033" />
     <link rel="stylesheet" href="/packages/client/src/style.css" />
