@@ -95,7 +95,7 @@ export const SCREEN_BINDINGS: readonly ScreenBinding[] = [
   // эмоциям в 0.5.0 (UX §2), а стик и `A`/`D` дают тот же жест обеим схемам.
   { bit: Btn.NavLeft, pad: [], keys: ['ArrowLeft'], axis: -1 },
   { bit: Btn.NavRight, pad: [], keys: ['ArrowRight'], axis: 1 },
-  { bit: Btn.Confirm, pad: [PAD_CONFIRM_BTN], keys: ['Enter', 'NumpadEnter'], axis: 0 },
+  { bit: Btn.Confirm, pad: [PAD_CONFIRM_BTN], keys: ['Enter', 'NumpadEnter', 'Tab'], axis: 0 },
   { bit: Btn.Cancel, pad: [PAD_CANCEL_BTN], keys: ['KeyQ'], axis: 0 },
 ];
 
@@ -194,8 +194,11 @@ export class InputSource {
         // доходит не всегда (UX §2).
         if (e.code === 'Escape' || e.code === 'KeyP') this.pauseToggle?.();
       }
-      // Пробел и стрелки скроллят страницу — в игре это раздражает.
-      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
+      // Пробел и стрелки скроллят страницу, а Tab уводит фокус с канваса —
+      // в игре это раздражает.
+      if (
+        ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.code)
+      ) {
         e.preventDefault();
       }
     });
