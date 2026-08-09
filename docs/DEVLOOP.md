@@ -50,6 +50,11 @@ npm run sim -- --runs 1000 --bot random --json
 # Проверка детерминизма: один сид, два прогона, сверка хешей
 npm run sim -- --determinism-check --seeds 100
 
+# Та же проверка, но со старта комнаты 5 вместо тика 0: короткое окно
+# застаёт бой, а не гибель на комнате 1 и заморозку после (см. golden.ts,
+# ре-бейзлайн 0.3.11 — тот же приём для эталонов)
+npm run sim -- --determinism-check --seeds 100 --setup tests/ci-setup/room5.json
+
 # Переигрывание записанного лога с проверкой хеша
 npm run sim -- --replay tests/golden/seed-1-p1.json --assert-hash 0x1234abcd
 
