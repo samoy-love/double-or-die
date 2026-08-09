@@ -100,6 +100,11 @@ export class GameLoop {
     // Звук включается по первому вводу: до жеста браузер его не разрешает,
     // и попытка запуститься на загрузке даёт навсегда молчащую вкладку.
     this.input.onFirstInput(() => this.audio.unlock());
+    // Клик по «Играть» — тем же прямоугольником, каким рисует его renderer
+    // (drawMenuScreen: центр экрана, полуразмер 210×52).
+    this.input.onScreenClick((x, y) => {
+      if (this.menu && Math.abs(x - 960) <= 210 && Math.abs(y - 540) <= 52) this.startRun();
+    });
     // Пауза «везде и всегда» (UX §2). Живёт в клиенте, а не в кадре ввода:
     // она останавливает часы, а не симуляцию, и в реплей ей ехать нечем.
     this.input.onPause(() => (this.paused ? this.play() : this.pause()));

@@ -1981,7 +1981,15 @@ export class Renderer {
     // ответ на вопрос «что тут делать».
     const c = this.screenCard(w / 2, h / 2, 210, 52, true);
     this.text.push(t('menu.play'), w / 2, h / 2, 30, Face.Ui, c.r, c.g, c.b, 1, 'center');
-    this.confirmHint(w, h / 2 + 100);
+    // Клик работает только на этом экране (боя тут точно нет), поэтому
+    // подсказка своя, а не общий confirmHint (UX §2).
+    const pad = this.scheme === InputScheme.Gamepad;
+    this.screenLine(
+      pad ? t('screen.confirm.pad') : t('menu.confirm.key'),
+      w,
+      h / 2 + 100,
+      PALETTE.hudDim,
+    );
   }
 
   /**
