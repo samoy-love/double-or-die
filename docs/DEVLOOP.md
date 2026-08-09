@@ -22,6 +22,12 @@ npm run sim              # headless-раннер симуляции, JSON в std
 npm run safety           # достижимость безопасной точки (D4) на каждом тике
 npm run timing           # хронометраж полного забега, ворота «12–18 минут»
 npm test                 # юнит + golden-реплеи + сценарии
+npm run test:calibration # ГЕЙТ: абстрактная модель против полной симуляции
+                          # (SIMULATION §2), 200 забегов на профиль. Не часть
+                          # npm test — объём и время те же, но не платятся
+                          # трижды по ОС `determinism`. Полный ночной объём:
+                          # CALIBRATION_RUNS=50000 CALIBRATION_TICKS=16000 \
+                          #   CALIBRATION_TIMEOUT_MS=900000 npm run test:calibration
 npm run e2e              # сквозные: игра рисует, бенч рендера под нагрузкой
 npm run balance          # ГЕЙТ: Monte-Carlo отчёт, ограничители G1–G17 и D1–D10
 npm run balance:search   # первый эволюционный поиск по рычагам ECONOMY §15
