@@ -14,6 +14,12 @@
       ровно в том канале, по которому агент читает настоящие ошибки.
     -->
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <!--
+      Даёт браузеру повод предложить «Установить приложение» — не замена
+      Electron-доставке (TECH §8.1, веха 0.10.0), а побочный эффект уже
+      существующего sw.js, полезный для плейтеста уже сейчас (TECH §8.6).
+    -->
+    <link rel="manifest" href="/manifest.webmanifest" />
     <!-- Цвет строки браузера на телефоне: тот же фон, что у арены. -->
     <meta name="theme-color" content="#1a1033" />
     <link rel="stylesheet" href="/packages/client/src/style.css" />

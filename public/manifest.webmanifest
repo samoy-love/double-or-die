@@ -1,0 +1,19 @@
+{
+    "name": "Double or Die",
+    "short_name": "Double or Die",
+    "description": "Роглайт, где сложность выбираешь ты сам — пари на самого себя",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "orientation": "landscape",
+    "background_color": "#1a1033",
+    "theme_color": "#1a1033",
+    "icons": [
+        {
+            "src": "/favicon.svg",
+            "sizes": "any",
+            "type": "image/svg+xml",
+            "purpose": "any"
+        }
+    ]
+}
