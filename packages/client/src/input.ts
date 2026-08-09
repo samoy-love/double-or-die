@@ -41,7 +41,7 @@ const PAD_START_BTN = 9;
  * Кнопки экранных решений: RB подтверждает, B отказывает.
  *
  * Ни одной из четырёх лицевых взять нельзя, и это следствие правила «смысл
- * бита не зависит от того, что сейчас на экране» (UX §2). A — рывок, X —
+ * бита не зависит от того, что сейчас на экране» (UX §2). A — рывок, LT —
  * подбор карты, Y — «Удвоим?» и пропуск расчёта: каждая из них живёт В БОЮ, а
  * Ставка Туза предлагается экраном ПОВЕРХ боя (GDD §12А.1) и принимается тем
  * же битом `Confirm`. Общая кнопка означала бы, что уворот рывком подписывает
@@ -356,7 +356,12 @@ export class InputSource {
       }
       if ((pad.buttons[7]?.value ?? 0) > 0.5) buttons |= Btn.Fire;
       if (pad.buttons[0]?.pressed) this.held.dash = BUFFER_TICKS;
-      if (pad.buttons[2]?.pressed) this.held.take = BUFFER_TICKS;
+      /*
+       * Подбор — на LT (6), а не на X: во время бега оба больших пальца
+       * заняты стиками (движение + прицел), свободны только указательные.
+       * RT уже занят огнём, значит подбор идёт на второй триггер.
+       */
+      if ((pad.buttons[6]?.value ?? 0) > 0.5) this.held.take = BUFFER_TICKS;
       if (pad.buttons[4]?.pressed) this.held.cashOut = BUFFER_TICKS;
       if (pad.buttons[3]?.pressed) buttons |= Btn.Accept;
       if (pad.buttons[1]?.pressed) buttons |= Btn.Decline;
