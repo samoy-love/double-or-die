@@ -22,6 +22,12 @@ npm run sim              # headless-раннер симуляции, JSON в std
 npm run safety           # достижимость безопасной точки (D4) на каждом тике
 npm run timing           # хронометраж полного забега, ворота «12–18 минут»
 npm test                 # юнит + golden-реплеи + сценарии
+npm run test:calibration # ГЕЙТ: абстрактная модель против полной симуляции
+                          # (SIMULATION §2), 200 забегов на профиль. Не часть
+                          # npm test — объём и время те же, но не платятся
+                          # трижды по ОС `determinism`. Полный ночной объём:
+                          # CALIBRATION_RUNS=50000 CALIBRATION_TICKS=16000 \
+                          #   CALIBRATION_TIMEOUT_MS=900000 npm run test:calibration
 npm run e2e              # сквозные: игра рисует, бенч рендера под нагрузкой
 npm run balance          # ГЕЙТ: Monte-Carlo отчёт, ограничители G1–G17 и D1–D10
 npm run balance:search   # первый эволюционный поиск по рычагам ECONOMY §15
@@ -49,6 +55,11 @@ npm run sim -- --runs 1000 --bot random --json
 
 # Проверка детерминизма: один сид, два прогона, сверка хешей
 npm run sim -- --determinism-check --seeds 100
+
+# Та же проверка, но со старта комнаты 5 вместо тика 0: короткое окно
+# застаёт бой, а не гибель на комнате 1 и заморозку после (см. golden.ts,
+# ре-бейзлайн 0.3.11 — тот же приём для эталонов)
+npm run sim -- --determinism-check --seeds 100 --setup tests/ci-setup/room5.json
 
 # Переигрывание записанного лога с проверкой хеша
 npm run sim -- --replay tests/golden/seed-1-p1.json --assert-hash 0x1234abcd

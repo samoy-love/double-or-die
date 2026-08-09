@@ -18,10 +18,12 @@ import {
   MAX_ACTIVE_BETS,
   MAX_CARDS,
   MAX_PLAYERS,
+  makeFrame,
   Meta,
   ReplayPlayer,
   RunPhase,
   TICK_HZ,
+  type InputFrame,
   type SimState,
   spawnPlayers,
   step,
@@ -44,7 +46,13 @@ import {
   recordGolden,
   verifyGolden,
 } from './golden';
-import { parseScenario, runScenario, type ScenarioResult } from './scenario';
+import {
+  applyStep,
+  parseScenario,
+  runScenario,
+  type ActionStep,
+  type ScenarioResult,
+} from './scenario';
 import { Observer } from './observe';
 import { checkSafety } from './safety';
 import { diagnoseCorpus } from './goldenCorpus';
@@ -64,6 +72,7 @@ interface Args {
   scenario: string | null;
   golden: string | null;
   replay: string | null;
+  setup: string | null;
   assertHash: string | null;
   recordGolden: string | null;
   rebaseline: boolean;
@@ -178,6 +187,7 @@ function parseArgs(argv: string[]): Args {
     scenario: null,
     golden: null,
     replay: null,
+    setup: null,
     assertHash: null,
     recordGolden: null,
     rebaseline: false,
@@ -232,6 +242,10 @@ function parseArgs(argv: string[]): Args {
         break;
       case '--replay':
         a.replay = existingPath(k, v);
+        i++;
+        break;
+      case '--setup':
+        a.setup = existingPath(k, v);
         i++;
         break;
       case '--assert-hash':
@@ -321,6 +335,11 @@ Headless-раннер Double or Die
   --golden <путь>       сверить эталонные реплеи: файл или каталог
   --replay <файл>       переиграть лог ввода
   --assert-hash <хеш>   потребовать итоговый хеш
+  --setup <файл>        шаги подготовки (формат Golden.setup, scenario.ts)
+                        перед записью бота — прыгнуть в комнату/дверь/лавку/
+                        плату/босса вместо старта с тика 0 (см. golden.ts,
+                        ре-бейзлайн 0.3.11: короткий забег иначе не видит
+                        ничего дальше первой смерти в комнате 1)
 
   --record-golden <кат> ПЕРЕЗАПИСАТЬ эталоны; требует --rebaseline
 `);
@@ -401,9 +420,19 @@ function runOnce(
   bot: BotName,
   safety = false,
   observe = false,
+  setup: readonly ActionStep[] = [],
 ) {
   const s = createState(seed, players);
   spawnPlayers(s);
+
+  // Подготовка проходит ДО записи бота, той же машинерией, что использует
+  // golden.ts (`Golden.setup`): она не часть измеряемого забега, а точка,
+  // из которой он стартует.
+  if (setup.length > 0) {
+    const frames: InputFrame[] = Array.from({ length: players }, makeFrame);
+    for (const st of setup) applyStep(s, frames, st);
+  }
+
   const b = makeBot(bot, seed, players);
   const errors: string[] = [];
   // Наблюдатель заводится только по просьбе: он копирует пулы врагов и
@@ -941,12 +970,16 @@ function main(): void {
   if (a.balance) doBalance(a);
   if (a.search) doSearch(a);
 
+  const setupSteps: ActionStep[] = a.setup
+    ? (JSON.parse(readFileSync(a.setup, 'utf8')) as ActionStep[])
+    : [];
+
   if (a.determinismCheck) {
     const mismatches: { seed: number; a: string; b: string }[] = [];
     for (let i = 0; i < a.seeds; i++) {
       const seed = a.seed + i;
-      const r1 = runOnce(seed, a.players, a.ticks, a.bot);
-      const r2 = runOnce(seed, a.players, a.ticks, a.bot);
+      const r1 = runOnce(seed, a.players, a.ticks, a.bot, false, false, setupSteps);
+      const r2 = runOnce(seed, a.players, a.ticks, a.bot, false, false, setupSteps);
       if (r1.hash !== r2.hash) mismatches.push({ seed, a: r1.hash, b: r2.hash });
     }
     const ok = mismatches.length === 0;
@@ -957,7 +990,7 @@ function main(): void {
   const results = [];
   let failures = 0;
   for (let i = 0; i < a.runs; i++) {
-    const r = runOnce(a.seed + i, a.players, a.ticks, a.bot, a.safety, a.observe);
+    const r = runOnce(a.seed + i, a.players, a.ticks, a.bot, a.safety, a.observe, setupSteps);
     if (r.errors.length > 0) failures++;
     results.push({ seed: a.seed + i, ...r });
   }

@@ -8,10 +8,14 @@
  * (та же логика для всех четырёх профилей гейта, повторять незачем).
  */
 import { describe, it } from 'vitest';
-import { runCalibrationGate, THRESHOLD } from './helpers/calibration-gate';
+import { GATE_TIMEOUT_MS, runCalibrationGate, THRESHOLD } from './helpers/calibration-gate';
 
 describe('калибровка абстрактной модели (SIMULATION §2)', () => {
-  it(`median:stack — расхождение с полной симуляцией не больше ${THRESHOLD * 100}%`, () => {
-    runCalibrationGate('median', 'stack');
-  }, 240_000);
+  it(
+    `median:stack — расхождение с полной симуляцией не больше ${THRESHOLD * 100}%`,
+    () => {
+      runCalibrationGate('median', 'stack');
+    },
+    GATE_TIMEOUT_MS,
+  );
 });

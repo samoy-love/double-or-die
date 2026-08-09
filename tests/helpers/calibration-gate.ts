@@ -10,10 +10,27 @@
 import { expect } from 'vitest';
 import { calibrationChecks, collectFullSimMetrics, type RoomInput } from '@dod/tools/abstract';
 
-/** Хватает, чтобы прожить весь первый этаж и заглянуть на второй у большинства профилей. */
-export const GATE_TICKS = 6000;
-export const GATE_RUNS = 200;
+/**
+ * Объём гейта — из окружения, умолчания те же, что были жёстко зашиты.
+ *
+ * 200 забегов — измеренный минимум (см. шапку
+ * `abstract-calibration-novice-single.test.ts`): меньше — шум редких событий
+ * валит и верную модель, урезать нельзя. Переменные окружения не снижают
+ * умолчание, а поднимают его для полного ночного прогона по расписанию или
+ * вручную (`CALIBRATION_RUNS=50000 CALIBRATION_TICKS=16000
+ * CALIBRATION_TIMEOUT_MS=900000 npm run test:calibration`) — тем же гейтом,
+ * без отдельного скрипта, который иначе разошёлся бы с проверяемым кодом.
+ */
+export const GATE_TICKS = Number(process.env.CALIBRATION_TICKS) || 6000;
+export const GATE_RUNS = Number(process.env.CALIBRATION_RUNS) || 200;
 export const THRESHOLD = 0.1;
+
+/**
+ * 240с — измеренный максимум на CI при объёме по умолчанию (102с у
+ * `veteran:chips`, см. шапку `abstract-calibration-novice-single.test.ts`).
+ * Поднятый объём ночного прогона обязан поднять и таймаут тем же переключателем.
+ */
+export const GATE_TIMEOUT_MS = Number(process.env.CALIBRATION_TIMEOUT_MS) || 240_000;
 
 export function runCalibrationGate(
   skill: RoomInput['skill'],
