@@ -29,6 +29,10 @@ export class Overlay {
     this.update = document.createElement('div');
     this.update.className = 'update';
     this.update.hidden = true;
+    // Геймпад в браузере не кликает по DOM — только Tab/Enter, а трекпад
+    // Steam Deck без явного tabindex до плашки не доходит вовсе.
+    this.update.tabIndex = 0;
+    this.update.setAttribute('role', 'button');
 
     this.halt = document.createElement('div');
     this.halt.className = 'halt';
@@ -88,6 +92,11 @@ export class Overlay {
     this.update.hidden = false;
     this.update.textContent = t('overlay.update', { build });
     this.update.onclick = () => location.reload();
+    // Enter/Space — то же подтверждение, что даёт геймпад через Tab-навигацию
+    // браузера; без этого плашку на Steam Deck нечем нажать без точного тача.
+    this.update.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') location.reload();
+    };
   }
 
   /**
