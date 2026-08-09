@@ -264,11 +264,19 @@ function checkRun(s: SimState): void {
    * Цена без товара — не мелочь: интерфейс подписывает ею кнопку, и игрок
    * увидел бы ценник на пустом месте, а покупка сняла бы деньги ни за что.
    */
+  const gift = s.meta[Meta.Phase] === RunPhase.Reward && s.meta[Meta.RoomType] === DoorType.Gift;
   for (let i = 0; i < SHOP_SLOTS; i++) {
     const item = s.shopItem[i];
     if (item < 0 || item > UPGRADE_COUNT) fail(`в лавке слот ${i} с товаром ${item}`, s.tick);
     if (s.shopPrice[i] < 0) fail(`в лавке слот ${i} с ценой ${s.shopPrice[i]}`, s.tick);
     if (item === 0 && s.shopPrice[i] !== 0) fail(`в лавке слот ${i} с ценой без товара`, s.tick);
+    /*
+     * У Дара ценников нет, и это проверяется, потому что на нуле держится
+     * показ: отдельного признака «бесплатно» в состоянии не заведено, экран
+     * читает пустую цену при занятом слоте. Ненулевой ценник на Даре означал
+     * бы, что с подарка просят денег.
+     */
+    if (gift && s.shopPrice[i] !== 0) fail(`Дар просит ${s.shopPrice[i]} за слот ${i}`, s.tick);
   }
 
   if (s.meta[Meta.Earned] < 0) fail('заработано за забег ушло в минус', s.tick);

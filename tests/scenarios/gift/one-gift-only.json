@@ -1,0 +1,21 @@
+{
+  "name": "С Дара уносят ровно один апгрейд, а не весь прилавок",
+  "seed": 4,
+  "players": 1,
+  "steps": [
+    { "gift": true },
+    { "input": { "buttons": ["navright"] } },
+    { "tick": 1 },
+    { "input": { "buttons": ["confirm"] } },
+    { "tick": 1 },
+    { "clearInput": {} },
+    { "tick": 1 },
+    { "input": { "buttons": ["confirm"] } },
+    { "tick": 1 },
+    { "clearInput": {} },
+    { "tick": 1 },
+    { "input": { "buttons": ["confirm"] } },
+    { "tick": 1 },
+    { "expect": { "shop": { "owned": { "min": 1, "max": 1 }, "offers": { "min": 0, "max": 0 } } } }
+  ]
+}

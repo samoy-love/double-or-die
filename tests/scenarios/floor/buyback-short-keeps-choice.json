@@ -1,0 +1,13 @@
+{
+  "name": "Выручки не хватило — плата не взята, выбор остаётся у игрока",
+  "seed": 4,
+  "players": 1,
+  "steps": [
+    { "upgrade": { "id": "speed_up" } },
+    { "chips": { "amount": 0 } },
+    { "houseCut": true },
+    { "input": { "buttons": ["navright"] } },
+    { "tick": 1 },
+    { "expect": { "shop": { "owned": { "min": 0, "max": 0 } }, "chips": { "min": 15, "max": 15 } } }
+  ]
+}

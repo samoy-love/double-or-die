@@ -55,8 +55,10 @@ import {
   BetState,
   HOUSE,
   MAX_ACTIVE_BETS,
+  MAX_UPGRADE_SLOTS,
   SHOP_SLOTS,
   UPGRADES,
+  priceOf,
   FX_ONE,
   cashOutValue,
   nearMissOf,
@@ -1921,6 +1923,36 @@ export class Renderer {
   }
 
   /**
+   * Ценник фишками: золотой кружок и число рядом с ним.
+   *
+   * Тот же язык, что под картой пари на арене, где называется кон, — и одна
+   * функция на все экраны намеренно. Цена лежит на прилавке и на торге, и
+   * разъехавшись, они читались бы как два разных вида денег: там, где написано
+   * число, игрок обязан узнавать фишки с первого взгляда, а не разбирать
+   * подпись.
+   */
+  private priceTag(value: number, x: number, y: number, size: number, colour: Rgb): void {
+    this.batch.push(
+      Shape.Circle,
+      x - size * 2.9,
+      y,
+      size * 0.56,
+      size * 0.56,
+      0,
+      colour.r,
+      colour.g,
+      colour.b,
+      0.9,
+      0,
+      0,
+      0,
+      0,
+      0,
+    );
+    drawNumber(this.batch, value, x + size * 0.9, y, size, colour);
+  }
+
+  /**
    * Главное меню: одна крупная кнопка «Играть», остальное мельче (UX §6).
    *
    * Выбора персонажа и сложности здесь нет и в 0.4.0 не будет — на нулевой
@@ -2004,27 +2036,9 @@ export class Renderer {
        * (UX §4). Резать многоточием нечего — товар опознаётся именно именем.
        */
       this.wrapped(upgradeName(item - 1), x, h / 2 + 10, 190, 15, c);
-      // Цена — фишками и в языке арены: золотой кружок слева от числа, ровно
-      // как под картой пари, где называется кон.
-      const money = afford ? PALETTE.chip : PALETTE.danger;
-      this.batch.push(
-        Shape.Circle,
-        x - 46,
-        h / 2 + 74,
-        9,
-        9,
-        0,
-        money.r,
-        money.g,
-        money.b,
-        0.9,
-        0,
-        0,
-        0,
-        0,
-        0,
-      );
-      drawNumber(this.batch, price, x + 14, h / 2 + 74, 16, money);
+      // Цена алым, когда не хватает: решение здесь одно — «беру или коплю», —
+      // и считается оно из двух чисел, цены и кошелька.
+      this.priceTag(price, x, h / 2 + 74, 16, afford ? PALETTE.chip : PALETTE.danger);
     }
 
     const next = this.screenValue(t('house.purse'), purse, w, h / 2 + 190, 18, PALETTE.chip);
@@ -2045,8 +2059,8 @@ export class Renderer {
    * обязан показать все три, включая тот, которым игрок не воспользуется.
    *
    * Продажа апгрейда гаснет, когда продавать нечего: вариант, недоступный по
-   * состоянию, обязан выглядеть недоступным — иначе фокус упирается в
-   * молчание, а игрок ищет причину в кнопке.
+   * состоянию, обязан выглядеть недоступным — иначе игрок ищет причину в
+   * кнопке, а её там нет.
    */
   private drawHouseCutScreen(s: SimState, w: number, h: number): void {
     this.dim(w, h);
@@ -2071,34 +2085,47 @@ export class Renderer {
      * Три варианта торга — карточками в ряд, как двери, но БЕЗ бегающего
      * фокуса, и это не упрощение вёрстки.
      *
-     * В ядре у торга своей навигации нет: подтверждение берёт пари, отказ
-     * уводит в долг (`stepHouseCut`), то есть вариант выбирается КНОПКОЙ, а не
-     * курсором. Нарисованный поверх этого фокус выбирал бы что-то одно, а
-     * нажатие делало бы своё — экран врал бы ровно там, где игрок расстаётся с
-     * этажом. Поэтому у каждой карточки написана своя кнопка, и написана она
-     * по текущей схеме ввода.
+     * В ядре у торга своей навигации нет: вариант выбирается КНОПКОЙ, а не
+     * курсором (`stepHouseCut`). Нарисованный поверх этого фокус выбирал бы
+     * что-то одно, а нажатие делало бы своё — экран врал бы ровно там, где
+     * игрок расстаётся с этажом. Поэтому у каждой карточки написана своя
+     * кнопка, и написана она по текущей схеме ввода.
      *
-     * Продажа апгрейда — третий вариант GDD §12А.2 — гаснет всегда: в ядре её
-     * нет, и обещать её кнопкой нельзя (UX §2). Нарисована она всё равно:
-     * тусклая карточка говорит «такой выход у заведения есть», а пустое место
-     * не говорит ничего.
+     * Порядок карточек задан их кнопками, а не ценой варианта. Выкуп апгрейда
+     * висит на горизонтали (на торге она свободна: фокуса здесь нет), а
+     * горизонталь — это направление, и означать она имеет право только то, что
+     * лежит СЛЕВА. Поэтому выкуп крайний левый, а пари — в середине, где
+     * подтверждение и не спорит ни с какой стороной. Золотом при этом
+     * по-прежнему пари: тот же язык, что на двери и на прилавке, «вот это
+     * возьмётся, если нажать», — и это лучший из трёх выходов, потому что
+     * оставляет игроку шанс рассчитаться.
      */
     const pad = this.scheme === InputScheme.Gamepad;
     /*
-     * Золотом — то, что случится по подтверждению, и это тот же язык, что на
-     * двери и на прилавке: «вот это возьмётся, если нажать». Пари здесь и есть
-     * лучший из трёх выходов — он оставляет игроку шанс рассчитаться, — а долг
-     * остаётся равноправной, но не подсвеченной кнопкой.
+     * Что заведение даёт за апгрейд — половина цены текущего этажа
+     * (ECONOMY §10), и ноль означает «продавать нечего».
+     *
+     * Число названо, а не спрятано за словом «продать»: торг — это размен, и
+     * сравнить его не с чем, пока обе стороны сделки не показаны. Недостача
+     * стоит строкой выше, цена выкупа — под карточкой, и решение «хватит ли»
+     * считается в уме, как и на прилавке.
      */
-    const options: readonly [string, string, boolean, boolean][] = [
-      [t('haggle.bet'), pad ? t('screen.confirm.pad') : t('screen.confirm.key'), true, true],
-      [t('haggle.sell'), t('haggle.none'), false, false],
-      [t('house.debt'), pad ? t('screen.cancel.pad') : t('screen.cancel.key'), true, false],
+    const sale = buybackOf(s);
+    const options: readonly [string, string, boolean, boolean, number][] = [
+      [
+        t('haggle.sell'),
+        sale > 0 ? (pad ? t('screen.sell.pad') : t('screen.sell.key')) : t('haggle.empty'),
+        sale > 0,
+        false,
+        sale,
+      ],
+      [t('haggle.bet'), pad ? t('screen.confirm.pad') : t('screen.confirm.key'), true, true, 0],
+      [t('house.debt'), pad ? t('screen.cancel.pad') : t('screen.cancel.key'), true, false, 0],
     ];
     const gap = 360;
     const row = y + 60;
     for (let i = 0; i < options.length; i++) {
-      const [label, button, available, primary] = options[i];
+      const [label, button, available, primary, value] = options[i];
       const x = w / 2 + (i - (options.length - 1) / 2) * gap;
       const c = this.screenCard(x, row, 165, 62, primary, available);
       this.wrapped(label, x, row - 14, 300, 15, c, available ? 1 : 0.7);
@@ -2115,6 +2142,9 @@ export class Renderer {
         available ? 0.9 : 0.5,
         'center',
       );
+      // Цена выкупа — фишками, под своей карточкой: заведение платит, значит
+      // число золотое, как и всё, что в кошелёк приходит.
+      if (value > 0) this.priceTag(value, x, row + 76, 13, PALETTE.chip);
     }
 
     /*
@@ -2124,9 +2154,8 @@ export class Renderer {
      * и берётся он у той же стороны, что его назначила, а не переписывается
      * сюда числом.
      */
-    const bet = w / 2 - gap;
-    drawNumber(this.batch, cut - purse, bet - 28, row + 76, 13, PALETTE.accent);
-    drawMultiplier(this.batch, HOUSE.forcedBetMultiplier, bet + 16, row + 76, 11, PALETTE.accent);
+    drawNumber(this.batch, cut - purse, w / 2 - 28, row + 76, 13, PALETTE.accent);
+    drawMultiplier(this.batch, HOUSE.forcedBetMultiplier, w / 2 + 16, row + 76, 11, PALETTE.accent);
   }
 
   /**
@@ -2636,6 +2665,36 @@ function walletOf(s: SimState): number {
   let total = 0;
   for (let i = 0; i < s.playerCount; i++) total += s.pChips[i];
   return total;
+}
+
+/**
+ * Что заведение даёт за апгрейд в торге: половина цены ТЕКУЩЕГО этажа.
+ *
+ * Ни одного числа здесь не своего: цена считается той же `priceOf`, по которой
+ * живёт прилавок, доля выкупа берётся из `HOUSE.buybackPct`, а этаж — из
+ * состояния. Половина «средней цены» была бы враньём ровно в ту сторону, в
+ * которую игроку больно: базы у шести апгрейдов разные именно затем, чтобы
+ * одинаковых ценников не было (ECONOMY §5).
+ *
+ * Берётся САМЫЙ ДОРОГОЙ апгрейд стола. Причина не в щедрости: торг закрывает
+ * недостачу целиком (ECONOMY §10), и выкуп, названный по самому дешёвому,
+ * обещал бы игроку сделку, которой не хватает на саму сделку, — тот же дефект,
+ * из-за которого кон принудительного пари равен недостаче, а не тиру аппетита.
+ *
+ * Ноль означает «продавать нечего», и карточка на экране гаснет.
+ */
+function buybackOf(s: SimState): number {
+  const floor = s.meta[Meta.Floor];
+  let best = 0;
+  for (let p = 0; p < s.playerCount; p++) {
+    for (let i = 0; i < MAX_UPGRADE_SLOTS; i++) {
+      const held = s.pUpgrades[p * MAX_UPGRADE_SLOTS + i];
+      if (held === 0) continue;
+      const paid = Math.trunc((priceOf(UPGRADES[held - 1].base, floor) * HOUSE.buybackPct) / 100);
+      if (paid > best) best = paid;
+    }
+  }
+  return best;
 }
 
 /** Есть ли красная зона в этой комнате: карта на полу или активное пари. */

@@ -51,4 +51,4 @@ export const PROTOCOL_VERSION = 3;
  * История ре-бейзлайнов эталонных реплеев ведётся рядом с самой проверкой —
  * в `packages/tools/src/golden.ts`, там же, где эталоны и сверяются.
  */
-export const CONFIG_VERSION = '0.3.9';
+export const CONFIG_VERSION = '0.3.11';

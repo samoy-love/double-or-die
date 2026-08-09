@@ -307,12 +307,19 @@ export function findSafePoint(s: SimState, player: number): SafetyReport {
   const reach = speed * horizon + dash;
 
   // Сетка идёт по фактической арене: она растёт вместе с составом.
+  //
+  // Перебираются ВСЕ клетки в досягаемости, а не первая подходящая по
+  // порядку сканирования: раньше цикл останавливался на первой свободной
+  // клетке от угла арены, и игрок с координатами у нуля уходил в угол вместо
+  // ближайшего выхода — реальный побег на противоположной стороне арены
+  // игнорировался в пользу дальней и часто более опасной точки.
   const w = toFloat(s.arenaW);
   const h = toFloat(s.arenaH);
+  let bestDist = Infinity;
   for (let gy = GRID; gy < h; gy += GRID) {
     for (let gx = GRID; gx < w; gx += GRID) {
       const dist = Math.sqrt((gx - px) ** 2 + (gy - py) ** 2);
-      if (dist > reach) continue;
+      if (dist > reach || dist >= bestDist) continue;
       if (!isFreeSpot(s, fromFloat(gx), fromFloat(gy), PLAYER.radius)) continue;
 
       // Точка годится, если игрок оказывается там раньше, чем туда доберётся
@@ -327,13 +334,13 @@ export function findSafePoint(s: SimState, player: number): SafetyReport {
       }
       if (!ok) continue;
 
+      bestDist = dist;
       report.x = gx;
       report.y = gy;
-      return report;
     }
   }
 
-  report.ok = false;
+  report.ok = bestDist < Infinity;
   return report;
 }
 

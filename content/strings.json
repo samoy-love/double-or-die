@@ -9,11 +9,11 @@
       "bet.no_red_zone.name": "Не заходи в красную зону",
       "bet.all_chips.name": "Собери все фишки",
       "bet.demolitionist.name": "Подрывник",
-      "upgrade.damage_up.name": "Урон +25%",
+      "upgrade.damage_up.name": "Урон +20%",
       "upgrade.extra_heart.name": "+1 сердце",
       "upgrade.dash_cooldown.name": "Кулдаун рывка −30%",
       "upgrade.magnet.name": "Магнит",
-      "upgrade.drop_up.name": "Дроп +50%",
+      "upgrade.drop_up.name": "Дроп +48%",
       "upgrade.speed_up.name": "Скорость +15%",
       "settlement.title": "Расчёт",
       "ace.bark.yawn.1": "Я подожду. Мне спешить некуда.",
@@ -70,6 +70,8 @@
       "screen.confirm.key": "Enter — подтвердить",
       "screen.cancel.pad": "B — отказаться",
       "screen.cancel.key": "Q — отказаться",
+      "screen.sell.pad": "Стик влево — продать",
+      "screen.sell.key": "Стрелка влево — продать",
       "shop.title": "Лавка",
       "shop.hint": "Заведение не торгуется",
       "shop.sold": "Продано",
@@ -77,7 +79,7 @@
       "haggle.title": "Туз предлагает выбор",
       "haggle.bet": "Взять пари в следующей комнате",
       "haggle.sell": "Продать апгрейд",
-      "haggle.none": "Заведение пока не выкупает"
+      "haggle.empty": "Продавать нечего"
     },
     "en": {
       "bet.no_damage.name": "No Damage",
@@ -86,11 +88,11 @@
       "bet.no_red_zone.name": "Stay Out of the Red Zone",
       "bet.all_chips.name": "Collect Every Chip",
       "bet.demolitionist.name": "Demolitionist",
-      "upgrade.damage_up.name": "Damage +25%",
+      "upgrade.damage_up.name": "Damage +20%",
       "upgrade.extra_heart.name": "+1 Heart",
       "upgrade.dash_cooldown.name": "Dash Cooldown −30%",
       "upgrade.magnet.name": "Magnet",
-      "upgrade.drop_up.name": "Chip Drop +50%",
+      "upgrade.drop_up.name": "Chip Drop +48%",
       "upgrade.speed_up.name": "Speed +15%",
       "settlement.title": "Settlement",
       "ace.bark.yawn.1": "I can wait. Time is on the house.",
@@ -147,6 +149,8 @@
       "screen.confirm.key": "Enter to confirm",
       "screen.cancel.pad": "B to decline",
       "screen.cancel.key": "Q to decline",
+      "screen.sell.pad": "Stick left to sell",
+      "screen.sell.key": "Left arrow to sell",
       "shop.title": "Shop",
       "shop.hint": "The house does not haggle",
       "shop.sold": "Sold",
@@ -154,7 +158,7 @@
       "haggle.title": "The Ace offers a choice",
       "haggle.bet": "Take a bet in the next room",
       "haggle.sell": "Sell an upgrade",
-      "haggle.none": "The house does not buy back yet"
+      "haggle.empty": "Nothing to sell"
     }
   }
 }

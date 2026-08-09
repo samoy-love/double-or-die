@@ -45,10 +45,10 @@ export interface UpgradeSpec {
 export const UPGRADES: readonly UpgradeSpec[] = [
   {
     id: 'damage_up',
-    name: 'Урон +25%',
+    name: 'Урон +20%',
     base: 60,
     effect: UpgradeEffect.Damage,
-    value: 125,
+    value: 120,
   },
   {
     id: 'extra_heart',
@@ -73,10 +73,10 @@ export const UPGRADES: readonly UpgradeSpec[] = [
   },
   {
     id: 'drop_up',
-    name: 'Дроп +50%',
+    name: 'Дроп +48%',
     base: 40,
     effect: UpgradeEffect.Drop,
-    value: 150,
+    value: 148,
   },
   {
     id: 'speed_up',

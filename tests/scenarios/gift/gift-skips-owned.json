@@ -1,0 +1,23 @@
+{
+  "name": "Дар не дарит того, что уже есть",
+  "seed": 2,
+  "players": 1,
+  "steps": [
+    { "upgrade": { "id": "damage_up" } },
+    { "upgrade": { "id": "extra_heart" } },
+    { "upgrade": { "id": "dash_cooldown" } },
+    { "gift": true },
+    {
+      "expect": {
+        "shop": {
+          "offers": { "min": 3, "max": 3 },
+          "id": "damage_up",
+          "onSale": false,
+          "bought": true
+        }
+      }
+    },
+    { "expect": { "shop": { "id": "extra_heart", "onSale": false, "bought": true } } },
+    { "expect": { "shop": { "id": "dash_cooldown", "onSale": false, "bought": true } } }
+  ]
+}

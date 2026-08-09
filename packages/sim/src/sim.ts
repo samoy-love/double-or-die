@@ -33,8 +33,8 @@ import { stepBoss } from './boss';
 import { fire, stepBullets, stepChips } from './combat';
 import { stepDoors } from './doors';
 import { stepHouseCut } from './floor';
-import { dashCooldownOf, moveSpeedOf, stepShop } from './upgrades';
-import { clearArena, leaveFloor, leaveShop, startRoom, stepEnemies } from './enemies';
+import { dashCooldownOf, moveSpeedOf, stepReward } from './upgrades';
+import { clearArena, leaveFloor, leaveReward, startRoom, stepEnemies } from './enemies';
 import { add, FX_ONE, mul, sub } from './fixed';
 import { endRun } from './run';
 import { normalize, normX, normY, within } from './trig';
@@ -179,19 +179,19 @@ export function step(s: SimState, inputs: readonly InputFrame[]): void {
   }
 
   /*
-   * Лавка — тоже не бой, и стоит она ПОСЛЕ него: дверь обещала магазин после
-   * комнаты, а не вместо неё (GDD §5).
+   * Лавка и Дар — тоже не бой, и стоят они ПОСЛЕ него: дверь обещала магазин
+   * (или подарок) после комнаты, а не вместо неё (GDD §5).
    *
-   * Мир на ней стоит по той же причине, что на двери: игрок сравнивает три
+   * Мир на них стоит по той же причине, что на двери: игрок сравнивает три
    * ценника с тем, что через комнату-другую попросит заведение, и решение
    * «апгрейд или плата» — единственное, ради чего лавка вообще стоит на пути.
    * Принимать его под тающие карты и набегающую волну означало бы не принимать
-   * его вовсе.
+   * его вовсе. Дар не стоит ничего, но выбирают на нём столько же.
    */
   if (s.meta[Meta.Phase] === RunPhase.Reward) {
-    if (stepShop(s, inputs)) {
+    if (stepReward(s, inputs)) {
       s.tick++;
-      leaveShop(s);
+      leaveReward(s);
       s.tick--;
     }
     s.tick++;

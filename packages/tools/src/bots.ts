@@ -23,10 +23,13 @@ import {
   ANGLE_FULL,
   BetState,
   Btn,
+  DoorType,
   EnemyPhase,
   EnemyType,
   PLAYER,
   Stream,
+  UPGRADES,
+  UpgradeEffect,
   aceCardAt,
   add,
   cos,
@@ -42,8 +45,10 @@ import {
   sin,
   sub,
   withAppetite,
+  EntityFlag,
   MAX_ACTIVE_BETS,
   MAX_CARDS,
+  MAX_DOORS,
   Meta,
   RunPhase,
   MAX_CHIPS,
@@ -52,8 +57,12 @@ import {
   SHOP_SLOTS,
   canBuy,
   toFloat,
+  wheelX,
+  wheelY,
   type RngState,
 } from '@dod/sim';
+
+import { findSafePoint } from './safety';
 
 /**
  * Тир аппетита «По-крупному».
@@ -91,12 +100,18 @@ interface Skill {
   readonly dodgePct: number;
 }
 
-const SKILLS: Record<SkillName, Skill> = {
+/**
+ * Экспортирована: абстрактная модель (`abstract.ts`) выводит урон и попадания
+ * по навыку из тех же чисел, что и бот, — единственный источник, а не две
+ * копии таблицы SIMULATION §3, которые могут разъехаться порознь.
+ */
+export const SKILL_TABLE: Record<SkillName, Skill> = {
   novice: { aimPct: 60, firePct: 35, dodgePct: 30 },
   median: { aimPct: 75, firePct: 50, dodgePct: 50 },
   veteran: { aimPct: 85, firePct: 60, dodgePct: 70 },
   master: { aimPct: 93, firePct: 70, dodgePct: 85 },
 };
+const SKILLS = SKILL_TABLE;
 
 /**
  * Ось стратегии ставок. Соответствие профилям игрока из ECONOMY §6:
@@ -133,8 +148,14 @@ const STRATEGIES: Record<StrategyName, Strategy> = {
 /**
  * Прежние имена, названные в DEVLOOP §3. Остаются как есть: на них записан
  * корпус golden-эталонов и ссылаются проверки версий 0.1.0–0.3.0.
+ *
+ * `runner` — не профиль игрока и в замерах баланса не участвует, см. шапку
+ * `RunnerBot`. Он стоит в этом списке, а не среди пар «навык:стратегия»,
+ * именно потому, что осью навыка не описывается: его навык — не «мастер», а
+ * «лучше любого человека», и приписать ему долю попаданий из ECONOMY §6
+ * значило бы завести пятый профиль игрока, которого не существует.
  */
-export const LEGACY_BOT_NAMES = ['idle', 'random', 'greedy', 'cautious'] as const;
+export const LEGACY_BOT_NAMES = ['idle', 'random', 'greedy', 'cautious', 'runner'] as const;
 export type LegacyBotName = (typeof LEGACY_BOT_NAMES)[number];
 
 /** Профиль — пара «навык:стратегия», например `master:stack`. */
@@ -168,6 +189,14 @@ export interface Bot {
    */
   readonly profile: string;
   inputs(s: SimState): readonly InputFrame[];
+  /**
+   * Стратегия, которой сыгран забег — источник для осмысленного выбора двери
+   * и товара в лавке (задача 2.5). Не задана у ботов, не описывающих профиль
+   * игрока (`idle`, `random`, `greedy`, `cautious`, `runner`): им нечем
+   * определить выбор, и `passDoors`/`passReward` берут для них прежнее
+   * поведение — первую дверь, первый доступный товар слева направо.
+   */
+  readonly strategyName?: StrategyName;
 }
 
 class IdleBot implements Bot {
@@ -482,6 +511,15 @@ class CautiousBot implements Bot {
 // Профильный бот: навык × стратегия
 // ---------------------------------------------------------------------------
 
+/** Сколько пари сейчас держит игрок. */
+function activeBets(s: SimState, player: number): number {
+  let count = 0;
+  for (let n = 0; n < MAX_ACTIVE_BETS; n++) {
+    if (s.aState[player * MAX_ACTIVE_BETS + n] === BetState.Active) count++;
+  }
+  return count;
+}
+
 /**
  * Как часто бот принимает решения: раз в 10 тиков, то есть 6 Гц.
  *
@@ -517,6 +555,7 @@ const DODGE_RANGE = 260;
 
 class ProfileBot implements Bot {
   readonly profile: string;
+  readonly strategyName: StrategyName;
   private readonly frames: InputFrame[];
   private readonly rng: RngState;
   private readonly skill: Skill;
@@ -534,6 +573,7 @@ class ProfileBot implements Bot {
 
   constructor(skill: SkillName, strategy: StrategyName, seed: number, players: number) {
     this.profile = `${skill}:${strategy}`;
+    this.strategyName = strategy;
     this.skill = SKILLS[skill];
     this.strategy = STRATEGIES[strategy];
     this.frames = Array.from({ length: players }, makeFrame);
@@ -555,15 +595,6 @@ class ProfileBot implements Bot {
     return nextInt(this.rng, Stream.Waves, 100) < pct;
   }
 
-  /** Сколько пари сейчас держит игрок. */
-  private static activeBets(s: SimState, player: number): number {
-    let count = 0;
-    for (let n = 0; n < MAX_ACTIVE_BETS; n++) {
-      if (s.aState[player * MAX_ACTIVE_BETS + n] === BetState.Active) count++;
-    }
-    return count;
-  }
-
   private decide(player: number): void {
     this.firing[player] = this.roll(this.skill.firePct) ? 1 : 0;
     this.evading[player] = this.roll(this.skill.dodgePct) ? 1 : 0;
@@ -583,7 +614,7 @@ class ProfileBot implements Bot {
       const f = this.frames[i];
       const px = toFloat(s.pX[i]);
       const py = toFloat(s.pY[i]);
-      const held = ProfileBot.activeBets(s, i);
+      const held = activeBets(s, i);
 
       // Аппетит объявляется каждый тик: защёлка ядра держит его до следующего
       // явного нажатия, но переживёт ли она смену комнаты — не дело бота.
@@ -702,6 +733,264 @@ class ProfileBot implements Bot {
 }
 
 // ---------------------------------------------------------------------------
+// Проходчик: бот, доигрывающий этаж до конца
+// ---------------------------------------------------------------------------
+
+/**
+ * На какой дистанции проходчик держит ближайшего врага.
+ *
+ * Пуля живёт 1.2 с при скорости 900, то есть достаёт на 1080 единиц — больше
+ * половины арены. Значит подходить не нужно вовсе, и вся дистанция выбирается
+ * из выживания: 420 — это два тарана Клина (490 за рывок) минус то, что он
+ * успевает пройти шагом, и с такого расстояния объявленный таран уводится
+ * шагом вбок, без рывка.
+ */
+const KEEP_RANGE = 420;
+
+/** Ближе этого проходчик отступает, даже если никто ничего не объявил. */
+const TOO_CLOSE = 260;
+
+/**
+ * Дистанция уверенного огня: до неё проходчик идёт сам, если волна не
+ * добита, а не ждёт, пока враг подойдёт.
+ *
+ * `KEEP_RANGE` держит дистанцию от того, кто идёт на игрока сам — таран,
+ * снаряд. Против пассивного или далёкого врага (тот же Кирпич, отходящий,
+ * чтобы стрелять издали) держать 420 бессмысленно: тот, кто не приближается,
+ * с этой дистанции просто не добивается, а комната не считается зачищенной,
+ * пока жив хоть один. `ENGAGE_RANGE` меньше `TOO_CLOSE` больше не может — иначе
+ * подход сам включал бы отступление, — и меньше `KEEP_RANGE`, чтобы охота
+ * заканчивалась раньше, чем гистерезис снова потребует держаться подальше.
+ */
+const ENGAGE_RANGE = 300;
+
+/**
+ * Запас к расстоянию до безопасной точки, при котором тратится рывок.
+ *
+ * Рывок — не «кнопка паники»: он даёт неуязвимость на 14 тиков и 240 единиц
+ * хода, но перезаряжается 72 тика. Потраченный на угрозу, от которой уходит
+ * шаг, он не готов к той, от которой не уходит.
+ */
+const DASH_IF_FARTHER = 200;
+
+/**
+ * Проходчик — служебный боец, а не игрок и, вопреки имени, НЕ средство
+ * пройти этаж.
+ *
+ * Задуман он был именно как проходчик записи: прогон, который ДОХОДИТ ДО
+ * КОНЦА ЭТАЖА, чтобы golden-эталоны видели дверь, лавку, плату и босса, а не
+ * только первую комнату (замер, с которого всё началось: все двадцать
+ * эталонов `random` гибли в комнате 1 между тиками 802 и 1711, а лучший из
+ * шестнадцати профилей «навык:стратегия» не добирался до пятой). Замысел не
+ * состоялся: три независимые причины простоя починены по очереди —
+ * уклонение, никогда не уступавшее бою, отсутствие добивания волны, слепота
+ * к перекрытой линии огня, — и после всех трёх idleShare застрял на 95–98%.
+ * Слоёв оказалось больше, чем времени на них, и дальше этот путь не ведётся
+ * (см. запись 0.3.11 в `golden.ts`).
+ *
+ * Golden-корпус эту дыру закрыл ДРУГИМ путём — записью с подготовленного
+ * состояния (`Golden.setup`, `packages/tools/src/scenario.ts`), а не этим
+ * ботом. Класс оставлен не как заброшенный код, а как рабочий инструмент:
+ * уклоняется он не эвристикой, а той самой проверкой, которой меряется
+ * ограничитель D4, — `findSafePoint` отвечает, куда игрок УСПЕВАЕТ уйти от
+ * всех объявленных угроз, и проходчик идёт туда. Для юнит- и
+ * scenario-тестов, которым нужен участник боя, честно уклоняющийся от
+ * объявленных угроз и не проходящий этаж целиком заведомо не обязанный, он
+ * годен и годнее прежних ботов, круживших ОТ угрозы по прямой — то есть
+ * остававшихся в коридоре тарана, летящего вдвое быстрее их самих.
+ *
+ * Профилем игрока он не является и в замерах баланса участвовать не должен:
+ * человек так не играет. Ограничители ECONOMY §13 считаются по `mixed` и по
+ * парам «навык:стратегия» — там ему места нет, и SIMULATION §3 говорит об
+ * этом прямо.
+ */
+class RunnerBot implements Bot {
+  readonly profile = 'runner';
+  private readonly frames: InputFrame[];
+  private readonly rng: RngState;
+
+  /**
+   * Пари он берёт, и это не жадность: эталон, обходящий карты стороной, не
+   * покрывал бы половину состояния — ни активных пари, ни расчёта, ни Туза.
+   * Тир средний: «По-крупному» на пустом кошельке не отличается от «Скромно»,
+   * а разорившийся проходчик не купит в лавке ничего.
+   */
+  private static readonly TIER = 1;
+
+  /**
+   * Отступает ли игрок прямо сейчас. Флаг, а не пересчёт с нуля каждый тик:
+   * «уклоняюсь, пока угроза ближе TOO_CLOSE, атакую, пока дальше KEEP_RANGE»
+   * — гистерезис, а не единый список приоритетов, которым отступление было
+   * раньше. Единый список ловил игрока в петле: стоит появиться в поле
+   * зрения хоть одной объявленной угрозе — и весь тик уходит в `findSafePoint`,
+   * а не в цель или карту, даже если та угроза далеко и торопиться некуда. Раз
+   * начав отступать, бот больше не подходил стрелять, комната переставала
+   * терять врагов, и `RoomThreat` вставал намертво — не из-за смерти, а из-за
+   * того, что осторожность никогда не уступала место бою.
+   *
+   * Зазор между порогами — не то же самое, что зазор внутри `findThreat`:
+   * дрожание на границе одного числа переключало бы режим по нескольку раз
+   * за тик из-за шага противника.
+   */
+  private readonly retreating: Uint8Array;
+
+  constructor(seed: number, players: number) {
+    this.frames = Array.from({ length: players }, makeFrame);
+    this.rng = createStreams(seed ^ 0x0f100d);
+    this.retreating = new Uint8Array(players);
+  }
+
+  inputs(s: SimState): readonly InputFrame[] {
+    for (let i = 0; i < this.frames.length; i++) {
+      const f = this.frames[i];
+      f.buttons = withAppetite(Btn.Fire, RunnerBot.TIER);
+      f.moveX = 0;
+      f.moveY = 0;
+
+      if ((s.pFlags[i] & EntityFlag.Alive) === 0) continue;
+
+      const px = toFloat(s.pX[i]);
+      const py = toFloat(s.pY[i]);
+
+      this.aim(s, f, px, py);
+      this.act(s, i, f, px, py);
+      this.move(s, i, f, px, py);
+    }
+    return this.frames;
+  }
+
+  /**
+   * Куда идти. Режим переключается гистерезисом (см. `retreating`), внутри
+   * режима — свой порядок: в отступлении сначала спастись, в бою сначала
+   * взять карту, потом добить волну, потом собрать сдачу, потом держать
+   * дистанцию.
+   *
+   * Охота за врагом стоит впереди фишек не случайно: фишка никуда не
+   * убежит, а зачистка волны — это то единственное, ради чего проходчик
+   * вообще существует (см. шапку класса). Гнаться за фишкой, пока жив
+   * последний враг волны, — значит платить временем комнаты за деньги,
+   * которые эталону не нужны ради самих себя.
+   *
+   * Порядок в бою не переставляется: карта, взятая под объявленный таран,
+   * стоит сердца, а сердец три на весь забег и добавить их можно только в
+   * лавке.
+   */
+  private move(s: SimState, i: number, f: InputFrame, px: number, py: number): void {
+    findThreat(s, px, py);
+    const threatDist = foundDist;
+
+    if (this.retreating[i]) {
+      if (threatDist > KEEP_RANGE) this.retreating[i] = 0;
+    } else if (threatDist < TOO_CLOSE) {
+      this.retreating[i] = 1;
+    }
+
+    if (this.retreating[i]) {
+      const safe = findSafePoint(s, i);
+      if (safe.horizon !== Infinity) {
+        const dx = safe.x - px;
+        const dy = safe.y - py;
+        const d = Math.hypot(dx, dy);
+        if (d > 1) {
+          f.moveX = fromFloat(dx / d);
+          f.moveY = fromFloat(dy / d);
+          // Рывок — на дальнюю точку и только на готовом кулдауне: он и
+          // неуязвимость, и скорость, но потраченный впустую он не готов к
+          // следующей угрозе.
+          if (d > DASH_IF_FARTHER && s.tick >= s.pDashReady[i]) f.buttons |= Btn.Dash;
+        }
+        return;
+      }
+      // D4 гарантирует выход только от ОБЪЯВЛЕННОЙ угрозы: гистерезис мог
+      // включить отступление раньше, чем что-то объявили (порог TOO_CLOSE —
+      // про приближение, а не про телеграф). Тогда идти уже некуда в смысле
+      // D4, и отступление доигрывается тем же кодом, что и бой ниже.
+    }
+
+    // В бою — карта первой: пари двигают всё остальное состояние, ради
+    // которого эталон и пишется.
+    findCard(s, i, px, py);
+    if (foundDist < Infinity && activeBets(s, i) < MAX_ACTIVE_BETS) {
+      const len = foundDist || 1;
+      f.moveX = fromFloat(foundDX / len);
+      f.moveY = fromFloat(foundDY / len);
+      return;
+    }
+
+    findEnemy(s, px, py);
+    const enemy = foundDist;
+    const enemyX = foundDX;
+    const enemyY = foundDY;
+
+    // Волна не добита, и ближайший враг дальше дистанции уверенного огня —
+    // идём к нему сами. `KEEP_RANGE` ниже держит расстояние от того, кто сам
+    // идёт на игрока; тот, кто не идёт (отстал, отходит, ещё не заметил),
+    // с той дистанции не добивается никогда, и комната стоит.
+    if (enemy < Infinity && enemy > ENGAGE_RANGE) {
+      const len = enemy || 1;
+      f.moveX = fromFloat(enemyX / len);
+      f.moveY = fromFloat(enemyY / len);
+      return;
+    }
+
+    // Фишки собираются, когда добивать некого: они и есть кошелёк, а
+    // кошелёк — это лавка и плата заведению, то есть ровно те экраны, до
+    // которых эталон обязан дожить.
+    findChip(s, px, py);
+    if (foundDist < Infinity) {
+      const len = foundDist || 1;
+      f.moveX = fromFloat(foundDX / len);
+      f.moveY = fromFloat(foundDY / len);
+      return;
+    }
+
+    // Идти некуда — бродим, а не стоим: неподвижная мишень не проверяет ни
+    // навигацию врагов, ни спавн, ни достижимость безопасной точки.
+    if (s.tick % 30 === 0) {
+      f.moveX = fromInt(nextInt(this.rng, Stream.Waves, 3) - 1);
+      f.moveY = fromInt(nextInt(this.rng, Stream.Waves, 3) - 1);
+    }
+  }
+
+  /** Кнопки, которые не про движение: подбор карты и ответ Тузу. */
+  private act(s: SimState, i: number, f: InputFrame, px: number, py: number): void {
+    findCard(s, i, px, py);
+    if (foundDist < 60 && s.tick % 4 === 0) f.buttons |= Btn.Take;
+    // Ставку Туза принимает: ожидание по ней положительное (ECONOMY §10А), и
+    // отказ был бы игрой хуже собственного профиля.
+    if (aceCardAt(s) >= 0 && s.tick % 4 === 0) f.buttons |= Btn.Confirm;
+  }
+
+  /**
+   * Куда целиться: в босса, если он на арене, иначе в ближайшего врага.
+   *
+   * Босс не лежит в пуле врагов (`stepHits` в `boss.ts` проверяет попадания
+   * отдельно), поэтому целиться в него надо отдельно — бот, ищущий только
+   * `eActive`, стрелял бы в свиту и не снял бы с босса ни очка.
+   */
+  private aim(s: SimState, f: InputFrame, px: number, py: number): void {
+    let dx: number;
+    let dy: number;
+    if (s.meta[Meta.BossMaxHP] !== 0) {
+      dx = toFloat(wheelX(s)) - px;
+      dy = toFloat(wheelY(s)) - py;
+    } else {
+      findEnemy(s, px, py);
+      if (foundDist === Infinity) {
+        f.aimX = fromInt(1);
+        f.aimY = 0;
+        return;
+      }
+      dx = foundDX;
+      dy = foundDY;
+    }
+    const len = Math.hypot(dx, dy) || 1;
+    f.aimX = fromFloat(dx / len);
+    f.aimY = fromFloat(dy / len);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Смесь профилей
 // ---------------------------------------------------------------------------
 
@@ -763,8 +1052,14 @@ export function makeBot(name: BotName, seed: number, players: number): Bot {
   // Экран двери проходится одинаково всеми, поэтому обёрнут здесь один раз, а
   // не продублирован в шести реализациях `inputs`. Профиль пробрасывается как
   // есть: обёртка не меняет того, кем сыгран забег, а отчёт спрашивает именно
-  // это.
-  return { profile: bot.profile, inputs: (s) => passShop(s, passDoors(s, bot.inputs(s))) };
+  // это. Стратегия пробрасывается тем же путём — ею выбирается дверь и товар
+  // в лавке (задача 2.5); ботам без профиля передавать нечего, и они получают
+  // `undefined`, то есть прежнее поведение.
+  return {
+    profile: bot.profile,
+    ...(bot.strategyName !== undefined ? { strategyName: bot.strategyName } : {}),
+    inputs: (s) => passReward(s, passDoors(s, bot.inputs(s), bot.strategyName), bot.strategyName),
+  };
 }
 
 function makeRawBot(name: BotName, seed: number, players: number): Bot {
@@ -775,6 +1070,8 @@ function makeRawBot(name: BotName, seed: number, players: number): Bot {
       return new CautiousBot(seed, players);
     case 'random':
       return new RandomBot(seed, players);
+    case 'runner':
+      return new RunnerBot(seed, players);
     case 'idle':
       return new IdleBot(players);
     case 'mixed': {
@@ -789,6 +1086,44 @@ function makeRawBot(name: BotName, seed: number, players: number): Bot {
 }
 
 /**
+ * Порядок предпочтения дверей по стратегии (ECONOMY §6, задача 2.5).
+ *
+ * Числа в документах нет — ECONOMY описывает профили результатом («осторожный
+ * позволяет себе один апгрейд за забег», «наглый берёт стак на кону 50»), а не
+ * порядком выбора двери, — и порядок здесь выведен из этого результата, а не
+ * назначен произвольно:
+ *
+ *   — **Жирный бой** удваивает выплату комнаты и добавляет карту (GDD §5), то
+ *     есть повышает и доход, и число ставок разом. Это ровно то, подо что
+ *     `stack`/`chips` держат максимальный стак ставок (ECONOMY §9) — они
+ *     ставят её первой. `none` не берёт карт вовсе, и лишняя карта ему не
+ *     нужна ни разу — жирный бой для него не риск, а бой без всякой отдачи,
+ *     и он ставит его последним; `single` держит одно пари и не гонится за
+ *     дисперсией — жирный бой ему нейтрален, а не желанен.
+ *   — **Лавка и Дар** — единственный способ купить силу. `none` может
+ *     позволить себе один апгрейд за весь забег (ECONOМY §6) и обязан ловить
+ *     каждый шанс, поэтому ставит их первыми; `single`, у которого апгрейдов
+ *     больше (три-четыре за забег), тоже предпочитает их обычному бою, но не
+ *     так безусловно.
+ */
+const DOOR_PRIORITY: Record<StrategyName, readonly number[]> = {
+  none: [DoorType.Shop, DoorType.Gift, DoorType.Fight, DoorType.DebtPit, DoorType.Fat],
+  single: [DoorType.Gift, DoorType.Shop, DoorType.Fight, DoorType.DebtPit, DoorType.Fat],
+  stack: [DoorType.Fat, DoorType.Fight, DoorType.Shop, DoorType.Gift, DoorType.DebtPit],
+  chips: [DoorType.Fat, DoorType.Fight, DoorType.Shop, DoorType.Gift, DoorType.DebtPit],
+};
+
+/** Слот из предложенных дверей, ближе всего к вершине приоритета стратегии. */
+function pickDoorSlot(s: SimState, strategyName: StrategyName): number {
+  for (const type of DOOR_PRIORITY[strategyName]) {
+    for (let i = 0; i < MAX_DOORS; i++) {
+      if (s.doorType[i] === type) return i;
+    }
+  }
+  return 0;
+}
+
+/**
  * Экран двери: бот обязан его пройти, иначе headless-прогон встаёт навсегда.
  *
  * Дверь ждёт игрока, а не часов — это несущее правило экрана (UX §3), и
@@ -800,35 +1135,121 @@ function makeRawBot(name: BotName, seed: number, players: number): Bot {
  * профиле, которым реже пользуются. Первый же `npm run safety` после дверей
  * висел бы пять тысяч тиков молча.
  *
- * Выбор двери — предмет СТРАТЕГИИ, и здесь он намеренно простейший: фокус
- * ставится на первую дверь и подтверждается. Осмысленный выбор («жадный идёт
- * в Лавку, осторожный в обычный бой») приедет вместе с абстрактной моделью,
- * которой он и нужен; до неё любая эвристика была бы выдумкой, влияющей на
- * все балансные замеры.
+ * Выбор двери — предмет СТРАТЕГИИ (задача 2.5): бот без профиля (`strategyName`
+ * не задан) по-прежнему берёт первую дверь — это ботов, не изображающих игрока
+ * (idle, random, greedy, cautious, runner), не касается ни один ограничитель
+ * ECONOMY §13. Профильный бот двигает фокус к слоту, который меньше всего
+ * противоречит стратегии, и лишь затем подтверждает — кнопка нажимается через
+ * тик, потому что экран читает нажатия по фронту, а держать её — значит
+ * нажать один раз.
  */
-export function passDoors(s: SimState, frames: readonly InputFrame[]): readonly InputFrame[] {
+export function passDoors(
+  s: SimState,
+  frames: readonly InputFrame[],
+  strategyName?: StrategyName,
+): readonly InputFrame[] {
   if (s.meta[Meta.Phase] !== RunPhase.Door) return frames;
 
-  const out = frames.map((f) => ({ ...f }));
-  // Фокус ставится нажатием вправо, подтверждение — следующим кадром: оба
-  // действия читаются по фронту, и слить их в один кадр нельзя.
-  out[0].buttons |= s.meta[Meta.DoorPick] < 0 ? Btn.NavRight : Btn.Confirm;
+  const focus = s.meta[Meta.DoorPick];
+  const target = strategyName ? pickDoorSlot(s, strategyName) : 0;
+
+  let button: number;
+  if (focus < 0 || focus < target) button = Btn.NavRight;
+  else if (focus > target) button = Btn.NavLeft;
+  else button = Btn.Confirm;
+
+  const out = frames.map((f) => ({ ...f, buttons: 0 }));
+  if (s.tick % 2 === 0) out[0].buttons = button;
   return out;
 }
 
 /**
- * Лавка: бот обязан её пройти по той же причине, что и дверь.
+ * Порядок предпочтения эффектов на прилавке по стратегии (ECONOMY §5, задача
+ * 2.5). Каждая строка — не выдумка, а причина, записанная в таблице апгрейдов
+ * ECONOMY §5, применённая к тому, чем отличается стратегия от остальных трёх:
+ *
+ *   — `none`: сердце — «единственная покупка, работающая после ошибки, а не
+ *     до неё» (ECONOMY §5), и осторожный, копящий на единственный апгрейд за
+ *     забег, берёт именно её. Кулдаун рывка — следующий: рывок «главный
+ *     инструмент выживания» у того, кто не лечится ставками.
+ *   — `single`: одно пари, обналичивает при потере сердца (`cashOutOnHurt`) —
+ *     то есть боится урона больше прочих. Урон пули «прямее всех двигает
+ *     время убийства», то есть время под угрозой (ECONOMY §5) — ему первым.
+ *   — `stack`: держит стак ставок и не обналичивает никогда — карты его не
+ *     отпускают до расчёта, поэтому не терять кулдаун важнее, чем у прочих:
+ *     рывок «главный инструмент выживания» (ECONOMY §5) стоит первым, сердце
+ *     вторым.
+ *   — `chips`: ходит за фишками на полу — «Магнит» и «Дроп» прямо умножают то,
+ *     ради чего профиль заведён (ECONOMY §4), и стоят первыми только у него.
+ */
+const SHOP_PRIORITY: Record<StrategyName, readonly UpgradeEffect[]> = {
+  none: [
+    UpgradeEffect.Heart,
+    UpgradeEffect.DashCooldown,
+    UpgradeEffect.Damage,
+    UpgradeEffect.Magnet,
+    UpgradeEffect.Drop,
+    UpgradeEffect.Speed,
+  ],
+  single: [
+    UpgradeEffect.Damage,
+    UpgradeEffect.Heart,
+    UpgradeEffect.DashCooldown,
+    UpgradeEffect.Speed,
+    UpgradeEffect.Magnet,
+    UpgradeEffect.Drop,
+  ],
+  stack: [
+    UpgradeEffect.DashCooldown,
+    UpgradeEffect.Heart,
+    UpgradeEffect.Damage,
+    UpgradeEffect.Speed,
+    UpgradeEffect.Magnet,
+    UpgradeEffect.Drop,
+  ],
+  chips: [
+    UpgradeEffect.Magnet,
+    UpgradeEffect.Drop,
+    UpgradeEffect.Damage,
+    UpgradeEffect.DashCooldown,
+    UpgradeEffect.Heart,
+    UpgradeEffect.Speed,
+  ],
+};
+
+/**
+ * Слот прилавка, ближе всего к вершине приоритета стратегии и по карману.
+ * Минус один — приоритетного и доступного нет, вызывающий берёт прежнее
+ * поведение (первый доступный слева направо).
+ */
+function pickShopSlot(s: SimState, strategyName: StrategyName): number {
+  for (const effect of SHOP_PRIORITY[strategyName]) {
+    for (let i = 0; i < SHOP_SLOTS; i++) {
+      const item = s.shopItem[i];
+      if (item === 0 || UPGRADES[item - 1].effect !== effect) continue;
+      if (canBuy(s, 0, i)) return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Лавка и Дар: бот обязан пройти их по той же причине, что и дверь.
  *
  * Экран ждёт игрока (ECONOMY §5: покупка конкурирует с долей заведения, а
  * такое решение не принимают по таймеру), и прогон, которому некому нажать
  * кнопку, встаёт на нём навсегда — молча и до конца отведённых тиков.
  *
- * Поведение простейшее и намеренно жадное: слева направо купить всё, на что
- * хватает, и уйти. Осмысленный выбор («сначала сердце, потом урон») — предмет
- * стратегии и приедет вместе с абстрактной моделью; до неё любая эвристика
- * была бы выдумкой, влияющей на все балансные замеры. Но НЕ покупать нельзя:
- * ограничители G2 и G3 считают купленное за забег, и бот, уходящий с полным
- * кошельком, обнулял бы оба.
+ * Дар проходится тем же кодом: ценник у него нулевой, `canBuy` пропускает
+ * первое же предложение, а взятый апгрейд закрывает экран сам.
+ *
+ * Выбор товара — предмет СТРАТЕГИИ (задача 2.5): бот без профиля идёт слева
+ * направо и берёт первое доступное, как и раньше — это ботов, не изображающих
+ * игрока, не касается ни один ограничитель ECONOMY §13. Профильный бот сперва
+ * ищет слот с товаром по вершине своего приоритета (`pickShopSlot`); нет
+ * такого — падает на то же поведение слева направо, потому что НЕ купить
+ * нельзя: ограничители G2 и G3 считают купленное за забег, и бот, уходящий с
+ * полным кошельком, обнулял бы оба.
  *
  * Кнопка отпускается через тик, и это не стиль, а условие работоспособности:
  * экран читает нажатия по фронту, а удержанная кнопка срабатывает ровно
@@ -836,12 +1257,19 @@ export function passDoors(s: SimState, frames: readonly InputFrame[]): readonly 
  * товаре навсегда — и прогон вместе с ним. `canBuy` при этом спрашивается тот
  * же самый, что и в покупке: разъедься они, бот жал бы «купить» вечно.
  */
-export function passShop(s: SimState, frames: readonly InputFrame[]): readonly InputFrame[] {
+export function passReward(
+  s: SimState,
+  frames: readonly InputFrame[],
+  strategyName?: StrategyName,
+): readonly InputFrame[] {
   if (s.meta[Meta.Phase] !== RunPhase.Reward) return frames;
 
   const focus = s.meta[Meta.DoorPick];
+  const target = strategyName ? pickShopSlot(s, strategyName) : -1;
+
   let button: number;
   if (focus < 0) button = Btn.NavRight;
+  else if (target >= 0 && focus !== target) button = focus < target ? Btn.NavRight : Btn.NavLeft;
   else if (canBuy(s, 0, focus)) button = Btn.Confirm;
   else if (focus < SHOP_SLOTS - 1) button = Btn.NavRight;
   else button = Btn.Cancel;
