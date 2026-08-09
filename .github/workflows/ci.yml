@@ -507,3 +507,46 @@ jobs:
   # `build` слит в задачу `quality` выше: у него не было ни отдельного
   # сетевого шага, ни явной причины стоять изолированно от линта — только
   # соседние по смыслу шаги (сборка, отладочный API, бенч, ассеты).
+
+  # Переименование или слияние задач CI не красит прогон в красный — красной
+  # становится защита ветки, и только через день, на СЛЕДУЮЩЕМ PR: main ждёт
+  # проверку по старому имени вечно, а "Merge" молчит о причине. Руками это
+  # правится в Settings → Branches, но руками же и забывается.
+  #
+  # GITHUB_TOKEN сюда не годится: у него в принципе нет permission scope для
+  # чтения защиты ветки (полный список — actions, artifact-metadata,
+  # attestations, checks, contents, deployments, discussions, id-token,
+  # issues, models, packages, pages, pull-requests, repository-projects,
+  # security-events, statuses; administration среди них нет, хотя REST API и
+  # называет его так). Отсюда PROTECTION_READ_TOKEN — fine-grained PAT с
+  # двумя правами: Administration: Read-only (список обязательных проверок) и
+  # Actions: Read-only (список задач текущего прогона — тем же токеном
+  # читаются обе стороны сравнения). Лежит в secrets репозитория и
+  # передаётся только этому шагу, а не всей задаче.
+  protection-sync:
+    name: Защита ветки соответствует задачам CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # needs — не про очерёдность результата, а про то, что видит Jobs API.
+    # GitHub регистрирует задачу с зависимостями в API прогона только когда
+    # её needs выполнены и она реально стартовала — без needs эта задача
+    # финиширует за секунды и застаёт API в момент, когда половина остальных
+    # задач ещё не создана, а не пропущена. Итог — те же ложные "пропала
+    # проверка", от которых задача должна защищать.
+    needs:
+      - quality
+      - supply-chain
+      - determinism
+      - cross-platform
+      - hooks
+      - workflows
+      - e2e
+    if: always()
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Сверить задачи с обязательными проверками main
+        env:
+          GH_TOKEN: ${{ secrets.PROTECTION_READ_TOKEN }}
+          SELF_JOB_NAME: Защита ветки соответствует задачам CI
+        run: bash ci/branch-protection-check.sh
