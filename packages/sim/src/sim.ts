@@ -23,6 +23,7 @@ import {
 import {
   BetId,
   acceptAceBet,
+  cashOut,
   cashOutBest,
   declineAceBet,
   failBetId,
@@ -38,7 +39,7 @@ import { clearArena, leaveFloor, leaveReward, startRoom, stepEnemies } from './e
 import { add, FX_ONE, mul, sub } from './fixed';
 import { endRun } from './run';
 import { normalize, normX, normY, within } from './trig';
-import { type InputFrame, Btn, appetiteOf, isDown, schemeOf } from './input';
+import { type InputFrame, Btn, appetiteOf, cashOutTargetOf, isDown, schemeOf } from './input';
 import { Curse, DoorType, EntityFlag, Meta, RunPhase, type SimState } from './state';
 
 /** Поставить игроков в стартовые позиции и начать первую комнату. */
@@ -369,18 +370,25 @@ function stepBetInput(s: SimState, i: number, inp: InputFrame): void {
   s.pScheme[i] = schemeOf(inp);
 
   if ((pressed & Btn.Take) !== 0) tryTakeCard(s, i);
-  if ((pressed & Btn.CashOut) !== 0) cashOutBest(s, i);
+  if ((pressed & Btn.CashOut) !== 0) {
+    // Поштучный забор (доступность, выключено по умолчанию): клиент шлёт
+    // явную цель только когда игрок сам её выбрал крестовиной ← → — иначе
+    // цель молчит, и «Забрать» ведёт себя как раньше (`cashOutTargetOf`).
+    const target = cashOutTargetOf(inp);
+    if (target >= 0) cashOut(s, i, target);
+    else cashOutBest(s, i);
+  }
   if ((pressed & Btn.Accept) !== 0) skipSettlement(s);
 
   /*
-   * Ставка Туза: экранное решение, а не боевое действие (GDD §12А.1).
+   * Ставка Крупье: экранное решение, а не боевое действие (GDD §12А.1).
    *
    * Экранные биты, а не `Accept`/`Decline`: те принадлежат «Удвоим?», и
    * смысл бита не имеет права зависеть от того, что сейчас на экране, — кадр
    * ввода обязан читаться сам по себе (input.ts). Оба — по фронту нажатия:
    * зажатый курок не должен подписывать за игрока пари на четверть кошелька.
    *
-   * Когда карты Туза нет, оба вызова не делают ничего, и это не расточительно:
+   * Когда карты Крупье нет, оба вызова не делают ничего, и это не расточительно:
    * два сравнения на игрока против отдельного признака «идёт ли предложение»,
    * который пришлось бы держать слотом состояния.
    */

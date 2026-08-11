@@ -7,11 +7,13 @@
 
 import {
   withAppetite,
+  withCashOutTarget,
   Btn,
   fromFloat,
   type InputFrame,
   InputScheme,
   makeFrame,
+  MAX_ACTIVE_BETS,
   SCHEME_SHIFT,
 } from '@dod/sim';
 
@@ -36,6 +38,8 @@ const MOUSE_WAKE = 12;
 /** Номера кнопок в стандартной раскладке Gamepad API. */
 const PAD_DPAD_UP = 12;
 const PAD_DPAD_DOWN = 13;
+const PAD_DPAD_LEFT = 14;
+const PAD_DPAD_RIGHT = 15;
 const PAD_START_BTN = 9;
 /**
  * Кнопки экранных решений: RB подтверждает, B отказывает.
@@ -43,7 +47,7 @@ const PAD_START_BTN = 9;
  * Ни одной из четырёх лицевых взять нельзя, и это следствие правила «смысл
  * бита не зависит от того, что сейчас на экране» (UX §2). A — рывок, LT —
  * подбор карты, Y — «Удвоим?» и пропуск расчёта: каждая из них живёт В БОЮ, а
- * Ставка Туза предлагается экраном ПОВЕРХ боя (GDD §12А.1) и принимается тем
+ * Ставка Крупье предлагается экраном ПОВЕРХ боя (GDD §12А.1) и принимается тем
  * же битом `Confirm`. Общая кнопка означала бы, что уворот рывком подписывает
  * пари на четверть кошелька, — ровно тот дефект, ради которого экранные биты и
  * заводились отдельными.
@@ -110,6 +114,8 @@ export const SCREEN_BINDINGS: readonly ScreenBinding[] = [
 const PAD_UP = 1 << 0;
 const PAD_DOWN = 1 << 1;
 const PAD_START = 1 << 2;
+const PAD_LEFT = 1 << 3;
+const PAD_RIGHT = 1 << 4;
 
 interface Held {
   dash: number;
@@ -150,6 +156,19 @@ export class InputSource {
   private appetiteStep = 0;
   /** Кнопки пада прошлого опроса: см. `PAD_UP` — фронт считаем сами. */
   private padPrev = 0;
+
+  /**
+   * Поштучный забор (доступность): включается настройкой, читается снаружи.
+   *
+   * Живёт в слое ввода, а не передаётся параметром `poll()` каждый кадр,
+   * потому что настройка меняется редко, а `poll()` — на каждом тике;
+   * отдельный сеттер дешевле, чем протаскивать пятый аргумент через весь путь.
+   */
+  cashOutFocusedOnly = false;
+  /** Текущая цель поштучного забора, 0..MAX_ACTIVE_BETS−1. Крутится по кругу. */
+  private cashOutFocus = 0;
+  /** Сдвиг цели: крестовина ← → и стрелки на клавиатуре — по фронту нажатия. */
+  private cashOutStep = 0;
 
   /**
    * Позвать один раз, как только игрок что-нибудь нажал.
@@ -203,6 +222,11 @@ export class InputSource {
       this.scheme = InputScheme.Keyboard;
       if (fresh) {
         this.appetiteKey(e.code);
+        // Поштучный забор: те же стрелки, что двигают фокус экранов
+        // (`SCREEN_BINDINGS`), — конфликта нет, потому что цикл цели
+        // работает только в бою, а фокус экрана — только на паузе.
+        if (e.code === 'ArrowLeft') this.cashOutStep -= 1;
+        if (e.code === 'ArrowRight') this.cashOutStep += 1;
         // Дубль паузы на `P` обязателен: в веб-сборке Esc выбивает из
         // полноэкранного режима и снимает захват курсора, и до игры он
         // доходит не всегда (UX §2).
@@ -396,10 +420,14 @@ export class InputSource {
       if (pad.buttons[PAD_DPAD_UP]?.pressed) level |= PAD_UP;
       if (pad.buttons[PAD_DPAD_DOWN]?.pressed) level |= PAD_DOWN;
       if (pad.buttons[PAD_START_BTN]?.pressed) level |= PAD_START;
+      if (pad.buttons[PAD_DPAD_LEFT]?.pressed) level |= PAD_LEFT;
+      if (pad.buttons[PAD_DPAD_RIGHT]?.pressed) level |= PAD_RIGHT;
       const fresh = level & ~this.padPrev;
       if ((fresh & PAD_UP) !== 0) this.appetiteStep += 1;
       if ((fresh & PAD_DOWN) !== 0) this.appetiteStep -= 1;
       if ((fresh & PAD_START) !== 0) this.pauseToggle?.();
+      if ((fresh & PAD_LEFT) !== 0) this.cashOutStep -= 1;
+      if ((fresh & PAD_RIGHT) !== 0) this.cashOutStep += 1;
       this.padPrev = level;
     } else {
       this.padPrev = 0;
@@ -484,6 +512,19 @@ export class InputSource {
     const tier = this.pickAppetite(appetite);
     if (tier >= 0) buttons = withAppetite(buttons, tier);
 
+    /*
+     * Поштучный забор: цель кодируется в кадр, только пока настройка
+     * включена. Выключенная — крестовина ← → крутит курсор впустую, кадр
+     * молчит, и «Забрать» ведёт себя как раньше (`cashOutTargetOf` в ядре).
+     */
+    if (this.cashOutStep !== 0) {
+      this.cashOutFocus =
+        (((this.cashOutFocus + this.cashOutStep) % MAX_ACTIVE_BETS) + MAX_ACTIVE_BETS) %
+        MAX_ACTIVE_BETS;
+      this.cashOutStep = 0;
+    }
+    if (this.cashOutFocusedOnly) buttons = withCashOutTarget(buttons, this.cashOutFocus);
+
     // Схема ввода едет в КАЖДОМ кадре: это его свойство, а не настройка
     // клиента (TECH §6). Ядро зеркалит её в `pScheme`, и по ней раскладка
     // решает, какие пари игроку вообще предлагать (GDD §9.5).
@@ -500,6 +541,28 @@ export class InputSource {
   /** Схема, которой играют прямо сейчас: нужна интерфейсу для глифов кнопок. */
   get inputScheme(): InputScheme {
     return this.scheme;
+  }
+
+  /** Курсор мыши в единицах арены (1920×1080) — меню наводится им, не только стиком. */
+  get mousePosition(): readonly [number, number] {
+    return [this.mouseX, this.mouseY];
+  }
+
+  /**
+   * Уровень `Space`, отдельно от общего `Confirm`.
+   *
+   * `Space` в бою — рывок (`Btn.Dash`), и он же читается во время Ставки
+   * Крупье (`acceptAceBet` слушает `Btn.Confirm`) — общий бит подписал бы
+   * пари каждым уворотом. Меню — единственное место, где `Space` безопасно
+   * значит «подтвердить», и там читается этот геттер напрямую, мимо маски.
+   */
+  get spaceDown(): boolean {
+    return this.keys.has('Space');
+  }
+
+  /** Текущая цель поштучного забора — рендеру нечем иначе подсветить плашку. */
+  get cashOutTarget(): number {
+    return this.cashOutFocus;
   }
 
   /** Снять всё удерживаемое: клавиши, мышь и буферизованные нажатия. */

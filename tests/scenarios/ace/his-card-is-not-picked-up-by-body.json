@@ -1,12 +1,12 @@
 {
-  "name": "Карту Туза не подобрать телом: решение принимается экраном, а не ногами",
+  "name": "Карту Крупье не подобрать телом: решение принимается экраном, а не ногами",
   "seed": 1,
   "players": 1,
   "steps": [
     { "clear": true },
     { "chips": { "amount": 100 } },
     { "aceBet": { "id": "no_dash" } },
-    { "expect": { "cards": { "id": "no_dash", "owner": "туз" } } },
+    { "expect": { "cards": { "id": "no_dash", "owner": "крупье" } } },
     { "place": { "x": 960, "y": 540 } },
     { "input": { "buttons": ["take"] } },
     { "tick": 1 },

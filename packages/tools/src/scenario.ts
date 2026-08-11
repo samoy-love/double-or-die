@@ -150,7 +150,7 @@ const CARD_OWNERS: Record<string, number> = {
   shared: SHARED,
   общая: SHARED,
   ace: ACE,
-  туз: ACE,
+  крупье: ACE,
   player0: 0,
   player1: 1,
   player2: 2,
@@ -244,7 +244,7 @@ export interface BossExpectation {
 }
 
 /**
- * Ставка Туза: висит ли предложение, на сколько и сколько ему уже отдано.
+ * Ставка Крупье: висит ли предложение, на сколько и сколько ему уже отдано.
  *
  * Кон проверяется числом, а не формулой: формула живёт в одном месте
  * (`aceStakeFor`), и сценарий, повторяющий её, зеленел бы вместе с ошибкой в
@@ -256,7 +256,7 @@ export interface AceExpectation {
   offer?: boolean;
   /** Его кон: по принятой ставке, а пока она не принята — по предложению. */
   stake?: Range;
-  /** Отдано Тузу за забег. */
+  /** Отдано Крупье за забег. */
   paid?: Range;
 }
 
@@ -400,7 +400,7 @@ export type Step =
    */
   | { houseCut: true }
   /**
-   * Туз выкладывает свою карту.
+   * Крупье выкладывает свою карту.
    *
    * Названным пари, а не тем, что выпадет: расписание выходов проверяется
    * своим тестом, а сценарий про выплату обязан знать, какое условие он
@@ -878,7 +878,7 @@ function checkCards(s: SimState, e: CardsExpectation): string[] {
      *
      * Раньше здесь стояло −2 как заведомо невозможный владелец. Значение
      * перестало быть невозможным ровно в тот день, когда карту начал класть
-     * Туз (`ACE`), — и сценарий, ждавший его карту, сообщал бы, что её нет,
+     * Крупье (`ACE`), — и сценарий, ждавший его карту, сообщал бы, что её нет,
      * держа её в руках. Сентинел, который однажды становится законным
      * значением, — это ошибка, ждущая своего коммита.
      */
@@ -1008,7 +1008,7 @@ function checkBoss(s: SimState, e: BossExpectation): string[] {
 }
 
 /**
- * Ставка Туза.
+ * Ставка Крупье.
  *
  * Кон ищется сперва среди принятых, и только потом среди предложенных: после
  * принятия он ЗАФИКСИРОВАН, а кошелёк за бой меняется — и проверка по
@@ -1020,7 +1020,7 @@ function checkAce(s: SimState, e: AceExpectation, player: number): string[] {
 
   if (e.offer !== undefined) {
     const on = card >= 0;
-    if (on !== e.offer) out.push(`карта Туза на столе = ${on}, ожидалось ${e.offer}`);
+    if (on !== e.offer) out.push(`карта Крупье на столе = ${on}, ожидалось ${e.offer}`);
   }
   if (e.stake) {
     let stake = -1;
@@ -1029,9 +1029,9 @@ function checkAce(s: SimState, e: AceExpectation, player: number): string[] {
       if (s.aState[k] !== BetState.None && s.aStake[k] < 0) stake = -s.aStake[k];
     }
     if (stake < 0) stake = card >= 0 ? aceStakeFor(s, player) : 0;
-    push(out, checkRange(`кон Туза против игрока ${player}`, stake, e.stake));
+    push(out, checkRange(`кон Крупье против игрока ${player}`, stake, e.stake));
   }
-  if (e.paid) push(out, checkRange('отдано Тузу', s.meta[Meta.PaidToAce], e.paid));
+  if (e.paid) push(out, checkRange('отдано Крупье', s.meta[Meta.PaidToAce], e.paid));
   return out;
 }
 
@@ -1220,7 +1220,7 @@ export function applyStep(s: SimState, frames: InputFrame[], st: ActionStep): vo
   } else if ('bet' in st) {
     const p = st.bet.player ?? 0;
     const stake = st.bet.stake ?? 10;
-    // Кон никогда не превышает кошелёк — Туз в кредит не принимает
+    // Кон никогда не превышает кошелёк — Крупье в кредит не принимает
     // (GDD §11). Сценарий, ставящий больше, чем есть, проверял бы
     // экономику, которой не бывает, поэтому это ошибка сценария.
     if (stake > s.pChips[p]) {

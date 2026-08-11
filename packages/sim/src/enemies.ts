@@ -32,6 +32,8 @@ import {
   FUSE,
   PLAYER,
   ROOMS_PER_FLOOR,
+  ROOM_PAYOUT,
+  UPGRADE,
   WAVE,
   WEDGE,
   roomGapTicksFor,
@@ -99,8 +101,22 @@ const targeting = new Int32Array(MAX_PLAYERS);
  * Порядок множителей важен для целых чисел: этаж применяется последним и
  * сдвигом, поэтому деление на 10000 не съедает младшие разряды дважды.
  */
+/**
+ * Множитель роста по комнате — излом, не прямая: пологий участок до
+ * `WAVE.roomGrowthKink`, крутой после. Раздельная функция, а не строчка
+ * внутри `roomBudget`, потому что излом использует и планировщик здоровья
+ * (`startRoom` лечит на первой комнате крутого участка) — считать точку
+ * излома в двух местах по-разному значило бы разъехаться молча.
+ */
+function roomGrowthFactor(room: number): number {
+  const kink = WAVE.roomGrowthKink;
+  if (room <= kink) return 100 + WAVE.roomGrowthEarlyPct * (room - 1);
+  const atKink = 100 + WAVE.roomGrowthEarlyPct * (kink - 1);
+  return atKink + WAVE.roomGrowthLatePct * (room - kink);
+}
+
 export function roomBudget(room: number, players: number, floor = 1): number {
-  const roomFactor = 100 + WAVE.roomGrowthPct * (room - 1);
+  const roomFactor = roomGrowthFactor(room);
   const playerFactor = 100 + WAVE.playerGrowthPct * (players - 1);
   const base = Math.trunc((WAVE.baseBudget * roomFactor * playerFactor) / 10000);
   return base << (floor - 1);
@@ -112,7 +128,7 @@ export function roomBudget(room: number, players: number, floor = 1): number {
  * Рядовые враги в бою с боссом есть, и запас прочности самого босса в бюджет
  * не входит (DIFFICULTY §8). Причина ставочная, а не боевая: прогресс четырёх
  * из шести стартовых пари считается долей зачищенной угрозы, и нулевой бюджет
- * означал бы, что в боссовой комнате они не двигаются вовсе, а Туз не
+ * означал бы, что в боссовой комнате они не двигаются вовсе, а Крупье не
  * приходит с картой ни разу — порог подброса считается оттуда же.
  */
 export const bossRoomBudget = (floor: number, players: number): number =>
@@ -130,9 +146,9 @@ export const onScreenCap = (players: number): number =>
  */
 export function startRoom(s: SimState, room: number): void {
   /*
-   * Порядок здесь несущий: Туз, расчёт, раздача.
+   * Порядок здесь несущий: Крупье, расчёт, раздача.
    *
-   * Сначала сбрасывается Туз — новая комната начинается с чистого бюджета
+   * Сначала сбрасывается Крупье — новая комната начинается с чистого бюджета
    * выходов и без чужого жеста. Потом он выходит принимать расчёт, и только
    * потом идёт сам расчёт: жесты, которые тот породит, попадают в уже стоящее
    * тело. Обратный порядок стоил дефекта — раздача, шедшая последней, стирала
@@ -146,7 +162,7 @@ export function startRoom(s: SimState, room: number): void {
   // насколько не хватило. Слоты освобождаются, когда начинается бой.
   settleBets(s);
 
-  // Дошёл до новой комнаты — серия смертей прервана, и Тузу снова можно
+  // Дошёл до новой комнаты — серия смертей прервана, и Крупье снова можно
   // шутить: правило дозировки защищает от добивания, а не запрещает юмор.
   if (room > 1) s.meta[Meta.DeathStreak] = 0;
 
@@ -198,6 +214,24 @@ export function startRoom(s: SimState, room: number): void {
   // долг забирает темп, а не деньги, и растянутый на этаж он забирал бы этаж.
   expireCurse(s);
 
+  /*
+   * Передышка на изломе бюджета угрозы (playtest 0.3.1, DIFFICULTY §4).
+   *
+   * Ровно там, где рост бюджета переходит с пологого участка на крутой
+   * (`WAVE.roomGrowthKink`), живые получают два сердца — компенсация
+   * ускорения, которое начинается в этой же комнате. Одного сердца не
+   * хватило: читер-тест (100% точность/уклонение) всё ещё не доживал даже с
+   * ним. Один раз за этаж: комната с этим номером встречается на каждом
+   * этаже ровно однажды, повторного срабатывания в том же забеге нет по
+   * построению.
+   */
+  if (room === WAVE.roomGrowthKink) {
+    for (let p = 0; p < s.playerCount; p++) {
+      if ((s.pFlags[p] & EntityFlag.Alive) === 0) continue;
+      s.pHearts[p] = Math.min(UPGRADE.maxHearts, s.pHearts[p] + 2);
+    }
+  }
+
   s.meta[Meta.Room] = room;
   s.meta[Meta.Wave] = 0;
   s.meta[Meta.WaveBudget] = 0;
@@ -209,7 +243,11 @@ export function startRoom(s: SimState, room: number): void {
 
   // Бюджет комнаты целиком — знаменатель прогресса удержаний. Считается один
   // раз при входе: волны берут из него, а пари меряют по нему пройденный путь.
-  s.meta[Meta.RoomThreat] = roomBudget(room, s.playerCount, s.meta[Meta.Floor]);
+  // Жирный бой добавляет +50% (GDD §5) — та же добровольная сложность за
+  // деньги, что и у пари, только на уровне всей комнаты.
+  const budget = roomBudget(room, s.playerCount, s.meta[Meta.Floor]);
+  s.meta[Meta.RoomThreat] =
+    s.meta[Meta.RoomType] === DoorType.Fat ? Math.round(budget * 1.5) : budget;
   s.meta[Meta.ThreatCleared] = 0;
   dealCards(s);
   // И его собственная карта — раз в два-три боя (GDD §12А.1). Строго ПОСЛЕ
@@ -518,11 +556,33 @@ function stepWaves(s: SimState): void {
  * и импорта оттуда тут нет намеренно: волны зовут эту функцию, а босс зовёт
  * волны, — встречный импорт замкнул бы модули в цикл.
  */
+/**
+ * Базовая выплата за расчищенную комнату (ECONOMY §4) — второй источник
+ * дохода рядом с дропом фишек. `min(тир, кошелёк)` не применяется: это не
+ * ставка, а гарантированный доход, ради которого «сдавливание» (ECONOMY §6)
+ * вообще сходится для осторожного игрока, не берущего пари.
+ *
+ * Кооп-множитель `0.5 + 0.5/N`, как и у доли заведения (ECONOMY §11), но
+ * записан через целые числа: `(N+1)/(2N)` — то же значение без деления с
+ * плавающей точкой.
+ */
+function payRoomClear(s: SimState): void {
+  const amount = ROOM_PAYOUT.base + ROOM_PAYOUT.perFloor * (s.meta[Meta.Floor] - 1);
+  const n = s.playerCount;
+  const payout = Math.trunc((amount * (n + 1)) / (n * 2));
+  for (let p = 0; p < n; p++) {
+    if ((s.pFlags[p] & EntityFlag.Alive) === 0) continue;
+    s.pChips[p] += payout;
+  }
+}
+
 function advanceRoom(s: SimState): void {
   if (s.meta[Meta.Phase] === RunPhase.Summary) return;
   // Пока босс жив, комнату не кончает даже пустая арена: волны в боссовой
   // комнате идут наравне с ним, а конец ей ставит его смерть.
   if (s.meta[Meta.Phase] === RunPhase.Boss && s.meta[Meta.BossMaxHP] !== 0) return;
+
+  payRoomClear(s);
 
   /*
    * Дверь «Лавка» обещала бой И магазин после него (GDD §5) — вот он.
@@ -985,8 +1045,22 @@ function orbit(s: SimState, i: number, dx: Fx, dy: Fx): void {
   const flipped = (s.eFlags[i] & EntityFlag.OrbitFlip) !== 0;
   const side = ((i & 1) === 0) !== flipped ? 1 : -1;
 
-  // Радиальная составляющая держит свою полосу, тангенциальная ведёт по кругу.
-  const closing = distance > preferred ? ENEMIES[EnemyType.Wedge].speed : -WEDGE.orbitSpeed;
+  /*
+   * Радиальная составляющая держит свою полосу, тангенциальная ведёт по кругу.
+   *
+   * Зона нечувствительности вокруг `preferred` (`WEDGE.orbitDeadband`) —
+   * без неё враг, зависший ровно на границе, каждый тик дёргался между
+   * сближением и отходом (playtest 0.3.1: «вибрируют, быстро меняют
+   * направление»). Внутри полосы враг только обходит по кругу, не подходит
+   * и не отступает.
+   */
+  const delta = sub(distance, preferred);
+  const closing =
+    delta > WEDGE.orbitDeadband
+      ? ENEMIES[EnemyType.Wedge].speed
+      : delta < -WEDGE.orbitDeadband
+        ? -WEDGE.orbitSpeed
+        : 0;
   s.eVX[i] = add(mul(towardX, closing), mul(-towardY * side, WEDGE.orbitSpeed));
   s.eVY[i] = add(mul(towardY, closing), mul(towardX * side, WEDGE.orbitSpeed));
 }

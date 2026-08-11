@@ -69,6 +69,10 @@ async function main(): Promise<void> {
   if (profile.problem) log('save_recovered', { source: profile.source, problem: profile.problem });
   loop.audio.setVolume(profile.save.settings.volume);
   loop.feel.flashScale = profile.save.settings.flash;
+  loop.setCashOutFocusedOnly(profile.save.settings.cashOutFocusedOnly);
+  // Настройка меняется из экрана настроек (`loop.ts`), а не только на
+  // загрузке — сейв обязан узнать об этом сразу, а не при следующем визите.
+  loop.onSettingsChange((cashOutFocusedOnly) => profile.set({ settings: { cashOutFocusedOnly } }));
   /*
    * Забег считается на старте, а не по итогам: до экрана итогов игрок может
    * закрыть вкладку, и несчитанные забеги обесценили бы сам счётчик.

@@ -38,6 +38,16 @@ export interface Settings {
    * звуком, а не выводится из него.
    */
   flash: number;
+  /**
+   * Поштучный забор пари (доступность, выключено по умолчанию).
+   *
+   * По умолчанию «Забрать» цепляет самое выгодное активное пари
+   * (`cashOutBest`). Игроку с моторными или когнитивными ограничениями
+   * сложно оценить, какое пари сейчас «самое выгодное», за доли секунды в
+   * бою; включённая настройка отдаёт крестовину ← → под выбор цели, и
+   * «Забрать» берёт ровно то пари, что выбрано (`packages/sim/src/input.ts`).
+   */
+  cashOutFocusedOnly: boolean;
 }
 
 export interface Save {
@@ -54,7 +64,7 @@ export interface Save {
 export const DEFAULT_SAVE: Readonly<Save> = Object.freeze({
   version: SAVE_VERSION,
   lang: 'ru' as Lang,
-  settings: Object.freeze({ volume: 0.7, flash: 1 }),
+  settings: Object.freeze({ volume: 0.7, flash: 1, cashOutFocusedOnly: false }),
   keys: 0,
   runs: 0,
 });
@@ -178,6 +188,7 @@ function normalize(o: Record<string, unknown>): Save {
     settings: {
       volume: unit(settings.volume, DEFAULT_SAVE.settings.volume),
       flash: unit(settings.flash, DEFAULT_SAVE.settings.flash),
+      cashOutFocusedOnly: bool(settings.cashOutFocusedOnly, DEFAULT_SAVE.settings.cashOutFocusedOnly),
     },
     keys: count(o.keys),
     runs: count(o.runs),
@@ -194,6 +205,11 @@ function unit(v: unknown, fallback: number): number {
 function count(v: unknown): number {
   if (typeof v !== 'number' || !Number.isFinite(v)) return 0;
   return Math.max(0, Math.trunc(v));
+}
+
+/** Булев флаг: не булево значение в сейве — умолчание. */
+function bool(v: unknown, fallback: boolean): boolean {
+  return typeof v === 'boolean' ? v : fallback;
 }
 
 export interface LoadResult {

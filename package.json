@@ -18,6 +18,7 @@
     "timing": "tsx packages/tools/src/cli.ts --timing --runs 20",
     "balance": "tsx packages/tools/src/cli.ts --balance",
     "balance:search": "tsx packages/tools/src/cli.ts --search",
+    "balance:search-combat": "tsx packages/tools/src/cli.ts --search-combat",
     "bench": "tsx packages/tools/src/bench.ts",
     "test": "vitest run",
     "test:watch": "vitest",

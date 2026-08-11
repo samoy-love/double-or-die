@@ -63,7 +63,7 @@ describe('бюджет угрозы по этажам', () => {
    */
   it('сходится с таблицей целевых длительностей', () => {
     expect(roomBudget(1, 1, 1)).toBe(300);
-    expect(roomBudget(ROOMS_PER_FLOOR, 1, 1)).toBe(468);
+    expect(roomBudget(ROOMS_PER_FLOOR, 1, 1)).toBe(396);
     expect(roomBudget(1, 1, 2)).toBe(600);
     expect(roomBudget(1, 1, 3)).toBe(1200);
   });

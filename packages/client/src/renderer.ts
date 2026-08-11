@@ -30,7 +30,7 @@
  *     превратилось бы в тёмную точку с каймой. Снаряд остаётся сплошным, и
  *     это не поблажка: сплошная заливка — сама по себе верхняя ступень
  *     иерархии яркости, а роль у него ровно одна, различать её не с чем.
- *   — **штрихи внутри силуэта**: глаза и зрачки, поля цилиндра Туза,
+ *   — **штрихи внутри силуэта**: глаза и зрачки, поля цилиндра Крупье,
  *     пиктограммы пари, палочки семисегментных цифр. Обводить штрих нечем —
  *     он сам и есть обводка, и вторая вокруг него дала бы кашу на пятнадцати
  *     единицах.
@@ -43,7 +43,10 @@
 import {
   ACE,
   AceGesture,
+  aceCardAt,
+  aceStakeFor,
   ANGLE_FULL,
+  APPETITE,
   BALL,
   BETS,
   DoorType,
@@ -71,6 +74,9 @@ import {
   EntityFlag,
   FAIRNESS,
   InputScheme,
+  KEYS,
+  Obligation,
+  TICK_HZ,
   columnX,
   columnY,
   redZoneX,
@@ -100,6 +106,7 @@ import {
   toFloat,
 } from '@dod/sim';
 import { DEAL_LIFE, type Feedback } from './feedback';
+import { MENU_PLAY_BUTTON, MENU_SETTINGS_BUTTON } from './menuLayout';
 import type { Feel } from './feel';
 import { Shape, ShapeBatch } from './gl/batch';
 import { Face, TextAtlas } from './gl/text';
@@ -109,6 +116,29 @@ import { ParticleShape, type Particles } from './particles';
 
 /** Толщина обводки из арт-дирекшна: 4 u на всём (GDD §21). */
 const STROKE = 4;
+
+/**
+ * Что показывать поверх меню: туториал, настройки, что в фокусе.
+ *
+ * Отдельный тип, а не растущий список позиционных булевых параметров
+ * `draw()` — их и так три (menu/tutorial/settings были бы четвёртым), а
+ * читать вызов из пяти подряд `true`/`false` невозможно, не подглядывая в
+ * сигнатуру.
+ */
+export interface MenuOverlay {
+  tutorial: boolean;
+  settingsOpen: boolean;
+  /** Какой пункт меню в фокусе: 0 — «Играть», 1 — «Настройки». */
+  focus: 0 | 1;
+  cashOutFocusedOnly: boolean;
+}
+
+const DEFAULT_MENU_OVERLAY: MenuOverlay = {
+  tutorial: false,
+  settingsOpen: false,
+  focus: 0,
+  cashOutFocusedOnly: false,
+};
 
 /**
  * Сущность арены: тёмная заливка плюс несущая обводка цветом роли.
@@ -188,7 +218,7 @@ const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
  * Сколько строк покажет экран расчёта. Ноль — экрана нет.
  *
  * Одна функция на два места намеренно: по этому же признаку решается, рисовать
- * Туза в общем слое или поверх затемнения. Две копии условия разъехались бы на
+ * Крупье в общем слое или поверх затемнения. Две копии условия разъехались бы на
  * первой же правке, и он оказался бы либо нарисован дважды, либо не нарисован
  * вовсе — причём заметить это можно только глазами.
  */
@@ -214,6 +244,15 @@ export class Renderer {
   private readonly prevY = new Float64Array(MAX_PLAYERS);
   private readonly prevEX = new Float64Array(MAX_ENEMIES);
   private readonly prevEY = new Float64Array(MAX_ENEMIES);
+  /**
+   * Последний осмысленный угол поворота врага (playtest: «вибрируют, быстро
+   * крутятся, стоя на месте»). `atan2` от скорости честен, но скорость около
+   * нуля — это в основном шум фиксированной точки, а не направление: враг,
+   * который почти не движется, каждый тик получал новый случайный угол.
+   * Обновляем угол, только когда скорость выше шума, а на медленных кадрах
+   * держим прежний — крутится тело, только когда реально куда-то едет.
+   */
+  private readonly enemyFacing = new Float64Array(MAX_ENEMIES);
   private readonly prevBX = new Float64Array(MAX_BULLETS);
   private readonly prevBY = new Float64Array(MAX_BULLETS);
   /**
@@ -437,6 +476,8 @@ export class Renderer {
     particles: Particles,
     fb: Feedback,
     menu = false,
+    menuOverlay: MenuOverlay = DEFAULT_MENU_OVERLAY,
+    cashOutTarget = 0,
   ): void {
     const { gl, canvas, batch } = this;
     const arenaW = toFloat(s.arenaW);
@@ -450,9 +491,10 @@ export class Renderer {
     this.drawFloor(arenaW, arenaH, s);
     this.drawWheel(s);
     this.drawCards(s);
-    // На расчёте Туз рисуется не здесь, а поверх затемнения (`drawSettlement`):
-    // под ним от него остаётся четверть непрозрачности и ничего больше.
-    if (settlementRows(s) === 0) this.drawAce(s, fb);
+    // На расчёте и на своём предложении пари Крупье рисуется не здесь, а поверх
+    // затемнения (`drawSettlement`, `drawAceBetScreen`): под ним от него
+    // остаётся четверть непрозрачности и ничего больше.
+    if (settlementRows(s) === 0 && aceCardAt(s) < 0) this.drawAce(s, fb);
     this.drawSpawnMarks(s);
     this.drawTelegraphs(s, alpha);
     this.drawChips(s);
@@ -462,10 +504,12 @@ export class Renderer {
     this.drawDeals(s, fb);
     this.drawBullets(s, alpha);
     this.drawParticles(particles);
-    this.drawHud(s, arenaW, arenaH, fb);
+    this.drawHud(s, arenaW, arenaH, fb, menuOverlay.cashOutFocusedOnly ? cashOutTarget : -1);
     // Меню — поверх всего, включая экраны забега: пока оно на экране, забег
     // не идёт вовсе, и любая надпись из-под него говорила бы об обратном.
-    if (menu) this.drawMenuScreen(arenaW, arenaH);
+    if (menu) this.drawMenuScreen(arenaW, arenaH, menuOverlay);
+    if (menu && menuOverlay.tutorial) this.drawTutorialScreen(arenaW, arenaH);
+    if (menu && menuOverlay.settingsOpen) this.drawSettingsScreen(arenaW, arenaH, menuOverlay);
     this.drawScreenEffects(feel, arenaW, arenaH);
 
     const scale = Math.min(canvas.width / arenaW, canvas.height / arenaH);
@@ -491,15 +535,57 @@ export class Renderer {
     const b = this.batch;
     b.push(Shape.Box, w / 2, h / 2, w / 2, h / 2, 0, ...channels(PALETTE.floor), 1, 0, 0, 0, 0, 0);
 
-    // Сетка: по ней читается масштаб и скорость собственного движения.
+    /*
+     * Виньетка пола — приближение фигурами, не проход поверх кадра.
+     *
+     * PRODUCTION §4 держит настоящую виньетку в F4/0.12.0 намеренно: она там
+     * шейдерный проход, а «виньетка, нарисованная фигурой, — это тёмная
+     * полоса с резким краем» (см. предупреждение в шапке файла). Это
+     * предупреждение здесь и проверяется — приближение сделано МНОГИМИ
+     * тонкими нарастающими кольцами, а не одним толстым, ровно чтобы не
+     * получить ту самую полосу. Когда дойдёт очередь до настоящего
+     * шейдерного прохода, эти кольца снимаются одной правкой — они не часть
+     * сцены, а костыль под её текущий инструмент.
+     */
+    {
+      const vg = PALETTE.vignette;
+      const cx = w / 2;
+      const cy = h * 0.46;
+      const rings = 6;
+      for (let i = 0; i < rings; i++) {
+        const t = i / (rings - 1);
+        const half = lerp(w * 0.34, w * 0.72, t);
+        b.push(Shape.Box, cx, cy, half, half * (h / w), 0, vg.r, vg.g, vg.b, 0, 0.05 + t * 0.1, vg.r, vg.g, vg.b, 0.05 + t * 0.09);
+      }
+    }
+
+    /*
+     * Сетка: по ней читается масштаб и скорость собственного движения — но
+     * читается боковым зрением, а не разглядыванием. Раньше линии стояли на
+     * полной непрозрачности того же тона, что и заливка колонн, — на полу это
+     * читалось не сеткой ориентиров, а решёткой поверх арены. Макет
+     * («Дизайн игры «Забег»», 1a) держит её на 3.5% белого: едва заметный
+     * штрих, который замечаешь, только повернув голову. Роль колонн у
+     * `PALETTE.grid` не трогаем — там он остаётся полноценной заливкой.
+     */
     const step = 120;
     const g = PALETTE.grid;
+    const gridAlpha = 0.16;
     for (let x = step; x < w; x += step) {
-      b.push(Shape.Box, x, h / 2, 1, h / 2, 0, g.r, g.g, g.b, 1, 0, 0, 0, 0, 0);
+      b.push(Shape.Box, x, h / 2, 1, h / 2, 0, g.r, g.g, g.b, gridAlpha, 0, 0, 0, 0, 0);
     }
     for (let y = step; y < h; y += step) {
-      b.push(Shape.Box, w / 2, y, w / 2, 1, 0, g.r, g.g, g.b, 1, 0, 0, 0, 0, 0);
+      b.push(Shape.Box, w / 2, y, w / 2, 1, 0, g.r, g.g, g.b, gridAlpha, 0, 0, 0, 0, 0);
     }
+
+    /*
+     * Рамка арены — тот же приём, что в макете (stroke `#2f3542` вокруг всего
+     * поля): без неё край арены обозначен только обрывом сетки, и на широком
+     * экране игровая зона сливается с летрбоксом. Заливки нет — только
+     * контур: рамка обозначает границу, а не рисует вторую панель поверх пола.
+     */
+    const border = PALETTE.chrome;
+    b.push(Shape.Box, w / 2, h / 2, w / 2 - 4, h / 2 - 4, 0, 0, 0, 0, 0, 6, border.r, border.g, border.b, 1);
 
     this.drawRedZone(s);
 
@@ -721,6 +807,16 @@ export class Renderer {
       0,
       0,
     );
+
+    // Фаза 2 (70% запаса): встречная ставка объявляется на 10 секунд, шары
+    // смыкаются в кольцо (GDD §8.1). Полоса прочности выше уже гаснет до
+    // hudDim на это время — баннер объясняет, что это значит и чем кончится,
+    // раз выбор здесь не кнопкой, а позицией игрока (UX §2, принцип 2).
+    if (counterBetRunning(s)) {
+      const seconds = Math.ceil((s.meta[Meta.CounterBetUntil] - s.tick) / TICK_HZ);
+      this.screenLine(t('boss.counter_bet.label', { seconds }), x * 2, 66, PALETTE.hudText, 15);
+      this.screenLine(t('boss.counter_bet.hint'), x * 2, 86, PALETTE.hudDim, 13);
+    }
   }
 
   /**
@@ -746,7 +842,7 @@ export class Renderer {
     for (let i = 0; i < MAX_CARDS; i++) {
       if (!s.kActive[i]) continue;
       /*
-       * Карта Туза на полу не рисуется: её показывает свой экран.
+       * Карта Крупье на полу не рисуется: её показывает свой экран.
        *
        * Она лежит в том же массиве и по тем же правилам живёт по сроку, но
        * подобрать её нельзя (`tryTakeCard`), и нарисованная на арене она
@@ -759,6 +855,37 @@ export class Renderer {
       const spec = BETS[s.kBet[i]];
       const colour = categoryColour(spec.category);
       const left = s.kDeadline[i] - s.tick;
+
+      /*
+       * Часть C: тонкое кольцо «цены места» — насколько карта физически
+       * близка к опасной зоне арены (красная зона, GDD §9.5). Это НЕ вторая
+       * категория: категория уже кодируется формой иконки внутри карты
+       * (`drawBetIcon`), а кольцо кодирует только пространственный риск места,
+       * на котором лежит карта, — те же две вещи, что кон и множитель выше,
+       * нельзя путать по смыслу.
+       *
+       * Интенсивность растёт по мере приближения к центру красной зоны и
+       * гаснет за её пределами. Радиус нормировки взят вдвое шире физического
+       * радиуса зоны, чтобы подсветка начиналась чуть раньше границы, а не
+       * обрывалась ровно на ней (резкий порог читался бы как баг).
+       */
+      const rzX = toFloat(redZoneX(s));
+      const rzY = toFloat(redZoneY(s));
+      const rzR = toFloat(RED_ZONE_RADIUS);
+      const dxRz = x - rzX;
+      const dyRz = y - rzY;
+      const distRz = Math.hypot(dxRz, dyRz);
+      const dangerT = clamp01(1 - distRz / (rzR * 2));
+      const calm = PALETTE.card;
+      const hot = PALETTE.danger;
+      const ringColour: Rgb = {
+        r: calm.r + (hot.r - calm.r) * dangerT,
+        g: calm.g + (hot.g - calm.g) * dangerT,
+        b: calm.b + (hot.b - calm.b) * dangerT,
+      };
+      // Кольцо еле заметно у спокойных карт и заметно у карт в опасности —
+      // интенсивность несёт и цвет, и альфа, чтобы дальтоник тоже читал риск.
+      const ringA = 0.15 + 0.55 * dangerT;
 
       /*
        * Последние три секунды карты читаются двумя признаками сразу.
@@ -840,6 +967,27 @@ export class Renderer {
        * кремовый силуэт, по которому карта опознаётся как карта.
        */
       entity(b, Shape.Box, x, y, fw, fh, 0, PALETTE.card, edgeA);
+
+      // Кольцо «цены места» (часть C): снаружи лица карты, чтобы не спорить
+      // с формой иконки категории внутри неё ни по смыслу, ни по месту.
+      b.push(
+        Shape.Ring,
+        x,
+        y,
+        r * 1.12,
+        r * 1.12,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1.5,
+        ringColour.r,
+        ringColour.g,
+        ringColour.b,
+        ringA * edgeA,
+      );
+
       b.push(
         Shape.Box,
         x,
@@ -938,6 +1086,23 @@ export class Renderer {
         const halo = r * 1.55 + Math.sin(s.tick * 0.14) * 3;
         b.push(Shape.Ring, x, y, halo, halo, 0, 0, 0, 0, 0, 3, own.r, own.g, own.b, 0.55);
         this.drawTakeGlyph(x, y - r * 2.2, s.pScheme[taker]);
+
+        /*
+         * Имя пари — как только есть кому его взять (playtest: «поднимая
+         * карты пари непонятно, что я поднимаю»).
+         *
+         * Раньше имя показывалось только по удержанию «рассмотреть»
+         * (`Btn.Inspect`), и тот же плейтест повторил жалобу уже после этого
+         * фикса: скрытая по умолчанию подсказка не помогает игроку, который
+         * не знает, что её нужно вызывать. Правило «в бою букв нет» (UX §1,
+         * столп 3) получает то же единственное исключение, что и раньше, —
+         * оно просто больше не спрятано за отдельной кнопкой. Момент, когда
+         * имя нужно, — ровно тот, когда карту вообще можно взять: глиф
+         * «Забрать» уже стоит над ней, а решение бежать сюда или мимо
+         * принимается ДО нажатия кнопки, а не после.
+         */
+        const c = PALETTE.hudText;
+        this.text.push(betName(spec.id), x, y - r * 2.2 - 24, 14, Face.Ui, c.r, c.g, c.b, 0.95, 'center');
       }
     }
   }
@@ -957,7 +1122,11 @@ export class Renderer {
   private drawTakeGlyph(x: number, y: number, scheme: number): void {
     const b = this.batch;
     const c = PALETTE.hudText;
-    const frame = scheme === InputScheme.Gamepad ? Shape.Circle : Shape.Box;
+    // Оправа по схеме: круг — геймпад, квадрат — клавиша, и у тача СВОЯ форма
+    // — голое кольцо без штриха внутри, а не квадрат клавиши без буквы: тач
+    // не жмёт кнопку, он касается самой карты (GDD §21).
+    const frame =
+      scheme === InputScheme.Gamepad ? Shape.Circle : scheme === InputScheme.Touch ? Shape.Ring : Shape.Box;
     b.push(frame, x, y, 15, 15, 0, 0, 0, 0, 0, 3, c.r, c.g, c.b, 0.95);
     if (scheme === InputScheme.Touch) return;
     if (scheme === InputScheme.Gamepad) {
@@ -973,7 +1142,7 @@ export class Renderer {
   }
 
   /**
-   * Туз на арене.
+   * Крупье на арене.
    *
    * Рисуется НИЖЕ боевых сущностей и полупрозрачным: он второй игрок за
    * столом, а не препятствие, и перекрывать снаряды ему нельзя — читаемость
@@ -1007,23 +1176,27 @@ export class Renderer {
     x += jitter;
 
     /*
-     * Тулья и поля цилиндра.
+     * Тулья и поля цилиндра — над лицом, а не вместо него.
      *
-     * Туз пришёл к общему языку раньше всех остальных и теперь просто в нём
-     * живёт: тёмная тулья, кремовый несущий контур в 4 единицы. На трёх он
-     * выходил в два пикселя реального экрана, и Туза не было видно вовсе.
+     * До этой правки Крупье был одним боксом с глазами прямо на нём: с шага
+     * назад он читался как плывущий прямоугольник, а не персонаж. Цилиндр
+     * остаётся его отличительным силуэтом (GDD §17А), но теперь сидит на
+     * круглом лице, как и положено головному убору — форма читается сразу,
+     * без подписи.
      *
-     * Поля цилиндра остаются сплошными: пять единиц высоты — это штрих, и
-     * обводить его нечем.
+     * Тулья короче прежней (20 вместо 26): освободившееся место уходит лицу.
+     * Кремовый несущий контур в 4 единицы — тот же, что и раньше; на трёх он
+     * выходил в два пикселя реального экрана, и Крупье не было видно вовсе.
      */
-    entity(b, Shape.Box, x, y + bob, 22, 26, tilt, PALETTE.ace, 0.85);
-    b.push(Shape.Box, x, y + bob + 28, 34, 5, tilt, ...channels(PALETTE.ace), 0.85, 0, 0, 0, 0, 0);
+    entity(b, Shape.Box, x, y + bob - 6, 20, 20, tilt, PALETTE.ace, 0.85);
+    b.push(Shape.Box, x, y + bob + 12, 30, 5, tilt, ...channels(PALETTE.ace), 0.85, 0, 0, 0, 0, 0);
+    entity(b, Shape.Circle, x, y + bob + 32, 17, 17, 0, PALETTE.ace, 0.85);
 
     /*
      * Глаза: обычно смотрит на игрока — за ним и пришёл.
      *
      * На БЛИЖАЙШЕГО живого, а не на первого по номеру. Взгляд — половина
-     * характера Туза (GDD §17А), и вчетвером «всегда на P1» читается не как
+     * характера Крупье (GDD §17А), и вчетвером «всегда на P1» читается не как
      * внимание, а как поломка: заведение пялится в одну точку, пока рядом
      * умирает кто-то другой. Мёртвые из счёта выбывают: смотреть на тело —
      * это уже другой жест, и он не заказан.
@@ -1126,14 +1299,14 @@ export class Renderer {
     }
 
     /*
-     * Реплика — подписью под Тузом, и только пока он на арене.
+     * Реплика — подписью под Крупье, и только пока он на арене.
      *
-     * Своего таймера у неё нет намеренно. Туз уходит через три секунды после
+     * Своего таймера у неё нет намеренно. Крупье уходит через три секунды после
      * выхода (PRODUCTION §3), и реплика уходит вместе с ним: второй счётчик
      * жил бы своей жизнью и однажды оставил бы фразу висеть над пустым полом.
      *
      * Реплика — приправа к жесту, а не его замена (GDD §17А), поэтому она
-     * мельче HUD и приглушена: тело Туза остаётся главным, а строка читается
+     * мельче HUD и приглушена: тело Крупье остаётся главным, а строка читается
      * тем, кто успел на неё посмотреть. Субтитры для тех, кто не слышит, —
      * отдельная настройка со своим кеглем и фоном (UX §5).
      */
@@ -1317,10 +1490,30 @@ export class Renderer {
 
       const vx = toFloat(s.eVX[i]);
       const vy = toFloat(s.eVY[i]);
-      const facing =
-        s.ePhase[i] === EnemyPhase.Telegraph || s.ePhase[i] === EnemyPhase.Attack
-          ? Math.atan2(toFloat(s.eDirY[i]), toFloat(s.eDirX[i]))
-          : Math.atan2(vy, vx);
+      if (s.ePhase[i] === EnemyPhase.Telegraph || s.ePhase[i] === EnemyPhase.Attack) {
+        // Направление удара зафиксировано на весь телеграф — доворот сюда
+        // мгновенный и есть сам телеграф, сглаживать нечего.
+        this.enemyFacing[i] = Math.atan2(toFloat(s.eDirY[i]), toFloat(s.eDirX[i]));
+      } else if (vx * vx + vy * vy > 0.01) {
+        /*
+         * Поле потока (`nav.ts`) отдаёт одно из восьми направлений к ячейке с
+         * наименьшей стоимостью — и на плато, где у соседних ячеек стоимость
+         * почти равна, счёт может качнуться в другую сторону от тика к тику.
+         * Скорость при этом не падает (враг всё так же идёт на полной
+         * скорости), поэтому проверка «скорость мала — не поворачивать»
+         * (выше) эту дрожь не ловит: она не про модуль скорости, а про её
+         * направление. Сглаживаем сам угол — короткой дугой, не через ноль, —
+         * так гонка тик-в-тик усредняется, а настоящий поворот всё ещё
+         * дочитывается за несколько кадров, не за один.
+         */
+        const target = Math.atan2(vy, vx);
+        const prev = this.enemyFacing[i];
+        let diff = target - prev;
+        diff = ((diff + Math.PI) % (Math.PI * 2)) - Math.PI;
+        if (diff < -Math.PI) diff += Math.PI * 2;
+        this.enemyFacing[i] = prev + diff * 0.25;
+      }
+      const facing = this.enemyFacing[i];
 
       const shape =
         type === EnemyType.Wedge
@@ -1645,9 +1838,15 @@ export class Renderer {
    * шестиугольники, волна — пипсы, кошелёк — семисегментные цифры. Слово
    * требует перевода в буквы и обратно, и в перестрелке этот перевод стоит
    * дороже всего, что оно способно уточнить. Текст живёт там, где на него
-   * смотрят: на расчёте и в репликах Туза.
+   * смотрят: на расчёте и в репликах Крупье.
    */
-  private drawHud(s: SimState, w: number, h: number, fb: Feedback): void {
+  private drawHud(
+    s: SimState,
+    w: number,
+    h: number,
+    fb: Feedback,
+    cashOutTarget = -1,
+  ): void {
     const b = this.batch;
     const top = 34;
 
@@ -1694,7 +1893,7 @@ export class Renderer {
         entity(b, Shape.Box, px, top + 4, 4, ph, 0, c, on ? 1 : 0.45, 2);
         if (on) b.push(Shape.Box, px, top + 4, 1.6, ph - 3, 0, c.r, c.g, c.b, 1, 0, 0, 0, 0, 0);
       }
-      this.drawBets(s, i, baseX, top + 46);
+      this.drawBets(s, i, baseX, top + 46, i === 0 ? cashOutTarget : -1);
     }
 
     // Волна — пипсами справа: сколько всего и сколько прошло.
@@ -1709,7 +1908,9 @@ export class Renderer {
     }
     drawNumber(b, s.meta[Meta.Room], w - 40 - waves * 26 - 50, top, HUD_DIGIT, PALETTE.hudDim);
 
+    this.drawCashOutSummary(s, w, h);
     this.drawSettlement(s, w, h, fb);
+    this.drawAceBetScreen(s, w, h, fb);
 
     /*
      * Отсчёт после гибели: сколько осталось до итогов.
@@ -1729,6 +1930,61 @@ export class Renderer {
     }
 
     this.drawRunScreens(s, w, h);
+  }
+
+  /**
+   * Общая сумма «Забрать/дожать» — баннер по центру нижней кромки.
+   *
+   * До сих пор эта сумма нигде не складывалась: каждая плашка сама по себе
+   * называла свою выплату (`drawBets`), а решение «жать сейчас или ещё
+   * потерпеть» игрок собирал в уме по нескольким числам сразу. Макет
+   * («Дизайн игры «Забег»», 1a/1d-A) держит на этот случай отдельный баннер:
+   * одна сумма сейчас, одна — если дожать все пари до конца.
+   *
+   * Только для локального игрока (индекс 0): решение «жать Забрать»
+   * принимает тот, чья рука на кнопке, и сумма чужого кошелька здесь не при
+   * чём.
+   *
+   * Букв нет — тот же столп, что у всего боевого HUD: только глиф кнопки и
+   * два числа, большее золотом (то, что дадут сейчас), меньшее тусклым (то,
+   * что дадут, если дожать всё).
+   */
+  private drawCashOutSummary(s: SimState, w: number, h: number): void {
+    const player = 0;
+    let now = 0;
+    let full = 0;
+    let count = 0;
+    for (let i = 0; i < MAX_ACTIVE_BETS; i++) {
+      const k = player * MAX_ACTIVE_BETS + i;
+      if (s.aState[k] !== BetState.Active) continue;
+      // Ставку Крупье не обналичить — тот же фильтр, что у `cashOutBest`
+      // (кон отрицательный: он чужой, «Забрать» не платит по нему ничего).
+      // Без него баннер посчитал бы чужую ставку в общую сумму «дожать».
+      if (s.aStake[k] < 0) continue;
+      now += cashOutValue(s, player, i);
+      full += Math.trunc((s.aStake[k] * BETS[s.aBet[k]].multiplier) / FX_ONE);
+      count++;
+    }
+    if (count === 0) return;
+
+    const b = this.batch;
+    const cx = w / 2;
+    const cy = h - 58;
+    const halfW = 150;
+    const halfH = 30;
+    const gold = PALETTE.accent;
+    b.push(Shape.Box, cx, cy, halfW, halfH, 0, ...channels(ENTITY_FILL), 0.82, 2, gold.r, gold.g, gold.b, 0.5);
+
+    const glyphX = cx - halfW + 24;
+    const pad = this.scheme === InputScheme.Gamepad;
+    if (pad) {
+      b.push(Shape.Ring, glyphX, cy, 12, 12, 0, 0, 0, 0, 0, 3, gold.r, gold.g, gold.b, 0.9);
+    } else {
+      entity(b, Shape.Box, glyphX, cy, 12, 12, 0, gold, 0.9, 3);
+    }
+
+    drawNumber(b, now, glyphX + 56, cy, 20, PALETTE.chip);
+    drawNumber(b, full, cx + halfW - 34, cy, 12, PALETTE.hudDim);
   }
 
   /**
@@ -1821,6 +2077,12 @@ export class Renderer {
         chosen ? 1 : 0.75,
         'center',
       );
+      // Долговая яма тяжелее обычного боя и появляется не всегда — без
+      // объяснения игрок примет её за обычную дверь и не поймёт, зачем она
+      // вообще возникла (UX §1.2 — контекст виден всегда).
+      if (s.doorType[i] === DoorType.DebtPit) {
+        this.wrapped(t('door.type.pit.hint'), x, h / 2 + 184, gap - 20, 12, colour, 0.6);
+      }
     }
     this.confirmHint(w, h / 2 + 220);
   }
@@ -1969,18 +2231,33 @@ export class Renderer {
    * намеренно: режимов до кооперативa 0.5.0 не существует, а кнопка, которая
    * ничего не делает, дороже отсутствующей (UX §2).
    *
-   * Элемент на экране ровно один, поэтому фокусу некуда деться: он стоит на
-   * «Играть» всегда, и тупика фокуса здесь нет по построению.
+   * Второй элемент — «Настройки» — появился вместе с поштучным забором:
+   * первой настройкой, которую вообще есть где переключить. Фокус между
+   * ними — горизонталь (`NavLeft`/`NavRight`, `loop.ts`), «Играть» им не
+   * теряет доминирования: она крупнее и стоит первой по чтению слева направо.
    */
-  private drawMenuScreen(w: number, h: number): void {
+  private drawMenuScreen(w: number, h: number, overlay: MenuOverlay): void {
     this.dim(w, h);
     this.screenTitle(t('menu.title'), w, h / 2 - 170, 56);
     this.screenLine(t('menu.tagline'), w, h / 2 - 110);
 
-    // Кнопка крупная не для красоты: она единственная, и её размер — весь
-    // ответ на вопрос «что тут делать».
-    const c = this.screenCard(w / 2, h / 2, 210, 52, true);
-    this.text.push(t('menu.play'), w / 2, h / 2, 30, Face.Ui, c.r, c.g, c.b, 1, 'center');
+    // Кнопка крупная не для красоты: она главная, и её размер — весь ответ
+    // на вопрос «что тут делать в первую очередь». Прямоугольник общий с
+    // `loop.ts` (клик, наведение) — см. `menuLayout.ts`.
+    const playX = w / 2 + MENU_PLAY_BUTTON.dx;
+    const c = this.screenCard(playX, h / 2, MENU_PLAY_BUTTON.halfW, MENU_PLAY_BUTTON.halfH, overlay.focus === 0);
+    this.text.push(t('menu.play'), playX, h / 2, 28, Face.Ui, c.r, c.g, c.b, 1, 'center');
+
+    const settingsX = w / 2 + MENU_SETTINGS_BUTTON.dx;
+    const cs = this.screenCard(
+      settingsX,
+      h / 2,
+      MENU_SETTINGS_BUTTON.halfW,
+      MENU_SETTINGS_BUTTON.halfH,
+      overlay.focus === 1,
+    );
+    this.text.push(t('menu.settings'), settingsX, h / 2, 18, Face.Ui, cs.r, cs.g, cs.b, 1, 'center');
+
     // Клик работает только на этом экране (боя тут точно нет), поэтому
     // подсказка своя, а не общий confirmHint (UX §2).
     const pad = this.scheme === InputScheme.Gamepad;
@@ -1990,6 +2267,94 @@ export class Renderer {
       h / 2 + 100,
       PALETTE.hudDim,
     );
+    this.screenLine(
+      pad ? t('menu.tutorial.pad') : t('menu.tutorial.key'),
+      w,
+      h / 2 + 128,
+      PALETTE.hudDim,
+    );
+  }
+
+  /**
+   * Настройки: сегодня один пункт — поштучный забор пари (доступность).
+   *
+   * Экран заведён под один тумблер, а не под три вкладки из UX §6, — те три
+   * (Игра / Управление / Доступность) появятся вместе со вторым и третьим
+   * пунктом, которого сегодня нет ни одного. Пустая вкладка хуже отсутствующей
+   * (UX §2).
+   */
+  private drawSettingsScreen(w: number, h: number, overlay: MenuOverlay): void {
+    this.dim(w, h);
+    this.screenTitle(t('settings.title'), w, h / 2 - 160, 40);
+
+    const c = this.screenCard(w / 2, h / 2, 260, 60, true);
+    this.text.push(
+      t(overlay.cashOutFocusedOnly ? 'settings.cashout_focus.on' : 'settings.cashout_focus.off'),
+      w / 2,
+      h / 2 - 14,
+      20,
+      Face.Ui,
+      c.r,
+      c.g,
+      c.b,
+      1,
+      'center',
+    );
+    this.wrapped(t('settings.cashout_focus.desc'), w / 2, h / 2 + 20, 440, 13, PALETTE.hudDim, 0.85);
+
+    this.confirmHint(w, h / 2 + 110);
+    this.cancelHint(w, h / 2 + 138);
+  }
+
+  /**
+   * Туториал/глоссарий: карточка на термин, название и одна строка объяснения.
+   *
+   * Не заменяет обучение действием (§23 GDD) — это резервный текстовый путь
+   * для тех, кому первых 10 минут не хватило (playtest 0.3.1: 20 забегов, и
+   * смысл механик так и не сложился). Открывается из меню, ничего не решает,
+   * закрывается тем же отказом, что и открылся (UX §7).
+   */
+  private drawTutorialScreen(w: number, h: number): void {
+    this.dim(w, h);
+    this.screenTitle(t('tutorial.title'), w, h / 2 - 300, 44);
+    this.screenLine(t('tutorial.hint'), w, h / 2 - 250);
+
+    const terms: [StringKey, StringKey][] = [
+      ['tutorial.ace.name', 'tutorial.ace.desc'],
+      ['tutorial.appetite.name', 'tutorial.appetite.desc'],
+      ['tutorial.bet.name', 'tutorial.bet.desc'],
+      ['tutorial.house_cut.name', 'tutorial.house_cut.desc'],
+      ['tutorial.trampoline.name', 'tutorial.trampoline.desc'],
+      ['tutorial.debt_pit.name', 'tutorial.debt_pit.desc'],
+      ['tutorial.keys.name', 'tutorial.keys.desc'],
+      ['tutorial.fat_fight.name', 'tutorial.fat_fight.desc'],
+      ['tutorial.gift.name', 'tutorial.gift.desc'],
+    ];
+
+    const cols = 4;
+    const gapX = 340;
+    const gapY = 210;
+    const originX = w / 2 - (gapX * (cols - 1)) / 2;
+    const originY = h / 2 - 90;
+
+    for (let i = 0; i < terms.length; i++) {
+      const [nameKey, descKey] = terms[i];
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const x = originX + col * gapX;
+      const y = originY + row * gapY;
+      const c = this.screenCard(x, y, 155, 90, false);
+      this.text.push(t(nameKey), x, y - 40, 22, Face.Ui, c.r, c.g, c.b, 1, 'center');
+      // Тиры аппетита подставляются из конфига, а не вписаны в строку: баланс
+      // правит их в одном месте, а не в двух, забывая про второе.
+      const desc =
+        descKey === 'tutorial.appetite.desc'
+          ? t(descKey, { tier1: APPETITE[0], tier2: APPETITE[1], tier3: APPETITE[2] })
+          : t(descKey);
+      this.wrapped(desc, x, y + 14, 280, 14, PALETTE.hudDim, 0.85);
+    }
+
+    this.cancelHint(w, h - 80);
   }
 
   /**
@@ -2001,10 +2366,10 @@ export class Renderer {
    * остаётся на экране пустой рамкой: исчезнувшая карточка сдвинула бы
    * соседние под пальцем игрока.
    *
-   * Имени у товара пока нет, и подписано оно словом «Апгрейд»: каталога
-   * апгрейдов в `content/` не существует, а выдумывать имя в коде — это ровно
-   * тот хардкод, который запрещён (UX §8). Имена приедут вместе с каталогом
-   * ключами `upgrade.<id>.name`.
+   * Имя товара — из словаря по ключу `upgrade.<id>.name` (`upgradeName`
+   * ниже): `name` в `content/upgrades.json` служебный и не переводится,
+   * подписывать им витрину значило бы выдумывать текст в коде мимо словаря
+   * (UX §8).
    *
    * Цена красится алым, когда не хватает: решение здесь одно — «беру или
    * коплю», — и оно считается в уме из двух чисел, цены и кошелька.
@@ -2071,7 +2436,7 @@ export class Renderer {
    *
    * Пока хватает, решение одно и экран отвечает тремя числами: сколько просят,
    * сколько есть, что будет по нажатию. Не хватило — это уже не отказ в
-   * обслуживании, а торг: Туз выкладывает три выхода (GDD §12А.2), и экран
+   * обслуживании, а торг: Крупье выкладывает три выхода (GDD §12А.2), и экран
    * обязан показать все три, включая тот, которым игрок не воспользуется.
    *
    * Продажа апгрейда гаснет, когда продавать нечего: вариант, недоступный по
@@ -2199,6 +2564,51 @@ export class Renderer {
       PALETTE.hudText,
     );
     y = this.screenValue(t('summary.keys'), s.meta[Meta.Keys], w, y, 36, PALETTE.accent);
+
+    /*
+     * Разбивка источников ключей: считается той же формулой, что и ядро
+     * (`keysEarned` в packages/sim/src/run.ts, ECONOMY §12), но не вызывает
+     * её напрямую — экран итогов не пересчитывает забег, а читает готовые
+     * поля состояния, из которых формула и складывается.
+     */
+    let chips = 0;
+    for (let i = 0; i < s.playerCount; i++) chips += s.pChips[i];
+    const fromBets = Math.trunc(s.meta[Meta.BetsWon] / KEYS.betsPerKey);
+    const fromChips = Math.trunc(chips / KEYS.chipsPerKey);
+    const fromBosses = KEYS.perBoss * s.meta[Meta.BossesBeaten];
+
+    const lineY = y + 4;
+    this.screenLine(
+      t('summary.keys.bets', { n: s.meta[Meta.BetsWon], k: fromBets }),
+      w,
+      lineY,
+      PALETTE.hudDim,
+      14,
+    );
+    this.screenLine(
+      t('summary.keys.chips', { n: chips, k: fromChips }),
+      w,
+      lineY + 20,
+      PALETTE.hudDim,
+      14,
+    );
+    this.screenLine(
+      t('summary.keys.boss', { n: s.meta[Meta.BossesBeaten], k: fromBosses }),
+      w,
+      lineY + 40,
+      PALETTE.hudDim,
+      14,
+    );
+    // Пол в 1 ключ показан отдельной строкой, только когда он реально
+    // сработал — иначе разбивка показывала бы «минимум», даже когда сумма
+    // источников уже его перекрыла, и строки не сходились бы с Meta.Keys.
+    let breakdownY = lineY + 60;
+    if (fromBets + fromChips + fromBosses < KEYS.floor) {
+      this.screenLine(t('summary.keys.floor'), w, breakdownY, PALETTE.hudDim, 14);
+      breakdownY += 20;
+    }
+    y = breakdownY + 6;
+
     y = this.screenValue(t('summary.paid'), s.meta[Meta.PaidToAce], w, y, 16, PALETTE.hudDim);
 
     // «Ещё разок» доминирует на экране итогов — цикл «ещё разок» и есть то,
@@ -2229,7 +2639,13 @@ export class Renderer {
    * Текста здесь нет по той же причине, что и на карте: пари читается
    * пиктограммой и цветом рамки, а имя ждёт расчёта.
    */
-  private drawBets(s: SimState, player: number, x: number, y: number): void {
+  private drawBets(
+    s: SimState,
+    player: number,
+    x: number,
+    y: number,
+    highlightSlot = -1,
+  ): void {
     const b = this.batch;
     let cursor = x;
     let n = 0;
@@ -2241,7 +2657,7 @@ export class Renderer {
 
       const spec = BETS[s.aBet[k]];
       const colour = categoryColour(spec.category);
-      // Вчетвером колонка игрока — 240 единиц, а стак — до четырёх пари:
+      // Вчетвером колонка игрока — 240 единиц, а сборка — до четырёх пари:
       // подробных плашек туда влезает ОДНА. Остальные сжимаются до иконки с
       // множителем (UX §4: «чужие — сжатыми иконками», детали по удержанию).
       const compact = s.playerCount > 2 && n > 0;
@@ -2268,6 +2684,30 @@ export class Renderer {
       const frame = won ? PALETTE.chip : colour;
 
       entity(b, Shape.Box, cxs, y, hw, PLAQUE_HALF_H, 0, frame, alpha, 3);
+
+      // Поштучный забор (доступность): выбранная крестовиной плашка обведена
+      // вторым, более крупным контуром снаружи — иначе включённая настройка
+      // работала бы вслепую, и «Забрать» цепляло бы непонятно что.
+      if (i === highlightSlot) {
+        const hi = PALETTE.hudText;
+        b.push(
+          Shape.Box,
+          cxs,
+          y,
+          hw + 5,
+          PLAQUE_HALF_H + 5,
+          0,
+          0,
+          0,
+          0,
+          0,
+          2,
+          hi.r,
+          hi.g,
+          hi.b,
+          alpha * 0.9,
+        );
+      }
 
       // Полоса прогресса по нижней кромке: та же `q`, по которой считается
       // выплата за «Забрать» (ECONOMY §9А). Она и есть шкала «сначала терпи,
@@ -2417,7 +2857,7 @@ export class Renderer {
     this.dim(w, h);
 
     /*
-     * Туз — ПОВЕРХ затемнения, а не под ним.
+     * Крупье — ПОВЕРХ затемнения, а не под ним.
      *
      * Он выходит принимать расчёт (`aceAtSettlement` в ядре), то есть в этот
      * момент он и есть событие на экране. Затемнение в 0.72 съедало бы его
@@ -2597,6 +3037,60 @@ export class Renderer {
       0.7,
     );
     drawNumber(b, Math.ceil(left / 60), w / 2, h / 2 + rows * 34 + 46, 14, PALETTE.hudText);
+
+    /*
+     * Трамплин — объясняет молчаливое правило симуляции: провал обязывает
+     * следующий стол содержать лёгкое пари ×1.5 (ECONOMY §10, GDD §11).
+     *
+     * Только для Obligation.LegUp, а не Forced: принудительное пари торга
+     * занимает тот же слот меты и сильнее трамплина (floor.ts:210-213), и у
+     * него уже есть собственный экран (house/haggle) — здесь эти подписи
+     * взаимоисключающие, дублировать вторую нельзя.
+     *
+     * Ниже кольца обратного отсчёта, а не рядом: строки пари занимают всё до
+     * h/2 + rows*34, само кольцо стоит на h/2 + rows*34 + 46, и подпись под
+     * ним на +46 больше не задевает ни ряды, ни число в кольце.
+     */
+    if ((s.meta[Meta.LegUp] as Obligation) === Obligation.LegUp) {
+      this.screenLine(t('settlement.legup'), w, h / 2 + rows * 34 + 92, PALETTE.accent, 14);
+    }
+  }
+
+  /**
+   * Ставка Крупье: он выложил свою карту и ставит против игрока (GDD §12А.1).
+   *
+   * Решение принимается ЭКРАНОМ, не подбором с пола, — `bets.ts` прямо
+   * исключает эту карту из `drawCards` с комментарием «её показывает свой
+   * экран». Раньше этого экрана не было вовсе: `Confirm`/`Cancel` уже читались
+   * ядром (`acceptAceBet`/`declineAceBet` в `sim.ts`) и бесшумно решали за
+   * игрока судьбу четверти его кошелька — нажатие Enter в паузе перед первой
+   * волной могло принять или отклонить пари, о существовании которого игрок
+   * не подозревал.
+   *
+   * Кон — свой у каждого игрока (`aceStakeFor`), поэтому называется кон
+   * ЛОКАЛЬНОГО игрока: это тот, кому кнопка в руках прямо сейчас, и число
+   * обязано отвечать на его собственный вопрос «сколько я поставлю», а не на
+   * средний по столу.
+   */
+  private drawAceBetScreen(s: SimState, w: number, h: number, fb: Feedback): void {
+    const card = aceCardAt(s);
+    if (card < 0) return;
+
+    this.dim(w, h);
+    // Крупье — поверх затемнения, тем же приёмом, что и на расчёте: под 0.82
+    // затемнения его 0.85 непрозрачности превращаются в четверть и он снова
+    // становится незаметен — ровно то событие, ради которого экран и открыт.
+    this.drawAce(s, fb);
+
+    this.screenTitle(t('ace_bet.title'), w, h / 2 - 150);
+    this.wrapped(t('ace_bet.desc'), w / 2, h / 2 - 96, 620, 15, PALETTE.hudDim);
+
+    const stake = aceStakeFor(s, 0);
+    this.screenValue(t('ace_bet.stake'), stake, w, h / 2 - 40, 26, PALETTE.danger);
+    drawMultiplier(this.batch, BETS[s.kBet[card]].multiplier / FX_ONE, w / 2 + 70, h / 2 + 10, 13, PALETTE.danger);
+
+    this.confirmHint(w, h / 2 + 70);
+    this.cancelHint(w, h / 2 + 96);
   }
 
   /**

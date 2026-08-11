@@ -280,7 +280,7 @@ function checkRun(s: SimState): void {
   }
 
   if (s.meta[Meta.Earned] < 0) fail('заработано за забег ушло в минус', s.tick);
-  if (s.meta[Meta.PaidToAce] < 0) fail('отдано Тузу ушло в минус', s.tick);
+  if (s.meta[Meta.PaidToAce] < 0) fail('отдано Крупье ушло в минус', s.tick);
   if (s.meta[Meta.Keys] < 0) fail('ключей за забег меньше нуля', s.tick);
 }
 
@@ -318,8 +318,8 @@ function checkBets(s: SimState): void {
        * Знак кона говорит, ЧЕЙ он (bets.ts, `aceStakeAt`).
        *
        * Положительный — кон игрока: он списан с кошелька при подборе, а
-       * кошелёк в минус не уходит, потому что Туз в кредит не принимает
-       * (GDD §11). Отрицательный — кон Туза в Ставке Туза: тот не списан ни с
+       * кошелёк в минус не уходит, потому что Крупье в кредит не принимает
+       * (GDD §11). Отрицательный — кон Крупье в Ставке Крупье: тот не списан ни с
        * кого и потому потолком кошелька не ограничен. Ограничен он другим — и
        * это проверяется здесь, потому что ошибка в нём не видна ни в бою, ни в
        * логе, только в деньгах: `min(40 × этаж, 25% кошелька)` не может
@@ -327,7 +327,7 @@ function checkBets(s: SimState): void {
        */
       const ace = -s.aStake[k];
       if (ace > ACE_BET.stakePerFloor * s.meta[Meta.Floor]) {
-        fail(`Ставка Туза у игрока ${p} на ${ace} при потолке этажа`, s.tick);
+        fail(`Ставка Крупье у игрока ${p} на ${ace} при потолке этажа`, s.tick);
       }
       /*
        * Кон игрока ограничен сверху верхним тиром аппетита.
@@ -350,10 +350,10 @@ function checkBets(s: SimState): void {
   }
 }
 
-/** Туз: жест, бюджет выходов и его собственная ставка. */
+/** Крупье: жест, бюджет выходов и его собственная ставка. */
 function checkAce(s: SimState): void {
   const g = s.meta[Meta.AceGesture];
-  if (g < AceGesture.None || g > AceGesture.Ovation) fail(`жест Туза ${g}`, s.tick);
+  if (g < AceGesture.None || g > AceGesture.Ovation) fail(`жест Крупье ${g}`, s.tick);
 
   /*
    * Его карта на арене одна, и его ставок у игрока не больше одной.
@@ -370,7 +370,7 @@ function checkAce(s: SimState): void {
     }
     if (s.kOwner[i] === ACE) offers++;
   }
-  if (offers > 1) fail(`карт Туза на арене ${offers}, а бывает одна`, s.tick);
+  if (offers > 1) fail(`карт Крупье на арене ${offers}, а бывает одна`, s.tick);
 
   for (let p = 0; p < s.playerCount; p++) {
     let taken = 0;
@@ -378,12 +378,12 @@ function checkAce(s: SimState): void {
       const k = p * MAX_ACTIVE_BETS + i;
       if (s.aState[k] === BetState.Active && s.aStake[k] < 0) taken++;
     }
-    if (taken > 1) fail(`у игрока ${p} ${taken} Ставки Туза сразу`, s.tick);
+    if (taken > 1) fail(`у игрока ${p} ${taken} Ставки Крупье сразу`, s.tick);
   }
   if (s.meta[Meta.DeathStreak] < 0) fail('серия смертей ушла в минус', s.tick);
-  if (s.meta[Meta.AceCameos] < 0) fail('счётчик выходов Туза ушёл в минус', s.tick);
+  if (s.meta[Meta.AceCameos] < 0) fail('счётчик выходов Крупье ушёл в минус', s.tick);
   // Тело без позиции и позиция без тела — разные поломки, но обе означают,
-  // что клиент нарисует Туза не там, где он есть.
+  // что клиент нарисует Крупье не там, где он есть.
   if (s.meta[Meta.AceX] === 0 && s.meta[Meta.AceGesture] !== AceGesture.None) {
     fail('жест играется на пустой арене', s.tick);
   }
