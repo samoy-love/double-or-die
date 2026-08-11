@@ -2535,6 +2535,10 @@ export class Renderer {
     const enough = purse >= cut;
 
     this.screenTitle(enough ? t('house.title') : t('haggle.title'), w, h / 2 - 250);
+    // Заголовок называет ЧТО происходит, подпись — ПОЧЕМУ: без нужного
+    // разъяснения число «Доля заведения» падает как штраф без причины, а не
+    // как правило, известное заранее (UX §1.2 — контекст виден всегда).
+    this.screenLine(enough ? t('house.hint') : t('haggle.hint'), w, h / 2 - 214);
 
     let y = this.screenValue(t('house.cut'), cut, w, h / 2 - 190, 26, PALETTE.accent);
     y = this.screenValue(t('house.purse'), purse, w, y, 18, PALETTE.chip);

@@ -59,10 +59,12 @@ export type StringKey =
   | 'error.webgl2'
   | 'haggle.bet'
   | 'haggle.empty'
+  | 'haggle.hint'
   | 'haggle.sell'
   | 'haggle.title'
   | 'house.cut'
   | 'house.debt'
+  | 'house.hint'
   | 'house.pay'
   | 'house.purse'
   | 'house.short'
@@ -185,10 +187,12 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
       'WebGL2 недоступен: без него игра не рисуется. Обновите браузер или включите аппаратное ускорение.',
     'haggle.bet': 'Взять пари в следующей комнате',
     'haggle.empty': 'Продавать нечего',
+    'haggle.hint': 'Не хватает на оплату — выберите один из трёх выходов',
     'haggle.sell': 'Продать апгрейд',
     'haggle.title': 'Крупье предлагает выбор',
     'house.cut': 'Доля заведения',
     'house.debt': 'Взять в долг — позже появится долговая яма',
+    'house.hint': 'Доля из выигранного за этаж — платится один раз, на выходе',
     'house.pay': 'Заплатить',
     'house.purse': 'В кошельке',
     'house.short': 'Не хватает',
@@ -321,10 +325,12 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
       'WebGL2 is unavailable: the game cannot draw without it. Update the browser or enable hardware acceleration.',
     'haggle.bet': 'Take a bet in the next room',
     'haggle.empty': 'Nothing to sell',
+    'haggle.hint': 'Short on the payment — pick one of three ways out',
     'haggle.sell': 'Sell an upgrade',
     'haggle.title': 'The Ace offers a choice',
     'house.cut': 'House cut',
     'house.debt': 'Go into debt — a debt pit door will follow',
+    'house.hint': 'A share of what you won this floor — paid once, on the way out',
     'house.pay': 'Pay up',
     'house.purse': 'In the purse',
     'house.short': 'Short',
