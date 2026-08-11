@@ -483,8 +483,22 @@ function checkNames(strings: Strings, area: string, ids: readonly string[]): str
   return problems;
 }
 
-/** Строка в литерал TypeScript. Кавычки одинарные — так же форматирует prettier. */
-const quote = (v: string): string => `'${v.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+/**
+ * Строка в литерал TypeScript — так же, как это сделал бы prettier.
+ *
+ * Одинарные кавычки по умолчанию (`.prettierrc`), но не всегда: prettier
+ * считает вхождения обоих кавычек и берёт тот вариант, где меньше
+ * экранирований, — иначе строка с апострофом («you're») превращается в лес
+ * обратных слэшей, которых сам prettier никогда не пишет. Разница ловится
+ * `format:check`: сгенерированный файл обязан совпадать с prettier побайтово.
+ */
+const quote = (v: string): string => {
+  const singles = (v.match(/'/g) ?? []).length;
+  const doubles = (v.match(/"/g) ?? []).length;
+  const q = singles > doubles ? '"' : "'";
+  const escaped = v.replace(/\\/g, '\\\\').replace(new RegExp(q, 'g'), `\\${q}`);
+  return `${q}${escaped}${q}`;
+};
 
 /**
  * Пара «ключ: значение» так, как её написал бы prettier.
