@@ -67,6 +67,16 @@ async function main(): Promise<void> {
    */
   const profile = new Profile();
   if (profile.problem) log('save_recovered', { source: profile.source, problem: profile.problem });
+  /*
+   * Первый забег — глоссарий открывается сам, без нажатия «как играть».
+   *
+   * Playtest: «сейчас ничего не понятно» — а туториал стоял за отдельной
+   * кнопкой, которую новый игрок мог и не найти на голом меню. Счётчик
+   * `runs` уже существовал для этого разбора (см. комментарий ниже про
+   * «Выбор режима», GDD §23) — используем то же поле, не заводя нового.
+   * На втором забеге и далее счётчик не нулевой, и меню остаётся голым.
+   */
+  if (profile.save.runs === 0) loop.openTutorial();
   loop.audio.setVolume(profile.save.settings.volume);
   loop.feel.flashScale = profile.save.settings.flash;
   loop.setCashOutFocusedOnly(profile.save.settings.cashOutFocusedOnly);
