@@ -144,7 +144,13 @@ const threatBudget = (
     room <= kink
       ? 100 + earlyPct * (room - 1)
       : 100 + earlyPct * (kink - 1) + latePct * (room - kink);
-  return ((base * roomFactor) / 100) * 2 ** (floor - 1) * (1 + 0.8 * (players - 1));
+  const full = ((base * roomFactor) / 100) * 2 ** (floor - 1) * (1 + 0.8 * (players - 1));
+  // Скидка первой комнаты забега — тот же множитель, что и `roomBudget` в
+  // `packages/sim/src/enemies.ts` (`WAVE.firstRoomPct`), продублирован не
+  // импортом: модель нарочно не тянет sim-конфиг внутрь себя (см. шапку
+  // файла), а число одно и то же по этой же причине — иначе комната 1
+  // молча разъехалась бы с реальной симуляцией на калибровочном тесте.
+  return floor === 1 && room === 1 ? full * 0.7 : full;
 };
 
 /**
@@ -161,7 +167,7 @@ const threatBudget = (
  * тем же способом, что и остальные калибровки: обратным счётом из
  * `tests/abstract-calibration-*.test.ts` (модель против полной симуляции).
  */
-const EFFECTIVE_DENSITY = 2.2;
+const EFFECTIVE_DENSITY = 2.52;
 
 /**
  * Реальный урон в секунду по навыку — SIMULATION §3: точность × доля
@@ -376,11 +382,12 @@ const DEFAULT_CALIBRATION: CalibrationParams = {
   roomDurationCv: 0.23,
   chipsCv: 0.35,
   // novice пересчитан той же точечной правкой, что и hitsScale/chipsScale
-  // ниже — новая кривая роста бюджета сдвинула длительность неравномерно по
-  // навыкам, medan/veteran/master остались в допуске без изменений.
+  // ниже — новая кривая роста бюджета и скидка первой комнаты
+  // (`WAVE.firstRoomPct`) сдвинули длительность неравномерно по навыкам,
+  // veteran/master остались в допуске без изменений.
   roomDurationScale: {
     novice: 0.693,
-    median: 1.201,
+    median: 1.0743,
     veteran: 1.509,
     master: 1.555,
   },
@@ -395,36 +402,36 @@ const DEFAULT_CALIBRATION: CalibrationParams = {
    * бага заодно с ним. Полный ре-трейн по SIMULATION §2 остаётся долгом.
    */
   hitsScale: {
-    novice: 15.648,
-    median: 12.651,
-    veteran: 13.354,
-    master: 14.268,
+    novice: 11.244,
+    median: 10.515,
+    veteran: 10.885,
+    master: 10.525,
   },
   // Значения по умолчанию (1.0) не пишутся явно — отсутствующий профиль и так
   // читается как 1.0 (см. комментарий поля выше); ниже — только профили с
   // измеренным отклонением. Четыре гейт-профиля пересчитаны той же правкой,
   // что и `hitsScale` выше — остальные двенадцать ждут полного ре-трейна.
   chipsScale: {
-    'novice:single': 0.804,
+    'novice:single': 0.184,
     'novice:stack': 2.68,
     'median:single': 2.68,
-    'median:stack': 0.16,
-    'veteran:chips': -0.082,
-    'master:none': 0.741,
+    'median:stack': -0.295,
+    'veteran:chips': -0.2551,
+    'master:none': 0.7706,
   },
   // 'novice:single', 'median:stack' и 'veteran:chips' пересчитаны той же
   // точечной правкой — остальные девять ждут полного ре-трейна вместе с
   // прочими полями выше.
   betWinScale: {
-    'novice:single': 0.2991,
+    'novice:single': 0.4849,
     'novice:stack': 0.0083,
     'novice:chips': 0.0083,
     'median:single': 0.1022,
-    'median:stack': 0.4835,
+    'median:stack': 0.5722,
     'median:chips': 0.1022,
     'veteran:single': 0.1532,
     'veteran:stack': 0.1532,
-    'veteran:chips': 0.5395,
+    'veteran:chips': 0.5812,
     'master:single': 0.19,
     'master:stack': 0.19,
     'master:chips': 0.19,
