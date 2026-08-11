@@ -62,7 +62,11 @@ import { checkSafety } from './safety';
 import { diagnoseCorpus } from './goldenCorpus';
 import { runBalance } from './balance';
 import { runSearch, formatSearchReport, DEFAULT_SEARCH_OPTIONS } from './search';
-import { runCombatSearch, formatCombatSearchReport, DEFAULT_COMBAT_SEARCH_OPTIONS } from './combatSearch';
+import {
+  runCombatSearch,
+  formatCombatSearchReport,
+  DEFAULT_COMBAT_SEARCH_OPTIONS,
+} from './combatSearch';
 
 interface Args {
   seed: number;
@@ -864,10 +868,17 @@ function doTiming(a: Args): never {
  */
 function applyCombatLevers(a: Args): void {
   if (
-    a.wedgeThreat === null && a.wedgeHp === null && a.waveBudget === null &&
-    a.waveGrowth === null && a.brickRoom === null && a.fuseRoom === null &&
-    a.playerHearts === null && a.playerDashCooldown === null && a.playerHurtInvul === null
-  ) return;
+    a.wedgeThreat === null &&
+    a.wedgeHp === null &&
+    a.waveBudget === null &&
+    a.waveGrowth === null &&
+    a.brickRoom === null &&
+    a.fuseRoom === null &&
+    a.playerHearts === null &&
+    a.playerDashCooldown === null &&
+    a.playerHurtInvul === null
+  )
+    return;
   const wedge = ENEMIES.find((e) => e.type === EnemyType.Wedge);
   const brick = ENEMIES.find((e) => e.type === EnemyType.Brick);
   const fuse = ENEMIES.find((e) => e.type === EnemyType.Fuse);
@@ -878,7 +889,8 @@ function applyCombatLevers(a: Args): void {
   // Крутой участок излома, не пологий: он определяет исход у восьмой
   // комнаты, а пологий (`roomGrowthEarlyPct`) поиском не крутили — его
   // значение фиксировано ре-бейзлайном playtest 0.3.1 (DIFFICULTY §4).
-  if (a.waveGrowth !== null) (WAVE as { roomGrowthLatePct: number }).roomGrowthLatePct = a.waveGrowth;
+  if (a.waveGrowth !== null)
+    (WAVE as { roomGrowthLatePct: number }).roomGrowthLatePct = a.waveGrowth;
   if (a.brickRoom !== null) (brick as { unlockRoom: number }).unlockRoom = a.brickRoom;
   if (a.fuseRoom !== null) (fuse as { unlockRoom: number }).unlockRoom = a.fuseRoom;
   // Рычаги выживаемости (второй заход поиска, см. combatSearch.ts): читаются
@@ -1102,7 +1114,9 @@ async function doSearchCombat(a: Args): Promise<never> {
       `${opts.searchRuns} прогонов/кандидата в поиске, ${opts.validateRuns} в финале...`,
   );
   const res = await runCombatSearch(opts, (p) => {
-    console.error(`  поколение ${p.generation + 1}/${p.totalGenerations}: лучшее красных ${p.bestRed}`);
+    console.error(
+      `  поколение ${p.generation + 1}/${p.totalGenerations}: лучшее красных ${p.bestRed}`,
+    );
   });
   const report = formatCombatSearchReport(res, opts);
   if (a.json || a.out) {

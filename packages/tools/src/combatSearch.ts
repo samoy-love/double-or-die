@@ -306,7 +306,11 @@ export async function runCombatSearch(
     if (better(survivors[0], best)) best = survivors[0];
 
     generationLog.push({ gen, bestRed: best.result.redCount });
-    onProgress?.({ generation: gen, totalGenerations: opts.generations, bestRed: best.result.redCount });
+    onProgress?.({
+      generation: gen,
+      totalGenerations: opts.generations,
+      bestRed: best.result.redCount,
+    });
   }
 
   // Финал: топ-кандидаты перепроверяются полным гейтом — то, что выиграло на
@@ -334,7 +338,10 @@ const fmtLev = (l: CombatLevers): string =>
   `сердца=${l.playerStartHearts.toFixed(0)} · откат рывка=${l.playerDashCooldownTicks.toFixed(0)}т · ` +
   `неуязвимость=${l.playerHurtInvulTicks.toFixed(0)}т`;
 
-export function formatCombatSearchReport(res: CombatSearchResult, opts: CombatSearchOptions): string {
+export function formatCombatSearchReport(
+  res: CombatSearchResult,
+  opts: CombatSearchOptions,
+): string {
   const lines: string[] = [];
   lines.push('ПОИСК ПО БОЮ — полная симуляция, пул процессов');
   lines.push(

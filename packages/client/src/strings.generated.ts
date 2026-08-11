@@ -370,7 +370,7 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
       'A card on the floor is a condition for the fight. Pick it up — the stake is locked in; clear it — collect at the multiplier',
     'tutorial.bet.name': 'Bet',
     'tutorial.debt_pit.desc':
-      'Replaces one of the three doors, only while you\'re in debt. Harder than a normal fight, but clears the curse — same as any cleared room',
+      "Replaces one of the three doors, only while you're in debt. Harder than a normal fight, but clears the curse — same as any cleared room",
     'tutorial.debt_pit.name': 'Debt pit',
     'tutorial.fat_fight.desc': '+50% enemies and +100% room payout, plus an extra bet card',
     'tutorial.fat_fight.name': 'Fat fight',
@@ -387,7 +387,7 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
     'tutorial.keys.name': 'Keys',
     'tutorial.title': 'How to play',
     'tutorial.trampoline.desc':
-      'After a failed bet, the next room offers an easy one — losses don\'t chain',
+      "After a failed bet, the next room offers an easy one — losses don't chain",
     'tutorial.trampoline.name': 'Leg up',
     'upgrade.damage_up.name': 'Damage +20%',
     'upgrade.dash_cooldown.name': 'Dash Cooldown −30%',

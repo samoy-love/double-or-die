@@ -555,7 +555,23 @@ export class Renderer {
       for (let i = 0; i < rings; i++) {
         const t = i / (rings - 1);
         const half = lerp(w * 0.34, w * 0.72, t);
-        b.push(Shape.Box, cx, cy, half, half * (h / w), 0, vg.r, vg.g, vg.b, 0, 0.05 + t * 0.1, vg.r, vg.g, vg.b, 0.05 + t * 0.09);
+        b.push(
+          Shape.Box,
+          cx,
+          cy,
+          half,
+          half * (h / w),
+          0,
+          vg.r,
+          vg.g,
+          vg.b,
+          0,
+          0.05 + t * 0.1,
+          vg.r,
+          vg.g,
+          vg.b,
+          0.05 + t * 0.09,
+        );
       }
     }
 
@@ -585,7 +601,23 @@ export class Renderer {
      * контур: рамка обозначает границу, а не рисует вторую панель поверх пола.
      */
     const border = PALETTE.chrome;
-    b.push(Shape.Box, w / 2, h / 2, w / 2 - 4, h / 2 - 4, 0, 0, 0, 0, 0, 6, border.r, border.g, border.b, 1);
+    b.push(
+      Shape.Box,
+      w / 2,
+      h / 2,
+      w / 2 - 4,
+      h / 2 - 4,
+      0,
+      0,
+      0,
+      0,
+      0,
+      6,
+      border.r,
+      border.g,
+      border.b,
+      1,
+    );
 
     this.drawRedZone(s);
 
@@ -1102,7 +1134,18 @@ export class Renderer {
          * принимается ДО нажатия кнопки, а не после.
          */
         const c = PALETTE.hudText;
-        this.text.push(betName(spec.id), x, y - r * 2.2 - 24, 14, Face.Ui, c.r, c.g, c.b, 0.95, 'center');
+        this.text.push(
+          betName(spec.id),
+          x,
+          y - r * 2.2 - 24,
+          14,
+          Face.Ui,
+          c.r,
+          c.g,
+          c.b,
+          0.95,
+          'center',
+        );
       }
     }
   }
@@ -1126,7 +1169,11 @@ export class Renderer {
     // — голое кольцо без штриха внутри, а не квадрат клавиши без буквы: тач
     // не жмёт кнопку, он касается самой карты (GDD §21).
     const frame =
-      scheme === InputScheme.Gamepad ? Shape.Circle : scheme === InputScheme.Touch ? Shape.Ring : Shape.Box;
+      scheme === InputScheme.Gamepad
+        ? Shape.Circle
+        : scheme === InputScheme.Touch
+          ? Shape.Ring
+          : Shape.Box;
     b.push(frame, x, y, 15, 15, 0, 0, 0, 0, 0, 3, c.r, c.g, c.b, 0.95);
     if (scheme === InputScheme.Touch) return;
     if (scheme === InputScheme.Gamepad) {
@@ -1840,13 +1887,7 @@ export class Renderer {
    * дороже всего, что оно способно уточнить. Текст живёт там, где на него
    * смотрят: на расчёте и в репликах Крупье.
    */
-  private drawHud(
-    s: SimState,
-    w: number,
-    h: number,
-    fb: Feedback,
-    cashOutTarget = -1,
-  ): void {
+  private drawHud(s: SimState, w: number, h: number, fb: Feedback, cashOutTarget = -1): void {
     const b = this.batch;
     const top = 34;
 
@@ -1973,7 +2014,21 @@ export class Renderer {
     const halfW = 150;
     const halfH = 30;
     const gold = PALETTE.accent;
-    b.push(Shape.Box, cx, cy, halfW, halfH, 0, ...channels(ENTITY_FILL), 0.82, 2, gold.r, gold.g, gold.b, 0.5);
+    b.push(
+      Shape.Box,
+      cx,
+      cy,
+      halfW,
+      halfH,
+      0,
+      ...channels(ENTITY_FILL),
+      0.82,
+      2,
+      gold.r,
+      gold.g,
+      gold.b,
+      0.5,
+    );
 
     const glyphX = cx - halfW + 24;
     const pad = this.scheme === InputScheme.Gamepad;
@@ -2245,7 +2300,13 @@ export class Renderer {
     // на вопрос «что тут делать в первую очередь». Прямоугольник общий с
     // `loop.ts` (клик, наведение) — см. `menuLayout.ts`.
     const playX = w / 2 + MENU_PLAY_BUTTON.dx;
-    const c = this.screenCard(playX, h / 2, MENU_PLAY_BUTTON.halfW, MENU_PLAY_BUTTON.halfH, overlay.focus === 0);
+    const c = this.screenCard(
+      playX,
+      h / 2,
+      MENU_PLAY_BUTTON.halfW,
+      MENU_PLAY_BUTTON.halfH,
+      overlay.focus === 0,
+    );
     this.text.push(t('menu.play'), playX, h / 2, 28, Face.Ui, c.r, c.g, c.b, 1, 'center');
 
     const settingsX = w / 2 + MENU_SETTINGS_BUTTON.dx;
@@ -2256,7 +2317,18 @@ export class Renderer {
       MENU_SETTINGS_BUTTON.halfH,
       overlay.focus === 1,
     );
-    this.text.push(t('menu.settings'), settingsX, h / 2, 18, Face.Ui, cs.r, cs.g, cs.b, 1, 'center');
+    this.text.push(
+      t('menu.settings'),
+      settingsX,
+      h / 2,
+      18,
+      Face.Ui,
+      cs.r,
+      cs.g,
+      cs.b,
+      1,
+      'center',
+    );
 
     // Клик работает только на этом экране (боя тут точно нет), поэтому
     // подсказка своя, а не общий confirmHint (UX §2).
@@ -2300,7 +2372,15 @@ export class Renderer {
       1,
       'center',
     );
-    this.wrapped(t('settings.cashout_focus.desc'), w / 2, h / 2 + 20, 440, 13, PALETTE.hudDim, 0.85);
+    this.wrapped(
+      t('settings.cashout_focus.desc'),
+      w / 2,
+      h / 2 + 20,
+      440,
+      13,
+      PALETTE.hudDim,
+      0.85,
+    );
 
     this.confirmHint(w, h / 2 + 110);
     this.cancelHint(w, h / 2 + 138);
@@ -2639,13 +2719,7 @@ export class Renderer {
    * Текста здесь нет по той же причине, что и на карте: пари читается
    * пиктограммой и цветом рамки, а имя ждёт расчёта.
    */
-  private drawBets(
-    s: SimState,
-    player: number,
-    x: number,
-    y: number,
-    highlightSlot = -1,
-  ): void {
+  private drawBets(s: SimState, player: number, x: number, y: number, highlightSlot = -1): void {
     const b = this.batch;
     let cursor = x;
     let n = 0;
@@ -3087,7 +3161,14 @@ export class Renderer {
 
     const stake = aceStakeFor(s, 0);
     this.screenValue(t('ace_bet.stake'), stake, w, h / 2 - 40, 26, PALETTE.danger);
-    drawMultiplier(this.batch, BETS[s.kBet[card]].multiplier / FX_ONE, w / 2 + 70, h / 2 + 10, 13, PALETTE.danger);
+    drawMultiplier(
+      this.batch,
+      BETS[s.kBet[card]].multiplier / FX_ONE,
+      w / 2 + 70,
+      h / 2 + 10,
+      13,
+      PALETTE.danger,
+    );
 
     this.confirmHint(w, h / 2 + 70);
     this.cancelHint(w, h / 2 + 96);

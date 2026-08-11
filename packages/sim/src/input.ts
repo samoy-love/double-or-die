@@ -159,8 +159,7 @@ export const cashOutTargetOf = (f: InputFrame): number => {
 
 /** Уложить цель в биты кадра. Обратная к `cashOutTargetOf`, живёт рядом с ней. */
 export const withCashOutTarget = (buttons: number, slot: number): number =>
-  (buttons & ~(CASHOUT_TARGET_MASK << CASHOUT_TARGET_SHIFT)) |
-  ((slot + 1) << CASHOUT_TARGET_SHIFT);
+  (buttons & ~(CASHOUT_TARGET_MASK << CASHOUT_TARGET_SHIFT)) | ((slot + 1) << CASHOUT_TARGET_SHIFT);
 
 /**
  * Кадры пакуются в плоский Int32Array: пять слов на кадр на игрока.

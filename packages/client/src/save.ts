@@ -188,7 +188,10 @@ function normalize(o: Record<string, unknown>): Save {
     settings: {
       volume: unit(settings.volume, DEFAULT_SAVE.settings.volume),
       flash: unit(settings.flash, DEFAULT_SAVE.settings.flash),
-      cashOutFocusedOnly: bool(settings.cashOutFocusedOnly, DEFAULT_SAVE.settings.cashOutFocusedOnly),
+      cashOutFocusedOnly: bool(
+        settings.cashOutFocusedOnly,
+        DEFAULT_SAVE.settings.cashOutFocusedOnly,
+      ),
     },
     keys: count(o.keys),
     runs: count(o.runs),
