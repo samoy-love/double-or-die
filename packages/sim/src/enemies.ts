@@ -119,7 +119,19 @@ export function roomBudget(room: number, players: number, floor = 1): number {
   const roomFactor = roomGrowthFactor(room);
   const playerFactor = 100 + WAVE.playerGrowthPct * (players - 1);
   const base = Math.trunc((WAVE.baseBudget * roomFactor * playerFactor) / 10000);
-  return base << (floor - 1);
+  const full = base << (floor - 1);
+  /*
+   * Самая первая комната забега — не «комната 1 с плоским ростом», а первая
+   * секунда знакомства с игрой вообще. Даже на пологом участке кривой она
+   * держит семь Клинов на волну (бюджет ~100 ÷ угроза 14), и все семь
+   * успевают выйти на арену одним заходом — playtest: «куча врагов,
+   * двигающихся одинаково, толпой давят». Тесная орбита (`WEDGE.orbitBands`)
+   * и растянутый выход (`WAVE.spawnStaggerTicks`) чинят ЧТЕНИЕ этой семёрки,
+   * но не сам факт, что игрок ни разу не встречал Клина и уже дерётся с
+   * семью. Скидка — только здесь: у второй комнаты знакомство уже состоялось,
+   * а дальше кривая работает как и была задумана.
+   */
+  return floor === 1 && room === 1 ? Math.trunc((full * WAVE.firstRoomPct) / 100) : full;
 }
 
 /**
