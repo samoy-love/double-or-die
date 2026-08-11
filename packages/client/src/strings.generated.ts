@@ -47,11 +47,15 @@ export type StringKey =
   | 'door.title'
   | 'door.type.event'
   | 'door.type.fat'
+  | 'door.type.fat.hint'
   | 'door.type.fight'
+  | 'door.type.fight.hint'
   | 'door.type.gift'
+  | 'door.type.gift.hint'
   | 'door.type.pit'
   | 'door.type.pit.hint'
   | 'door.type.shop'
+  | 'door.type.shop.hint'
   | 'error.webgl2'
   | 'haggle.bet'
   | 'haggle.empty'
@@ -168,11 +172,15 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
     'door.title': 'Выбирайте дверь',
     'door.type.event': 'Событие',
     'door.type.fat': 'Жирный бой',
+    'door.type.fat.hint': 'Больше врагов, лишняя карта пари',
     'door.type.fight': 'Бой',
+    'door.type.fight.hint': 'Обычная комната',
     'door.type.gift': 'Дар',
+    'door.type.gift.hint': 'Бой, а после — апгрейд бесплатно',
     'door.type.pit': 'Долговая яма',
     'door.type.pit.hint': 'Тяжелее боя, снимает проклятие',
     'door.type.shop': 'Лавка',
+    'door.type.shop.hint': 'Бой, а после — три апгрейда на выбор',
     'error.webgl2':
       'WebGL2 недоступен: без него игра не рисуется. Обновите браузер или включите аппаратное ускорение.',
     'haggle.bet': 'Взять пари в следующей комнате',
@@ -300,11 +308,15 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
     'door.title': 'Choose a door',
     'door.type.event': 'Event',
     'door.type.fat': 'Fat fight',
+    'door.type.fat.hint': 'More enemies, an extra bet card',
     'door.type.fight': 'Fight',
+    'door.type.fight.hint': 'A regular room',
     'door.type.gift': 'Gift',
+    'door.type.gift.hint': 'Fight, then a free upgrade',
     'door.type.pit': 'Debt pit',
     'door.type.pit.hint': 'Harder fight, clears the curse',
     'door.type.shop': 'Shop',
+    'door.type.shop.hint': 'Fight, then three upgrades to choose from',
     'error.webgl2':
       'WebGL2 is unavailable: the game cannot draw without it. Update the browser or enable hardware acceleration.',
     'haggle.bet': 'Take a bet in the next room',

@@ -2132,12 +2132,17 @@ export class Renderer {
         chosen ? 1 : 0.75,
         'center',
       );
-      // Долговая яма тяжелее обычного боя и появляется не всегда — без
-      // объяснения игрок примет её за обычную дверь и не поймёт, зачем она
-      // вообще возникла (UX §1.2 — контекст виден всегда).
-      if (s.doorType[i] === DoorType.DebtPit) {
-        this.wrapped(t('door.type.pit.hint'), x, h / 2 + 184, gap - 20, 12, colour, 0.6);
-      }
+      /*
+       * Подпись под именем — у каждой двери, не только у Долговой ямы.
+       *
+       * «Жирный бой» и «Лавка» новичку говорят не больше пустого имени: без
+       * пояснения он выбирает дверь по названию наугад, а не по содержанию
+       * (UX §1.2 — контекст виден всегда). Долговая яма отличалась раньше не
+       * потому, что важнее прочих, а потому, что первой получила жалобу —
+       * остальные четыре молчали тем же молчанием, просто его не заметили.
+       */
+      const hint = doorTypeHint(s.doorType[i] as DoorType);
+      if (hint) this.wrapped(hint, x, h / 2 + 184, gap - 20, 12, colour, 0.6);
     }
     this.confirmHint(w, h / 2 + 220);
   }
@@ -3645,6 +3650,28 @@ const DOOR_NAME: Readonly<Record<DoorType, StringKey>> = {
 };
 
 const doorTypeName = (type: DoorType): string => t(DOOR_NAME[type]);
+
+/**
+ * Подсказка «что за дверью» — по той же таблице, что и имя.
+ *
+ * Раньше пояснение получала только Долговая яма — единственная дверь, с
+ * которой начал новичок жаловался, что не понимает происходящего. Но
+ * «Жирный бой», «Лавка» и «Дар» новому игроку говорят не больше пустого
+ * имени: чем они отличаются от «Боя», по одному слову не угадать. `door.
+ * type.event` не в списке: у него нет содержания (GDD §5), объяснять нечего.
+ */
+const DOOR_HINT: Readonly<Partial<Record<DoorType, StringKey>>> = {
+  [DoorType.Fight]: 'door.type.fight.hint',
+  [DoorType.Fat]: 'door.type.fat.hint',
+  [DoorType.Shop]: 'door.type.shop.hint',
+  [DoorType.Gift]: 'door.type.gift.hint',
+  [DoorType.DebtPit]: 'door.type.pit.hint',
+};
+
+const doorTypeHint = (type: DoorType): string | null => {
+  const key = DOOR_HINT[type];
+  return key ? t(key) : null;
+};
 
 /** Форма иконки: категория обязана читаться и без цвета (GDD §21). */
 const categoryShape = (c: BetCategory): Shape =>
