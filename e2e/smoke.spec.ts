@@ -32,9 +32,13 @@ test.describe('релизная сборка', () => {
   test('открывается без ошибок и держит канвас', async ({ page }) => {
     const errors: string[] = [];
     page.on('console', (m) => {
+      console.log('[browser console]', m.type(), m.text());
       if (m.type() === 'error') errors.push(m.text());
     });
-    page.on('pageerror', (e) => errors.push(String(e)));
+    page.on('pageerror', (e) => {
+      console.log('[browser pageerror]', String(e));
+      errors.push(String(e));
+    });
 
     await page.goto('/');
     const canvas = page.locator('#game');
