@@ -96,7 +96,14 @@ export interface RoomSample {
 export interface LeverOverrides {
   /** Множитель поверх `WAVE.baseBudget` (300, DIFFICULTY §4). `undefined` = 1. */
   threatBudgetScale?: number;
-  /** Замена `WAVE.roomGrowthPct` (8, DIFFICULTY §4), в процентах. `undefined` = 8. */
+  /**
+   * Замена `WAVE.roomGrowthLatePct` (8, DIFFICULTY §4), в процентах. `undefined` = 8.
+   *
+   * Только поздний сегмент кривой (после излома, `WAVE.roomGrowthKink`):
+   * ранний сегмент (`WAVE.roomGrowthEarlyPct`, 2%) и сама точка излома (5)
+   * фиксированы и в поиск не попадают — тот же выбор, что и в
+   * `combatSearch.ts` (`waveRoomGrowthPct`).
+   */
   roomGrowthPct?: number;
   /**
    * Множитель поверх среднего каталожного множителя пари (`AVERAGE_MULTIPLIER`
@@ -115,6 +122,13 @@ const NO_LEVERS: LeverOverrides = {};
  * изменений при `lev` по умолчанию. Число живёт в конфиге симуляции; здесь
  * оно нужно только затем, чтобы модель считала длительность той же формулой,
  * что и дизайн-документ, а не собственной оценкой.
+ *
+ * Кусочная кривая роста, а не линейная: пологая до излома (`kink`, комната 5,
+ * этот игрок почти свежий), крутая после (усталость и растущий состав) —
+ * повторяет `roomGrowthFactor` в `packages/sim/src/enemies.ts` один в один.
+ * Разошлась с той формулой один раз (playtest 0.3.1) и калибровочный гейт
+ * молчал: он звал старую линейную формулу и не видел, что модель и
+ * симуляция разъехались.
  */
 const threatBudget = (
   floor: number,
@@ -123,12 +137,37 @@ const threatBudget = (
   lev: LeverOverrides = NO_LEVERS,
 ): number => {
   const base = 300 * (lev.threatBudgetScale ?? 1);
-  const roomGrowth = (lev.roomGrowthPct ?? 8) / 100;
-  return base * (1 + roomGrowth * (room - 1)) * 2 ** (floor - 1) * (1 + 0.8 * (players - 1));
+  const earlyPct = 2;
+  const kink = 5;
+  const latePct = lev.roomGrowthPct ?? 8;
+  const roomFactor =
+    room <= kink
+      ? 100 + earlyPct * (room - 1)
+      : 100 + earlyPct * (kink - 1) + latePct * (room - kink);
+  const full = ((base * roomFactor) / 100) * 2 ** (floor - 1) * (1 + 0.8 * (players - 1));
+  // Скидка первой комнаты забега — тот же множитель, что и `roomBudget` в
+  // `packages/sim/src/enemies.ts` (`WAVE.firstRoomPct`), продублирован не
+  // импортом: модель нарочно не тянет sim-конфиг внутрь себя (см. шапку
+  // файла), а число одно и то же по этой же причине — иначе комната 1
+  // молча разъехалась бы с реальной симуляцией на калибровочном тесте.
+  return floor === 1 && room === 1 ? full * 0.7 : full;
 };
 
-/** Эффективная плотность прочности — DIFFICULTY §3: 0.31 выстрела на очко угрозы. */
-const EFFECTIVE_DENSITY = 3.1;
+/**
+ * Эффективная плотность прочности — выстрелов на очко угрозы, ×10 (DIFFICULTY §3).
+ *
+ * DIFFICULTY §3 выводит 0.31 по каталогу из девяти врагов, а в бою из них
+ * сегодня только три (Клин, Кирпич, Фитиль, `ENEMY_TYPE_COUNT=3`) — плотность
+ * реального боя решает их микс, а не полный каталог. Угроза Клина удвоена
+ * (7→14, DIFFICULTY §7: он один держал D5/D6), и выстрелов на очко угрозы у
+ * него упало вдвое (2/14 против прежних 2/7) — Клин стал «дешёвым» по бюджету
+ * при том же числе выстрелов, отчего комната опустошает бюджет угрозы куда
+ * быстрее, чем убивает. Точное число не выводится в уме — зависит от того,
+ * как часто каждый тип встречается по факту (DIFFICULTY §7), — и подтверждено
+ * тем же способом, что и остальные калибровки: обратным счётом из
+ * `tests/abstract-calibration-*.test.ts` (модель против полной симуляции).
+ */
+const EFFECTIVE_DENSITY = 2.52;
 
 /**
  * Реальный урон в секунду по навыку — SIMULATION §3: точность × доля
@@ -171,7 +210,7 @@ const meanRoomSeconds = (input: RoomInput, lev: LeverOverrides = NO_LEVERS): num
  * растягивать её по времени комнаты нечем — источник в документе уже усреднён
  * по этажу целиком.
  */
-const FLOOR_HITS_PER_ROOM: Record<1 | 2 | 3, number> = { 1: 0.25, 2: 0.4, 3: 0.55 };
+const FLOOR_HITS_PER_ROOM: Record<1 | 2 | 3, number> = { 1: 0.068, 2: 0.108, 3: 0.149 };
 
 /**
  * Навык двигает попадания в обе стороны от медианного 1.0 — обратно
@@ -342,39 +381,57 @@ export interface CalibrationParams {
 const DEFAULT_CALIBRATION: CalibrationParams = {
   roomDurationCv: 0.23,
   chipsCv: 0.35,
+  // novice пересчитан той же точечной правкой, что и hitsScale/chipsScale
+  // ниже — новая кривая роста бюджета и скидка первой комнаты
+  // (`WAVE.firstRoomPct`) сдвинули длительность неравномерно по навыкам,
+  // veteran/master остались в допуске без изменений.
   roomDurationScale: {
-    novice: 0.775,
-    median: 1.201,
+    novice: 0.693,
+    median: 1.0743,
     veteran: 1.509,
     master: 1.555,
   },
+  /*
+   * novice/median/veteran/master пересчитаны точечно (не полный ре-трейн,
+   * 200 забегов на профиль, seed 100000 — тот же объём, что у гейта) после
+   * трёх правок, разошедшихся со старой калибровкой разом: кусочная кривая
+   * роста бюджета (излом на 5-й комнате), угроза Клина 7→14 и починка
+   * измерения — раньше плата заведению по ошибке текла в доход комнаты, а
+   * Ставка Крупье считалась с обратным знаком (см. `betNetChips`,
+   * `collectFullSimMetrics`). Старые числа калибровали не баланс, а эти два
+   * бага заодно с ним. Полный ре-трейн по SIMULATION §2 остаётся долгом.
+   */
   hitsScale: {
-    novice: 12.387,
-    median: 13.573,
-    veteran: 14.0,
-    master: 15.133,
+    novice: 11.244,
+    median: 10.515,
+    veteran: 10.885,
+    master: 10.525,
   },
   // Значения по умолчанию (1.0) не пишутся явно — отсутствующий профиль и так
   // читается как 1.0 (см. комментарий поля выше); ниже — только профили с
-  // измеренным отклонением.
+  // измеренным отклонением. Четыре гейт-профиля пересчитаны той же правкой,
+  // что и `hitsScale` выше — остальные двенадцать ждут полного ре-трейна.
   chipsScale: {
-    'novice:single': 2.68,
+    'novice:single': 0.184,
     'novice:stack': 2.68,
     'median:single': 2.68,
-    'median:stack': 2.68,
-    'veteran:chips': 1.42,
-    'master:none': 0.062,
+    'median:stack': -0.295,
+    'veteran:chips': -0.2551,
+    'master:none': 0.7706,
   },
+  // 'novice:single', 'median:stack' и 'veteran:chips' пересчитаны той же
+  // точечной правкой — остальные девять ждут полного ре-трейна вместе с
+  // прочими полями выше.
   betWinScale: {
-    'novice:single': 0.0083,
+    'novice:single': 0.4849,
     'novice:stack': 0.0083,
     'novice:chips': 0.0083,
     'median:single': 0.1022,
-    'median:stack': 0.1022,
+    'median:stack': 0.5722,
     'median:chips': 0.1022,
     'veteran:single': 0.1532,
     'veteran:stack': 0.1532,
-    'veteran:chips': 0.1532,
+    'veteran:chips': 0.5812,
     'master:single': 0.19,
     'master:stack': 0.19,
     'master:chips': 0.19,
@@ -488,8 +545,18 @@ export function sampleRoom(
 
   const profile: ProfileName = `${input.skill}:${input.strategy}`;
   const meanChips = chipsMean(input) * (cal.chipsScale[profile] ?? 1);
-  const chipsSigma = Math.max(0.5, meanChips * cal.chipsCv);
-  const chips = Math.max(0, Math.round(meanChips + sampleNormal(rand) * chipsSigma));
+  const chipsSigma = Math.max(0.5, Math.abs(meanChips) * cal.chipsCv);
+  /*
+   * Не зажато в 0. Доход с пола сам по себе неотрицателен, но то, что здесь
+   * называется «доходом», на деле — доход МИНУС эффект пари (`betNetChips`),
+   * а у стратегий с четырьмя одновременными ставками (`chips`, аппетит
+   * «по-крупному») эта разница уходит в минус: смертность обрывает пари
+   * досрочным поражением куда чаще расчётного (см. `betWinScale`), и потеря
+   * кона тогда больше, чем успевает принести пол. Зажатый в 0 `chips` не мог
+   * представить эту реальность ни при каком `chipsScale`, и калибровка
+   * `veteran:chips` была недостижима буквально по формуле, а не по цифрам.
+   */
+  const chips = Math.round(meanChips + sampleNormal(rand) * chipsSigma);
 
   const betsTaken = STRATEGY_BETS_PER_ROOM[input.strategy];
   const effectiveMultiplier = AVERAGE_MULTIPLIER * (lev.betMultiplierScale ?? 1);
@@ -576,6 +643,28 @@ function betNetChips(bet: {
   readonly outcome: string;
   readonly id: string;
 }): number {
+  /*
+   * Ставка Крупье кодируется отрицательным `stake` (bets.ts, `aStake`) — это
+   * его кон, не игрока, и правило выплаты у неё своё: один к одному из его
+   * кармана при выигрыше, а не множитель каталога (GDD §12А.1, `settleBets`).
+   * Формула ниже для обычных пари даёт на этой карте противоположный знак:
+   * «проигрыш» списывает кон с игрока при положительном `stake`, но при
+   * отрицательном (кон чужой) должен ПРИБАВЛЯТЬ — заведение платит, а не
+   * забирает, — и наоборот для выигрыша. Не разведя их, «доход с пола»
+   * (`chipsMean`, ECONOMY §4, о пари не знающая вовсе) сравнивался бы с
+   * величиной, где эффект Ставки Крупье вычтен с обратным знаком.
+   */
+  if (bet.stake < 0) {
+    switch (bet.outcome) {
+      case 'won':
+        return -bet.stake;
+      case 'lost':
+      case 'active':
+        return bet.stake;
+      default:
+        return 0;
+    }
+  }
   switch (bet.outcome) {
     case 'won': {
       const multiplier = BET_MULTIPLIER.get(bet.id) ?? AVERAGE_MULTIPLIER;
@@ -644,6 +733,16 @@ export function collectFullSimMetrics(
     let roomFloor = s.meta[Meta.Floor];
     let roomNo = s.meta[Meta.Room];
     let roomChipsStart = s.pChips[0];
+    // Баланс на момент, когда бой комнаты кончился — а не когда стартовала
+    // следующая. Между этими двумя моментами лежат плата заведению, лавка,
+    // торг и дар: ни один из них не доход с пола, но все они меняют кошелёк
+    // ДО того, как `RoomStartTick` сдвинется. Без этой отметки восьмая
+    // комната каждого этажа получала бы в свой доход вычтенную долю
+    // заведения — величину на порядок больше самого дохода, — и тянула бы
+    // средний доход по этажу в минус даже у игрока, который вообще не ходит
+    // в минус.
+    let roomChipsAtFightEnd = s.pChips[0];
+    let inCombat = s.meta[Meta.Phase] === RunPhase.Fight || s.meta[Meta.Phase] === RunPhase.Boss;
     bump(entriesByFloor, roomFloor);
 
     for (let t = 0; t < ticks; t++) {
@@ -652,9 +751,14 @@ export function collectFullSimMetrics(
       observer.after(s);
       checkInvariants(s);
 
-      if (s.meta[Meta.Phase] === RunPhase.Fight || s.meta[Meta.Phase] === RunPhase.Boss) {
+      const nowInCombat =
+        s.meta[Meta.Phase] === RunPhase.Fight || s.meta[Meta.Phase] === RunPhase.Boss;
+      if (nowInCombat) {
         bump(fightTicksByFloor, s.meta[Meta.Floor]);
+      } else if (inCombat) {
+        roomChipsAtFightEnd = s.pChips[0];
       }
+      inCombat = nowInCombat;
 
       if (s.meta[Meta.RoomStartTick] !== roomStart) {
         const arr = roomsByFloor.get(roomFloor) ?? [];
@@ -664,12 +768,13 @@ export function collectFullSimMetrics(
           ticks: s.meta[Meta.RoomStartTick] - roomStart,
         });
         roomsByFloor.set(roomFloor, arr);
-        bump(chipsByFloor, roomFloor, s.pChips[0] - roomChipsStart);
+        bump(chipsByFloor, roomFloor, roomChipsAtFightEnd - roomChipsStart);
 
         roomStart = s.meta[Meta.RoomStartTick];
         roomFloor = s.meta[Meta.Floor];
         roomNo = s.meta[Meta.Room];
         roomChipsStart = s.pChips[0];
+        roomChipsAtFightEnd = s.pChips[0];
         bump(entriesByFloor, roomFloor);
       }
 

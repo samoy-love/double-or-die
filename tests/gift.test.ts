@@ -100,7 +100,10 @@ describe('подарок', () => {
     clearRoom(s, DoorType.Gift);
     takeFirst(s);
     expect(upgradeCount(s, 0)).toBe(1);
-    expect(s.pChips[0]).toBe(200);
+    // Комната, взятая за любой дверью, платит базовую выплату (ECONOMY §4) —
+    // это доход, не цена подарка. Проверка здесь именно про цену: она не
+    // может УМЕНЬШИТЬ кошелёк, а вырасти он вправе.
+    expect(s.pChips[0]).toBeGreaterThanOrEqual(200);
   });
 
   it('достаётся и тому, у кого в кошельке пусто', () => {

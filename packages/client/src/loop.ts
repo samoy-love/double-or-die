@@ -34,6 +34,7 @@ import { EventLog } from './events';
 import { Feedback } from './feedback';
 import { Feel } from './feel';
 import { InputSource } from './input';
+import { MENU_PLAY_BUTTON, MENU_SETTINGS_BUTTON, hitButton } from './menuLayout';
 import { logInvariant } from './protocol';
 import { PALETTE } from './palette';
 import { ParticleShape, Particles } from './particles';
@@ -77,8 +78,23 @@ export class GameLoop {
    * (GDD §5) превращается в надпись поверх уже идущего боя.
    */
   private menu = true;
+  /** Туториал/глоссарий поверх меню — открывается и закрывается отказом (Cancel). */
+  private tutorial = false;
+  /** Кадр ввода даёт уровень, не фронт: без своего фронта Cancel мигал бы туториалом, пока кнопка держится. */
+  private cancelWasDown = false;
+  /** Настройки поверх меню — второй пункт рядом с «Играть», открывается Confirm. */
+  private settingsOpen = false;
+  /** Какой пункт меню в фокусе: 0 — «Играть», 1 — «Настройки». */
+  private menuFocus: 0 | 1 = 0;
+  /** Те же поля фронта, что и у Cancel — NavLeft/Right в меню уровневые. */
+  private navLeftWasDown = false;
+  private navRightWasDown = false;
+  /** Фронт `Space` в меню — «Играть»/«Настройки» тем же жестом, что и Enter. */
+  private spaceWasDown = false;
   /** Кого позвать, когда игрок начал забег из меню. */
   private runStarted: (() => void) | null = null;
+  /** Кого позвать, когда игрок переключил настройку из экрана настроек. */
+  private settingsChanged: ((cashOutFocusedOnly: boolean) => void) | null = null;
 
   fps = 0;
   private fpsAcc = 0;
@@ -100,10 +116,15 @@ export class GameLoop {
     // Звук включается по первому вводу: до жеста браузер его не разрешает,
     // и попытка запуститься на загрузке даёт навсегда молчащую вкладку.
     this.input.onFirstInput(() => this.audio.unlock());
-    // Клик по «Играть» — тем же прямоугольником, каким рисует его renderer
-    // (drawMenuScreen: центр экрана, полуразмер 210×52).
+    // Клик по кнопкам меню — теми же прямоугольниками, что рисует
+    // `drawMenuScreen` (renderer.ts): общая константа в `menuLayout.ts`,
+    // а не третья копия чисел. Разъезжались уже один раз, когда кнопка
+    // сдвинулась влево ради второго пункта меню, а клик остался на старом
+    // месте и молча перестал совпадать с нарисованным.
     this.input.onScreenClick((x, y) => {
-      if (this.menu && Math.abs(x - 960) <= 210 && Math.abs(y - 540) <= 52) this.startRun();
+      if (!this.menu || this.tutorial || this.settingsOpen) return;
+      if (hitButton(x, y, 960, 540, MENU_PLAY_BUTTON)) this.startRun();
+      else if (hitButton(x, y, 960, 540, MENU_SETTINGS_BUTTON)) this.settingsOpen = true;
     });
     // Пауза «везде и всегда» (UX §2). Живёт в клиенте, а не в кадре ввода:
     // она останавливает часы, а не симуляцию, и в реплей ей ехать нечем.
@@ -159,6 +180,43 @@ export class GameLoop {
     this.runStarted = fn;
   }
 
+  /** Настройка сменилась из экрана настроек — сейв обязан узнать об этом. */
+  onSettingsChange(fn: (cashOutFocusedOnly: boolean) => void): void {
+    this.settingsChanged = fn;
+  }
+
+  /** Применить сохранённую настройку на загрузке (`main.ts`, из `Profile`). */
+  setCashOutFocusedOnly(v: boolean): void {
+    this.input.cashOutFocusedOnly = v;
+  }
+
+  /** Текущее значение — рендеру нечем иначе нарисовать тумблер настроек. */
+  get cashOutFocusedOnly(): boolean {
+    return this.input.cashOutFocusedOnly;
+  }
+
+  /**
+   * Открыть туториал/глоссарий поверх меню сразу, без нажатия отказа.
+   *
+   * Раньше он был доступен только по кнопке «как играть» (Cancel в меню) —
+   * то есть первый забег игрок либо находил её сам, либо не видел глоссарий
+   * вовсе. `main.ts` зовёт это ровно один раз, когда `profile.save.runs`
+   * ещё нулевой: первый экран, который видит новый игрок, — не голое меню,
+   * а те же девять терминов, которые он мог бы и не найти.
+   */
+  openTutorial(): void {
+    this.tutorial = true;
+  }
+
+  /** Какой пункт меню в фокусе и открыт ли экран настроек — нужно рендеру. */
+  get menuState(): { focus: 0 | 1; settingsOpen: boolean; cashOutTarget: number } {
+    return {
+      focus: this.menuFocus,
+      settingsOpen: this.settingsOpen,
+      cashOutTarget: this.input.cashOutTarget,
+    };
+  }
+
   /**
    * Начать забег из меню.
    *
@@ -185,6 +243,20 @@ export class GameLoop {
     this.last = performance.now();
     this.acc = 0;
     this.runStarted?.();
+  }
+
+  /** Подтверждение в меню: три смысла по тому, что сейчас открыто (см. вызовы). */
+  private confirmMenu(): void {
+    if (this.tutorial) this.tutorial = false;
+    else if (this.settingsOpen) {
+      // Единственный пункт настроек сегодня — тумблер, и подтверждение на
+      // этом экране переключает его же, а не «выбирает строку»: строка ровно
+      // одна. Источник истины — слой ввода (`input.ts`), сейв — только
+      // персистентная копия (`onSettingsChange`).
+      this.input.cashOutFocusedOnly = !this.input.cashOutFocusedOnly;
+      this.settingsChanged?.(this.input.cashOutFocusedOnly);
+    } else if (this.menuFocus === 1) this.settingsOpen = true;
+    else this.startRun();
   }
 
   /** Кого позвать, когда инвариант остановил симуляцию. */
@@ -271,8 +343,49 @@ export class GameLoop {
        * сидом.
        */
       if ((f.buttons & Btn.Confirm) !== 0) {
-        if (this.menu) this.startRun();
+        if (this.menu) this.confirmMenu();
         else this.again();
+      }
+      /*
+       * `Space` — второй путь подтверждения ТОЛЬКО в меню (playtest 0.3.1:
+       * «сделай играть не на Enter/Tab, а на Enter/Space»). Не льётся в общий
+       * `Btn.Confirm`: `Space` в бою — рывок, и там же читается принятие
+       * Ставки Крупье тем же битом — общий путь подписывал бы пари каждым
+       * уворотом (`input.ts: spaceDown`).
+       */
+      const spaceDown = this.input.spaceDown;
+      if (this.menu && spaceDown && !this.spaceWasDown) this.confirmMenu();
+      this.spaceWasDown = spaceDown;
+      /*
+       * Отказ закрывает то, что открыто (туториал или настройки), а на голом
+       * меню открывает туториал/глоссарий (UX §7) — тот же бит, три смысла по
+       * состоянию экрана, ровно как у Confirm выше.
+       */
+      const cancelDown = (f.buttons & Btn.Cancel) !== 0;
+      if (this.menu && cancelDown && !this.cancelWasDown) {
+        if (this.settingsOpen) this.settingsOpen = false;
+        else this.tutorial = !this.tutorial;
+      }
+      this.cancelWasDown = cancelDown;
+
+      // Фокус между «Играть» и «Настройки» — только на голом меню: с
+      // открытым туториалом или настройками горизонталь той же кнопкой
+      // управляет другим (Cancel закрывает их, см. выше).
+      if (this.menu && !this.tutorial && !this.settingsOpen) {
+        const leftDown = (f.buttons & Btn.NavLeft) !== 0;
+        const rightDown = (f.buttons & Btn.NavRight) !== 0;
+        if (leftDown && !this.navLeftWasDown) this.menuFocus = 0;
+        if (rightDown && !this.navRightWasDown) this.menuFocus = 1;
+        this.navLeftWasDown = leftDown;
+        this.navRightWasDown = rightDown;
+
+        // Наводка мышью — те же прямоугольники, что клик и отрисовка
+        // (см. `menuLayout.ts`). Без этого мышь могла нажать кнопку, но не
+        // подсвечивала её заранее — на экране, где кроме этих двух карточек
+        // искать взглядом больше нечего.
+        const [mx, my] = this.input.mousePosition;
+        if (hitButton(mx, my, 960, 540, MENU_PLAY_BUTTON)) this.menuFocus = 0;
+        else if (hitButton(mx, my, 960, 540, MENU_SETTINGS_BUTTON)) this.menuFocus = 1;
       }
     }
 
@@ -293,7 +406,21 @@ export class GameLoop {
     // кнопку, а устройство меняется прямо во время игры (UX §2).
     this.renderer.scheme = this.input.inputScheme;
     const alpha = this.paused ? 1 : this.acc / MS_PER_TICK;
-    this.renderer.draw(this.state, alpha, this.feel, this.particles, this.feedback, this.menu);
+    this.renderer.draw(
+      this.state,
+      alpha,
+      this.feel,
+      this.particles,
+      this.feedback,
+      this.menu,
+      {
+        tutorial: this.tutorial,
+        settingsOpen: this.settingsOpen,
+        focus: this.menuFocus,
+        cashOutFocusedOnly: this.input.cashOutFocusedOnly,
+      },
+      this.input.cashOutTarget,
+    );
 
     this.frameId = requestAnimationFrame(this.frame);
   };
@@ -510,7 +637,21 @@ export class GameLoop {
    * планировщик решит.
    */
   renderOnce(): void {
-    this.renderer.draw(this.state, 1, this.feel, this.particles, this.feedback, this.menu);
+    this.renderer.draw(
+      this.state,
+      1,
+      this.feel,
+      this.particles,
+      this.feedback,
+      this.menu,
+      {
+        tutorial: this.tutorial,
+        settingsOpen: this.settingsOpen,
+        focus: this.menuFocus,
+        cashOutFocusedOnly: this.input.cashOutFocusedOnly,
+      },
+      this.input.cashOutTarget,
+    );
   }
 
   /** Сколько фигур ушло в последний кадр: главный показатель бюджета рендера. */

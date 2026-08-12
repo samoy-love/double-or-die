@@ -241,7 +241,7 @@ function g4(samples: readonly Sample[]): ConstraintResult {
   );
 }
 
-/** Наглый профиль ECONOMY §6 — стак без обналичивания, опорный навык `median`. */
+/** Наглый профиль ECONOMY §6 — сборка без обналичивания, опорный навык `median`. */
 function g5(samples: readonly Sample[], bets: ReadonlyMap<string, number>): ConstraintResult {
   const s = bySkills(byStrategy(samples, 'stack'), ['median']);
   return result(
@@ -355,7 +355,7 @@ function g10(samples: readonly Sample[], betIds: readonly string[]): ConstraintR
   );
 }
 
-/** Ставка Туза выявляется по отрицательному кону (ECONOMY §10А, `aceStakeAt`). */
+/** Ставка Крупье выявляется по отрицательному кону (ECONOMY §10А, `aceStakeAt`). */
 function isAceRecord(b: BetRecord): boolean {
   return b.stake < 0;
 }
@@ -365,7 +365,7 @@ function g12(samples: readonly Sample[]): ConstraintResult {
   const records = s.flatMap((r) =>
     r.observed.bets.filter((b) => isAceRecord(b) && (b.outcome === 'won' || b.outcome === 'lost')),
   );
-  return result('G12', 'Ставка Туза: ожидание для игрока', '0 … +5%', records.length, () => {
+  return result('G12', 'Ставка Крупье: ожидание для игрока', '0 … +5%', records.length, () => {
     const won = records.filter((b) => b.outcome === 'won').length;
     const p = won / records.length;
     const ev = 2 * p - 1; // выплата один к одному (ECONOMY §10А).
@@ -574,7 +574,7 @@ export function computeConstraints(
     g6(samples),
     g7(samples),
     g8(samples),
-    // G9 — потолок множителя: собирается из стака, «На кураже» и двух
+    // G9 — потолок множителя: собирается из сборки, «На кураже» и двух
     // «Удвоим?», и ни одного из трёх слагаемых в 0.4.0 нет (ECONOMY §13).
     notMeasured(
       'G9',
@@ -612,12 +612,12 @@ export function computeConstraints(
       'не меньше половины от самого активного',
       'считается с 0.5.0 — составов 2–4 в 0.4.0 нет',
     ),
-    // G17 — максимальный стак: та же причина, что у G9.
+    // G17 — максимальная сборка: та же причина, что у G9.
     notMeasured(
       'G17',
-      'Доля забегов с максимальным стаком',
+      'Доля забегов с максимальной сборкой',
       '10–30%',
-      'считается с 0.6.0 — стак собирается теми же тремя механиками, что и G9',
+      'считается с 0.6.0 — сборка собирается теми же тремя механиками, что и G9',
     ),
 
     d1(samples),

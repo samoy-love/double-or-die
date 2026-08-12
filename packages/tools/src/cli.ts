@@ -13,16 +13,20 @@ import {
   checkInvariants,
   createState,
   deserialize,
+  ENEMIES,
   EntityFlag,
+  EnemyType,
   hashHex,
   MAX_ACTIVE_BETS,
   MAX_CARDS,
   MAX_PLAYERS,
   makeFrame,
   Meta,
+  PLAYER,
   ReplayPlayer,
   RunPhase,
   TICK_HZ,
+  WAVE,
   type InputFrame,
   type SimState,
   spawnPlayers,
@@ -58,6 +62,11 @@ import { checkSafety } from './safety';
 import { diagnoseCorpus } from './goldenCorpus';
 import { runBalance } from './balance';
 import { runSearch, formatSearchReport, DEFAULT_SEARCH_OPTIONS } from './search';
+import {
+  runCombatSearch,
+  formatCombatSearchReport,
+  DEFAULT_COMBAT_SEARCH_OPTIONS,
+} from './combatSearch';
 
 interface Args {
   seed: number;
@@ -81,6 +90,23 @@ interface Args {
   timing: boolean;
   balance: boolean;
   search: boolean;
+  searchCombat: boolean;
+  workers: number | null;
+  generations: number | null;
+  /**
+   * Рычаги боя для одного прогона `--balance` (`combatSearch.ts` вызывает
+   * этот же `cli.ts` дочерним процессом с этими флагами вместо кастомного
+   * воркера — так кандидат проходит ровно тот путь, что `npm run balance`).
+   */
+  wedgeThreat: number | null;
+  wedgeHp: number | null;
+  waveBudget: number | null;
+  waveGrowth: number | null;
+  brickRoom: number | null;
+  fuseRoom: number | null;
+  playerHearts: number | null;
+  playerDashCooldown: number | null;
+  playerHurtInvul: number | null;
 }
 
 /**
@@ -196,6 +222,18 @@ function parseArgs(argv: string[]): Args {
     timing: false,
     balance: false,
     search: false,
+    searchCombat: false,
+    workers: null,
+    generations: null,
+    wedgeThreat: null,
+    wedgeHp: null,
+    waveBudget: null,
+    waveGrowth: null,
+    brickRoom: null,
+    fuseRoom: null,
+    playerHearts: null,
+    playerDashCooldown: null,
+    playerHurtInvul: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
@@ -277,6 +315,53 @@ function parseArgs(argv: string[]): Args {
       case '--search':
         a.search = true;
         break;
+      case '--search-combat':
+        a.searchCombat = true;
+        break;
+      case '--workers':
+        a.workers = int(k, v, 1, 256);
+        i++;
+        break;
+      case '--generations':
+        a.generations = int(k, v, 1, 200);
+        i++;
+        break;
+      case '--wedge-threat':
+        a.wedgeThreat = int(k, v, 1, 200);
+        i++;
+        break;
+      case '--wedge-hp':
+        a.wedgeHp = int(k, v, 1, 500);
+        i++;
+        break;
+      case '--wave-budget':
+        a.waveBudget = int(k, v, 1, 5000);
+        i++;
+        break;
+      case '--wave-growth':
+        a.waveGrowth = int(k, v, 0, 100);
+        i++;
+        break;
+      case '--brick-room':
+        a.brickRoom = int(k, v, 1, 8);
+        i++;
+        break;
+      case '--fuse-room':
+        a.fuseRoom = int(k, v, 1, 8);
+        i++;
+        break;
+      case '--player-hearts':
+        a.playerHearts = int(k, v, 1, 10);
+        i++;
+        break;
+      case '--player-dash-cooldown':
+        a.playerDashCooldown = int(k, v, 1, 300);
+        i++;
+        break;
+      case '--player-hurt-invul':
+        a.playerHurtInvul = int(k, v, 1, 300);
+        i++;
+        break;
       case '--json':
         a.json = true;
         break;
@@ -330,6 +415,12 @@ Headless-раннер Double or Die
                         ECONOMY §15 на абстрактной модели (SIMULATION §6):
                         4 стадии по порядку рычагов, не гейт, не падает.
                         Печатает рекомендацию, ничего не правит.
+  --search-combat        то же устройство поиска, но кандидат оценивается
+                        ПОЛНОЙ симуляцией (runBalance), не абстракцией —
+                        многопоточно, пул worker_threads. Дороже, зато видит
+                        то, что абстрактная модель не считает: тайминги боя.
+                        --workers <n>      ядер в пуле (умолчание — cpus−1)
+                        --generations <n>  поколений поиска (умолчание 12)
 
   --scenario <путь>     прогнать сценарий: файл или каталог
   --golden <путь>       сверить эталонные реплеи: файл или каталог
@@ -441,7 +532,7 @@ function runOnce(
   const observer = observe ? new Observer(s) : null;
 
   // Карты считаются переходом слота 0→1, а не суммой розданных за комнату:
-  // так в «предложено» попадает и то, что Туз подбрасывает посреди боя.
+  // так в «предложено» попадает и то, что Крупье подбрасывает посреди боя.
   // Знаменатель G10 («каждое пари берут не реже 3% и не чаще 25%») — это он.
   const cardWas = new Uint8Array(MAX_CARDS);
   let offered = 0;
@@ -489,7 +580,7 @@ function runOnce(
      * Инварианты — КАЖДЫЙ тик, как и в клиенте (DEVLOOP §6).
      *
      * Раньше здесь стояло `t % 60`, и раз в секунду выглядело достаточным:
-     * нарушение, мол, никуда не денется. Оно девается. Жест Туза без тела жил
+     * нарушение, мол, никуда не денется. Оно девается. Жест Крупье без тела жил
      * 150 тиков и пропускался тем чаще, чем короче оказывалось окно; поймать
      * его удалось только сотней забегов подряд, и то не с первой попытки —
      * при восьми прогонах дефект не показывался вовсе. Проверка, которая
@@ -768,10 +859,57 @@ function doTiming(a: Args): never {
  * ограничители — здесь только печать и код выхода, тем же путём, что у
  * остальных команд раннера.
  */
+/**
+ * Применить рычаги боя из флагов (`combatSearch.ts`) до сбора выборки.
+ *
+ * `readonly` в `EnemyStats`/`WaveConfig` — только TS-аннотация, не
+ * `Object.freeze`: присвоение полю проходит в рантайме. Флаги приходят по
+ * одному не все сразу — `--balance` без них ведёт себя как раньше.
+ */
+function applyCombatLevers(a: Args): void {
+  if (
+    a.wedgeThreat === null &&
+    a.wedgeHp === null &&
+    a.waveBudget === null &&
+    a.waveGrowth === null &&
+    a.brickRoom === null &&
+    a.fuseRoom === null &&
+    a.playerHearts === null &&
+    a.playerDashCooldown === null &&
+    a.playerHurtInvul === null
+  )
+    return;
+  const wedge = ENEMIES.find((e) => e.type === EnemyType.Wedge);
+  const brick = ENEMIES.find((e) => e.type === EnemyType.Brick);
+  const fuse = ENEMIES.find((e) => e.type === EnemyType.Fuse);
+  if (!wedge || !brick || !fuse) die('ENEMIES: не нашёл Клина, Кирпича или Фитиля');
+  if (a.wedgeThreat !== null) (wedge as { threat: number }).threat = a.wedgeThreat;
+  if (a.wedgeHp !== null) (wedge as { hp: number }).hp = a.wedgeHp;
+  if (a.waveBudget !== null) (WAVE as { baseBudget: number }).baseBudget = a.waveBudget;
+  // Крутой участок излома, не пологий: он определяет исход у восьмой
+  // комнаты, а пологий (`roomGrowthEarlyPct`) поиском не крутили — его
+  // значение фиксировано ре-бейзлайном playtest 0.3.1 (DIFFICULTY §4).
+  if (a.waveGrowth !== null)
+    (WAVE as { roomGrowthLatePct: number }).roomGrowthLatePct = a.waveGrowth;
+  if (a.brickRoom !== null) (brick as { unlockRoom: number }).unlockRoom = a.brickRoom;
+  if (a.fuseRoom !== null) (fuse as { unlockRoom: number }).unlockRoom = a.fuseRoom;
+  // Рычаги выживаемости (второй заход поиска, см. combatSearch.ts): читаются
+  // живьём при каждом `spawnPlayers`/уроне — мутация до первого забега в
+  // процессе покрывает все прогоны `--balance` в нём.
+  if (a.playerHearts !== null) (PLAYER as { startHearts: number }).startHearts = a.playerHearts;
+  if (a.playerDashCooldown !== null) {
+    (PLAYER as { dashCooldownTicks: number }).dashCooldownTicks = a.playerDashCooldown;
+  }
+  if (a.playerHurtInvul !== null) {
+    (PLAYER as { hurtInvulTicks: number }).hurtInvulTicks = a.playerHurtInvul;
+  }
+}
+
 function doBalance(a: Args): never {
+  applyCombatLevers(a);
   // Умолчание CLI (1) для --balance бессмысленно мало. 1000 замерено на этой
   // машине: ~30 с (DEVLOOP §2, «разумное время» — задача 2.3) — достаточно и
-  // для редких срезов (G12 — Ставка Туза, G5 — median+stack), и для того,
+  // для редких срезов (G12 — Ставка Крупье, G5 — median+stack), и для того,
   // чтобы не превращать гейт в привычку, которую жалко запускать лишний раз.
   const runs = a.runs === 1 ? 1000 : a.runs;
   const outcome = runBalance({ runs, seed: a.seed });
@@ -959,7 +1097,43 @@ function doRecordGolden(a: Args, dir: string): never {
   process.exit(0);
 }
 
-function main(): void {
+/**
+ * Поиск по бою на полной симуляции (`combatSearch.ts`) — многопоточный аналог
+ * `doSearch`, но кандидат оценивается настоящим `runBalance`, а не абстрактной
+ * моделью. Тоже не гейт: печатает рекомендацию, ничего не пишет в `config.ts`.
+ */
+async function doSearchCombat(a: Args): Promise<never> {
+  const opts = {
+    ...DEFAULT_COMBAT_SEARCH_OPTIONS,
+    seed: a.seed,
+    workers: a.workers ?? DEFAULT_COMBAT_SEARCH_OPTIONS.workers,
+    generations: a.generations ?? DEFAULT_COMBAT_SEARCH_OPTIONS.generations,
+  };
+  console.error(
+    `запускаю ${opts.workers} воркеров · ${opts.generations} поколений · ` +
+      `${opts.searchRuns} прогонов/кандидата в поиске, ${opts.validateRuns} в финале...`,
+  );
+  const res = await runCombatSearch(opts, (p) => {
+    console.error(
+      `  поколение ${p.generation + 1}/${p.totalGenerations}: лучшее красных ${p.bestRed}`,
+    );
+  });
+  const report = formatCombatSearchReport(res, opts);
+  if (a.json || a.out) {
+    console.log(report);
+    emit(a, {
+      baselineRed: res.baseline.redCount,
+      bestLevers: res.best.levers,
+      bestRed: res.best.result.redCount,
+      bestGreen: res.best.result.greenCount,
+    });
+  } else {
+    console.log(report);
+  }
+  process.exit(0);
+}
+
+async function main(): Promise<void> {
   const a = parseArgs(process.argv.slice(2));
 
   if (a.recordGolden) doRecordGolden(a, a.recordGolden);
@@ -969,6 +1143,7 @@ function main(): void {
   if (a.timing) doTiming(a);
   if (a.balance) doBalance(a);
   if (a.search) doSearch(a);
+  if (a.searchCombat) await doSearchCombat(a);
 
   const setupSteps: ActionStep[] = a.setup
     ? (JSON.parse(readFileSync(a.setup, 'utf8')) as ActionStep[])
@@ -1015,4 +1190,4 @@ function main(): void {
   process.exit(out.ok ? 0 : 1);
 }
 
-main();
+void main();

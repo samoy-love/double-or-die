@@ -172,7 +172,11 @@ describe('запись сейва', () => {
     expect(again.save).toEqual({
       version: SAVE_VERSION,
       lang: 'en',
-      settings: { volume: DEFAULT_SAVE.settings.volume, flash: 0 },
+      settings: {
+        volume: DEFAULT_SAVE.settings.volume,
+        flash: 0,
+        cashOutFocusedOnly: DEFAULT_SAVE.settings.cashOutFocusedOnly,
+      },
       keys: 7,
       runs: 1,
     });

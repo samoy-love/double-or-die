@@ -65,6 +65,24 @@ export const enum Btn {
   Confirm = 1 << 18,
   /** Уйти назад. На экранах, где отказаться нельзя, игнорируется. */
   Cancel = 1 << 19,
+
+  /**
+   * Цель «Забрать» при включённом поштучном заборе (доступность).
+   *
+   * Три бита, тот же приём сдвига на единицу, что у аппетита: ноль — «цель не
+   * выбрана явно, брать самое выгодное» (`cashOutBest`, поведение по
+   * умолчанию), 1..4 — адрес активного пари 0..3 (`MAX_ACTIVE_BETS`).
+   * Молчание обязано отличаться от «пари №0», иначе выключенная настройка
+   * молча забирала бы всегда первый слот вместо самого выгодного.
+   *
+   * Крестовина ← → отдана под это НАМЕРЕННО, ценой уже обещанного 0.5.0 слота
+   * эмоций (UX §2) — решение владельца, а не побочный эффект. Экран это не
+   * задевает: `NavLeft`/`NavRight` живут своими битами и своим смыслом на
+   * паузе, а цикл цели работает только в бою.
+   */
+  CashOutTarget0 = 1 << 20,
+  CashOutTarget1 = 1 << 21,
+  CashOutTarget2 = 1 << 22,
 }
 
 export const APPETITE_SHIFT = 8;
@@ -73,6 +91,8 @@ export const EMOTE_SHIFT = 11;
 export const EMOTE_MASK = 0b111;
 export const SCHEME_SHIFT = 14;
 export const SCHEME_MASK = 0b11;
+export const CASHOUT_TARGET_SHIFT = 20;
+export const CASHOUT_TARGET_MASK = 0b111;
 
 /**
  * Один кадр ввода одного игрока.
@@ -125,6 +145,21 @@ export const withAppetite = (buttons: number, tier: number): number =>
   (buttons & ~(APPETITE_MASK << APPETITE_SHIFT)) | ((tier + 1) << APPETITE_SHIFT);
 
 export const schemeOf = (f: InputFrame): number => (f.buttons >> SCHEME_SHIFT) & SCHEME_MASK;
+
+/**
+ * Цель «Забрать» из кадра, СО СДВИГОМ НА ЕДИНИЦУ: 0 — «не выбрана» (значит
+ * самое выгодное), 1..4 — активное пари 0..3. Та же защёлка, что у аппетита
+ * (`appetiteOf`), и по той же причине: без сдвига «пари №0» и «настройка
+ * выключена» неразличимы.
+ */
+export const cashOutTargetOf = (f: InputFrame): number => {
+  const raw = (f.buttons >> CASHOUT_TARGET_SHIFT) & CASHOUT_TARGET_MASK;
+  return raw === 0 ? -1 : raw - 1;
+};
+
+/** Уложить цель в биты кадра. Обратная к `cashOutTargetOf`, живёт рядом с ней. */
+export const withCashOutTarget = (buttons: number, slot: number): number =>
+  (buttons & ~(CASHOUT_TARGET_MASK << CASHOUT_TARGET_SHIFT)) | ((slot + 1) << CASHOUT_TARGET_SHIFT);
 
 /**
  * Кадры пакуются в плоский Int32Array: пять слов на кадр на игрока.
