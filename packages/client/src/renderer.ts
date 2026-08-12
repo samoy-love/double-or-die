@@ -298,7 +298,6 @@ export class Renderer {
       // Сглаживание считается в шейдере по расстоянию, MSAA не нужен;
       // отказ от него экономит заметную долю кадра на встроенной графике.
       powerPreference: 'high-performance',
-      desynchronized: true,
     });
     if (!gl) throw new Error(t('error.webgl2'));
     this.gl = gl;
