@@ -69,8 +69,12 @@ export default defineConfig({
   // ядре превращает бенч в замер загрузки машины.
   workers: 1,
   reporter: process.env.CI ? [['github'], ['list']] : 'list',
-  timeout: 90_000,
-  expect: { timeout: 15_000 },
+  // CI держит вдвое больше локального: раннер делит ядро с установкой
+  // зависимостей Chromium и software-рендером (`swiftshader`) одновременно,
+  // и запас здесь — не маскировка бага, а поправка на то, что развернуть
+  // страницу на чужом CPU объективно дольше, чем на разработческой машине.
+  timeout: process.env.CI ? 180_000 : 90_000,
+  expect: { timeout: process.env.CI ? 30_000 : 15_000 },
 
   use: {
     trace: 'retain-on-failure',
@@ -92,18 +96,32 @@ export default defineConfig({
     },
   ],
 
+  /*
+   * Вывод серверов — в лог, а не молча в никуда.
+   *
+   * По умолчанию Playwright копит stdout/stderr `webServer` и печатает его
+   * только при ПАДЕНИИ САМОГО СЕРВЕРА — а не при падении теста, который к
+   * нему стучится. Прогон CI падал на «канвас не появился» четыре раза
+   * подряд без единой строки о том, что в это время делал сам сервер:
+   * поднялся ли `vite preview`, успел ли добраться `npm run build`. Без
+   * этого следующая красная сборка снова окажется гаданием по симптому.
+   */
   webServer: [
     {
       command: `npm run build && npm run preview -- --port ${PROD_PORT} --host 127.0.0.1 --strictPort`,
       url: `http://127.0.0.1:${PROD_PORT}/`,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
+      stdout: 'pipe',
+      stderr: 'pipe',
     },
     {
       command: `npm run dev -- --port ${DEV_PORT} --host 127.0.0.1 --strictPort`,
       url: `http://127.0.0.1:${DEV_PORT}/`,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
+      stdout: 'pipe',
+      stderr: 'pipe',
     },
   ],
 });
