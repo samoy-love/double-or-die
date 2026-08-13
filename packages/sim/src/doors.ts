@@ -169,7 +169,10 @@ export function stepDoors(s: SimState, inputs: readonly InputFrame[]): boolean {
 /** Перевести фокус, упираясь в края. Перенос по кругу здесь врёт о числе дверей. */
 function moveFocus(s: SimState, delta: number): void {
   const cur = s.meta[Meta.DoorPick];
-  const next = cur < 0 ? (delta > 0 ? 0 : MAX_DOORS - 1) : cur + delta;
+  // Первое нажатие ставит фокус на элемент СО СТОРОНЫ ЖЕСТА, а не на
+  // противоположный: «влево» из пустого фокуса прыгало на крайний правый, и
+  // это читалось не правилом, а промахом ввода. Упор в край не изменился.
+  const next = cur < 0 ? (delta > 0 ? MAX_DOORS - 1 : 0) : cur + delta;
   if (next < 0 || next >= MAX_DOORS) return;
   s.meta[Meta.DoorPick] = next;
 }

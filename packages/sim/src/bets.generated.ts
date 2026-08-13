@@ -70,6 +70,8 @@ export interface BetSpec {
   readonly conflictMask: number;
   /** Маска схем ввода, на которых пари невыполнимо: бит с номером `InputScheme`. */
   readonly schemeMask: number;
+  /** Маска проклятий, при которых пари не выпадает: бит с номером `Curse` из state.ts. */
+  readonly curseMask: number;
 }
 
 export const BETS: readonly BetSpec[] = [
@@ -83,6 +85,7 @@ export const BETS: readonly BetSpec[] = [
     target: 0,
     conflictMask: 0,
     schemeMask: 0,
+    curseMask: 0,
   },
   {
     id: 'no_dash',
@@ -94,6 +97,7 @@ export const BETS: readonly BetSpec[] = [
     target: 0,
     conflictMask: 0,
     schemeMask: 0,
+    curseMask: 8,
   },
   {
     id: 'under_45s',
@@ -105,6 +109,7 @@ export const BETS: readonly BetSpec[] = [
     target: 0,
     conflictMask: 0,
     schemeMask: 0,
+    curseMask: 0,
   },
   {
     id: 'no_red_zone',
@@ -116,6 +121,7 @@ export const BETS: readonly BetSpec[] = [
     target: 0,
     conflictMask: 0,
     schemeMask: 0,
+    curseMask: 0,
   },
   {
     id: 'all_chips',
@@ -127,6 +133,7 @@ export const BETS: readonly BetSpec[] = [
     target: 0,
     conflictMask: 0,
     schemeMask: 0,
+    curseMask: 16,
   },
   {
     id: 'demolitionist',
@@ -138,6 +145,7 @@ export const BETS: readonly BetSpec[] = [
     target: 3,
     conflictMask: 0,
     schemeMask: 0,
+    curseMask: 0,
   },
 ];
 

@@ -63,6 +63,15 @@ const Category = z.enum(['style', 'tempo', 'space', 'greed', 'tricks', 'silly'])
 const SCHEMES = ['gamepad', 'keyboard', 'touch'] as const;
 const Scheme = z.enum(SCHEMES);
 
+/**
+ * Проклятия — третья ось матрицы «пари × X» (GDD §9.5/§11).
+ *
+ * Порядок совпадает с `Curse` в `packages/sim/src/state.ts` (без `None`) и
+ * значим по той же причине, что и `SCHEMES`: он же номер бита в маске.
+ */
+const CURSES = ['blood', 'hustle', 'leadfeet', 'frozen', 'blackout', 'commission'] as const;
+const CurseId = z.enum(CURSES);
+
 const Bet = z
   .object({
     /** Совпадает с идентификатором хука детекции в коде (GDD §9.5). */
@@ -88,6 +97,15 @@ const Bet = z
      * пари исключений нет, и пустой массив в каждой записи был бы шумом.
      */
     excludeSchemes: z.array(Scheme).optional(),
+    /**
+     * Проклятия, при которых пари не выпадает (GDD §9.5, §11).
+     *
+     * Не «конфликтует» в смысле `conflicts` — конфликт там взаимен между
+     * двумя пари, а проклятие пари не отменяет ответно. Ось нужна, когда
+     * проклятие либо делает условие пари бесплатным (запрещённое им действие
+     * и так недоступно), либо портит его случайностью, не зависящей от игрока.
+     */
+    excludeCurses: z.array(CurseId).optional(),
   })
   .refine((b) => (b.progress === 'time') === (b.limitTicks !== undefined), {
     message: 'темповому пари нужен limitTicks, остальным он не нужен',
@@ -102,6 +120,9 @@ const Bet = z
   // это не настройка, а вычёркивание пари из каталога окольным путём.
   .refine((b) => (b.excludeSchemes?.length ?? 0) < SCHEMES.length, {
     message: 'пари исключено на всех схемах ввода — его не получит никто',
+  })
+  .refine((b) => new Set(b.excludeCurses ?? []).size === (b.excludeCurses?.length ?? 0), {
+    message: 'проклятие перечислено в исключениях дважды',
   });
 
 const Catalog = z
@@ -160,6 +181,13 @@ function generate(catalog: Catalog): string {
       0,
     );
     const schemeMask = (b.excludeSchemes ?? []).reduce((m, s) => m | (1 << SCHEMES.indexOf(s)), 0);
+    // Бит номера — значение `Curse` в ядре (`None = 0` бита не занимает,
+    // отсюда `+1`): проверка на горячем пути читает `1 << s.meta[Meta.Curse]`
+    // без перевода индексов.
+    const curseMask = (b.excludeCurses ?? []).reduce(
+      (m, c) => m | (1 << (CURSES.indexOf(c) + 1)),
+      0,
+    );
     const parts = [
       `    id: '${b.id}'`,
       `    name: '${b.name}'`,
@@ -170,6 +198,7 @@ function generate(catalog: Catalog): string {
       `    target: ${b.target ?? 0}`,
       `    conflictMask: ${conflictMask}`,
       `    schemeMask: ${schemeMask}`,
+      `    curseMask: ${curseMask}`,
     ];
     return `  {\n${parts.join(',\n')},\n  },`;
   });
@@ -241,6 +270,8 @@ export interface BetSpec {
   readonly conflictMask: number;
   /** Маска схем ввода, на которых пари невыполнимо: бит с номером \`InputScheme\`. */
   readonly schemeMask: number;
+  /** Маска проклятий, при которых пари не выпадает: бит с номером \`Curse\` из state.ts. */
+  readonly curseMask: number;
 }
 
 export const BETS: readonly BetSpec[] = [

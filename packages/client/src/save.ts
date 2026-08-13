@@ -48,6 +48,15 @@ export interface Settings {
    * «Забрать» берёт ровно то пари, что выбрано (`packages/sim/src/input.ts`).
    */
   cashOutFocusedOnly: boolean;
+  /**
+   * Масштаб интерфейса в процентах, 100–150 (UX §5).
+   *
+   * Нижняя граница именно 100: ниже нарушается собственное правило «минимум
+   * 24 px при 1080p», и ползунок начал бы отменять гейт типографики. Хранится
+   * числом процентов, а не долей, потому что показывается игроку тем же
+   * числом.
+   */
+  uiScale: number;
 }
 
 export interface Save {
@@ -59,14 +68,23 @@ export interface Save {
   keys: number;
   /** Сколько забегов сыграно. Считает игра, а не игрок. */
   runs: number;
+  /**
+   * Пройденные уроки обучения (`coach.ts`).
+   *
+   * В профиле, а не в забеге: во втором забеге «WASD — идти» это шум, а не
+   * обучение. Хранится списком идентификаторов, а не битовой маской, — список
+   * уроков растёт, и маска молча сдвинула бы значения при вставке в середину.
+   */
+  taught: readonly string[];
 }
 
 export const DEFAULT_SAVE: Readonly<Save> = Object.freeze({
   version: SAVE_VERSION,
   lang: 'ru' as Lang,
-  settings: Object.freeze({ volume: 0.7, flash: 1, cashOutFocusedOnly: false }),
+  settings: Object.freeze({ volume: 0.7, flash: 1, cashOutFocusedOnly: false, uiScale: 100 }),
   keys: 0,
   runs: 0,
+  taught: Object.freeze([]) as readonly string[],
 });
 
 /**
@@ -127,6 +145,12 @@ const MIGRATIONS: Record<number, (o: Record<string, unknown>) => Record<string, 
     runs: 0,
   }),
 };
+
+/** Масштаб интерфейса: целое в границах 100–150. */
+function clampScale(v: unknown, fallback: number): number {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return fallback;
+  return Math.min(150, Math.max(100, Math.round(v)));
+}
 
 /** Сейв не из этой игры или не из этого мира. */
 export class BadSaveError extends Error {}
@@ -192,9 +216,18 @@ function normalize(o: Record<string, unknown>): Save {
         settings.cashOutFocusedOnly,
         DEFAULT_SAVE.settings.cashOutFocusedOnly,
       ),
+      // Зажимается, а не отвергается: правило `normalize` — чинить числа, а
+      // не терять из-за одного поля весь профиль.
+      uiScale: clampScale(settings.uiScale, DEFAULT_SAVE.settings.uiScale),
     },
     keys: count(o.keys),
     runs: count(o.runs),
+    // Чужие и повторяющиеся идентификаторы отбрасываются молча: список правит
+    // игра, а не игрок, и мусор в нём — это отредактированный файл, а не повод
+    // потерять профиль целиком.
+    taught: Array.isArray(o.taught)
+      ? [...new Set(o.taught.filter((v): v is string => typeof v === 'string'))]
+      : [],
   };
 }
 

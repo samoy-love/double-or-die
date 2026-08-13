@@ -9,7 +9,7 @@
  * `state.ts`).
  */
 
-import { payAceOnRunEnd } from './bets';
+import { payAceOnRunEnd, progressOf } from './bets';
 import { KEYS, MAX_ACTIVE_BETS } from './config';
 import { BetState, Meta, RunPhase, type SimState } from './state';
 
@@ -34,6 +34,34 @@ export function keysEarned(s: SimState): number {
   const fromBosses = KEYS.perBoss * s.meta[Meta.BossesBeaten];
 
   return Math.max(KEYS.floor, fromBets + fromChips + fromBosses);
+}
+
+/**
+ * Сколько строк займёт разбивка источников ключей на экране итогов.
+ *
+ * Раньше эта формула жила в двух местах сразу: `drawSummaryScreen`
+ * (`renderer.ts`) рисовал разбивку, а `summaryBreakdownLines`
+ * (`menuLayout.ts`) отдельно считала её высоту для хитбокса кнопки «Ещё
+ * разок» — и рассинхрон этих двух копий уже был найден и исправлен как
+ * отдельный дефект (кнопка наезжала на текст). `menuLayout.ts` зовёт именно
+ * эту функцию для хитбокса. `drawSummaryScreen` (renderer.ts) по-прежнему
+ * считает разбивку своим циклом — ему нужны не только длина, но и текст
+ * каждой строки, а не только их число, — но сверяет число напечатанных
+ * строк с этой функцией в dev-сборке (iter-5, ТЗ-18): расхождение формул
+ * теперь ловится в консоли, а не только глазами на кадре.
+ */
+export function summaryLineCount(s: SimState): number {
+  let chips = 0;
+  for (let i = 0; i < s.playerCount; i++) chips += s.pChips[i];
+  const fromBets = Math.trunc(s.meta[Meta.BetsWon] / KEYS.betsPerKey);
+  const fromChips = Math.trunc(chips / KEYS.chipsPerKey);
+  const fromBosses = KEYS.perBoss * s.meta[Meta.BossesBeaten];
+  let lines = 0;
+  if (s.meta[Meta.BetsWon] !== 0) lines++;
+  if (chips !== 0) lines++;
+  if (s.meta[Meta.BossesBeaten] !== 0) lines++;
+  if (fromBets + fromChips + fromBosses < KEYS.floor) lines++;
+  return lines;
 }
 
 /**
@@ -99,7 +127,16 @@ export function endRun(s: SimState, victory: boolean): void {
    * не выполнено. Оставить их активными значило бы показать на экране итогов
    * пари, которое всё ещё чего-то ждёт от забега, которого больше нет.
    */
-  for (let i = 0; i < s.playerCount * MAX_ACTIVE_BETS; i++) {
-    if (s.aState[i] === BetState.Active) s.aState[i] = BetState.Lost;
+  for (let p = 0; p < s.playerCount; p++) {
+    for (let n = 0; n < MAX_ACTIVE_BETS; n++) {
+      const k = p * MAX_ACTIVE_BETS + n;
+      if (s.aState[k] !== BetState.Active) continue;
+      // Прогресс снимается ДО смены состояния, тем же приёмом, что и у
+      // `loseBet` — иначе `nearMissOf` на экране итогов (ТЗ-13 iter-3) читал
+      // бы `aNearMiss`, ни разу не записанный для пари, застигнутых концом
+      // забега, а не проигрышем в бою.
+      s.aNearMiss[k] = progressOf(s, p, n);
+      s.aState[k] = BetState.Lost;
+    }
   }
 }

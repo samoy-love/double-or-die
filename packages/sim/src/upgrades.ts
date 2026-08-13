@@ -166,8 +166,32 @@ function preferable(candidate: number, current: number, shortfall: number): bool
  * ответ: у игрока может не быть ни одного апгрейда, и торг обязан это пережить.
  */
 export function sellUpgrade(s: SimState, player: number, shortfall: number): number {
+  const { slot: pick, price } = sellCandidate(s, player, shortfall);
+  if (pick < 0) return 0;
+  revokeSlot(s, player, pick);
+  s.pChips[player] += price;
+  return price;
+}
+
+/**
+ * КАКОЙ апгрейд уйдёт с молотка и за сколько — без самой продажи.
+ *
+ * Выделено из `sellUpgrade` ради экрана торга: он писал «Продать апгрейд» и
+ * цену, не называя товар, и игрок расставался с неизвестной покупкой. Правило
+ * выбора обязано быть одно на обоих: экран, считающий по своей копии правила,
+ * рано или поздно назовёт не тот апгрейд, который потом продастся, — и это
+ * хуже, чем не называть вовсе.
+ *
+ * `slot < 0` означает «продавать нечего» — законный ответ, а не ошибка.
+ */
+export function sellCandidate(
+  s: SimState,
+  player: number,
+  shortfall: number,
+): { slot: number; upgrade: number; price: number } {
   const floor = s.meta[Meta.Floor];
   let pick = -1;
+  let upgrade = 0;
   let price = 0;
 
   for (let i = 0; i < MAX_UPGRADE_SLOTS; i++) {
@@ -178,14 +202,12 @@ export function sellUpgrade(s: SimState, player: number, shortfall: number): num
     // есть, и без этого порядок зависел бы от порядка покупок.
     if (pick < 0 || preferable(offer, price, shortfall)) {
       pick = i;
+      upgrade = held;
       price = offer;
     }
   }
 
-  if (pick < 0) return 0;
-  revokeSlot(s, player, pick);
-  s.pChips[player] += price;
-  return price;
+  return { slot: pick, upgrade, price };
 }
 
 /**
@@ -484,7 +506,10 @@ export function stepReward(s: SimState, inputs: readonly InputFrame[]): boolean 
 /** Перевести фокус, упираясь в края: перенос по кругу врёт о числе товаров. */
 function moveFocus(s: SimState, delta: number): void {
   const cur = s.meta[Meta.DoorPick];
-  const next = cur < 0 ? (delta > 0 ? 0 : SHOP_SLOTS - 1) : cur + delta;
+  // Первое нажатие ставит фокус на элемент СО СТОРОНЫ ЖЕСТА, а не на
+  // противоположный: «влево» из пустого фокуса прыгало на крайний правый, и
+  // это читалось не правилом, а промахом ввода. Упор в край не изменился.
+  const next = cur < 0 ? (delta > 0 ? SHOP_SLOTS - 1 : 0) : cur + delta;
   if (next < 0 || next >= SHOP_SLOTS) return;
   s.meta[Meta.DoorPick] = next;
 }

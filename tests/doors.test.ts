@@ -49,7 +49,13 @@ function clearRoom(s: SimState, room: number): void {
 
 /** Выбрать дверь `n` и подтвердить. */
 function chooseDoor(s: SimState, n: number): void {
-  for (let i = 0; i <= n; i++) step(s, press(Btn.NavRight));
+  // Первое нажатие ставит фокус со стороны жеста: «влево» — на крайнюю левую
+  // дверь. Дальше шагаем вправо до нужной.
+  step(s, press(Btn.NavLeft));
+  for (let i = 0; i < n; i++) {
+    step(s, idle);
+    step(s, press(Btn.NavRight));
+  }
   step(s, idle);
   step(s, press(Btn.Confirm));
 }
@@ -142,7 +148,7 @@ describe('выбор двери', () => {
     clearRoom(s, 1);
     // Тир едет со сдвигом на единицу: «Нормально» это 2 в битах.
     const tier = 1;
-    for (let i = 0; i <= 0; i++) step(s, press(Btn.NavRight));
+    step(s, press(Btn.NavLeft));
     step(s, [{ ...makeFrame(), buttons: (tier + 1) << 8 }]);
     step(s, press(Btn.Confirm));
     expect(s.meta[Meta.Phase]).toBe(RunPhase.Fight);

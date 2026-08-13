@@ -210,7 +210,7 @@ describe('фишки', () => {
     expect(s.pChips[0] - before).toBe(1);
   });
 
-  it('исчезают с пола за три секунды', () => {
+  it('исчезают с пола за пять секунд', () => {
     const s = arena();
     // Игрок в стороне, чтобы не подобрал.
     s.pX[0] = fromInt(200);
@@ -218,7 +218,7 @@ describe('фишки', () => {
     dropChip(s, fromInt(CX), fromInt(CY));
     run(s, 60);
     expect(countChips(s)).toBe(1);
-    run(s, 130);
+    run(s, 250);
     expect(countChips(s)).toBe(0);
   });
 });

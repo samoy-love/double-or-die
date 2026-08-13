@@ -31,6 +31,7 @@ import {
   MAX_PLAYERS,
   MAX_SPAWNS,
   Meta,
+  RunPhase,
   type SimState,
   toFloat,
 } from '@dod/sim';
@@ -116,6 +117,19 @@ export class Feedback {
    * читался бы как «100%», потому что время у него вышло целиком.
    */
   readonly betLostTick = new Int32Array(MAX_PLAYERS * MAX_ACTIVE_BETS);
+  /**
+   * Тик, на котором забег кончился (переход в `RunPhase.Summary`). Ноль —
+   * забег ещё идёт.
+   *
+   * Чисто показ, как и `betLostTick` выше: экрану итогов (ТЗ-13 iter-3)
+   * нужно отличить пари, застигнутое КОНЦОМ забега, от пари, проигранного
+   * раньше по ходу боя — оба выставляют `aState=Lost`, а различает их только
+   * тик потери. Ядру этот тик не нужен, поэтому он не в `Meta`: новый слот
+   * там означает новую длину хеша и ре-бейзлайн всех golden-эталонов ради
+   * числа, которое нужно только рендеру.
+   */
+  runEndTick = 0;
+  private prevRunPhase = -1;
 
   /**
    * Взятая сделка над головой игрока: остаток жизни, пари, кон и обещанный куш.
@@ -158,8 +172,10 @@ export class Feedback {
     this.playerSquash.fill(0);
     this.betPayout.fill(0);
     this.betLostTick.fill(0);
+    this.runEndTick = 0;
     this.dealLife.fill(0);
     this.prevAceOnArena = s.meta[Meta.AceX] !== 0;
+    this.prevRunPhase = s.meta[Meta.Phase];
     this.primed = false;
     this.remember(s);
     this.primed = true;
@@ -193,6 +209,10 @@ export class Feedback {
     this.observeBets(s);
     this.observeWaves(s);
     this.observeAce(s);
+    if (s.meta[Meta.Phase] === RunPhase.Summary && this.prevRunPhase !== RunPhase.Summary) {
+      this.runEndTick = s.tick;
+    }
+    this.prevRunPhase = s.meta[Meta.Phase];
     this.remember(s);
   }
 
