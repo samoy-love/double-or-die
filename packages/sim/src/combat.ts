@@ -27,6 +27,7 @@ import { add, type Fx, mul, sub } from './fixed';
 import { Stream, nextInt } from './rng';
 import { damageOf, dropChancePctOf, pickupRadiusOf } from './upgrades';
 import {
+  Curse,
   EntityFlag,
   MAX_BULLETS,
   MAX_CHIPS,
@@ -406,8 +407,23 @@ export function dropChip(s: SimState, x: Fx, y: Fx): void {
 const pickupRadii = new Int32Array(MAX_PLAYERS);
 
 /** Фишки разлетаются, тормозят и подбираются наездом — кнопки они не требуют. */
+/**
+ * Заморозка активна и помеченный враг ещё жив: подбор фишек заблокирован.
+ *
+ * Проверяется каждый тик, а не кэшируется: помеченный враг гибнет в бою, и
+ * снятие блокировки обязано случиться в тот же тик, что и его смерть.
+ */
+function chipsFrozen(s: SimState): boolean {
+  if (s.meta[Meta.Curse] !== Curse.Frozen || s.meta[Meta.CurseRoom] !== 1) return false;
+  for (let i = 0; i < MAX_ENEMIES; i++) {
+    if (s.eActive[i] && (s.eFlags[i] & EntityFlag.Marked) !== 0) return true;
+  }
+  return false;
+}
+
 export function stepChips(s: SimState): void {
   for (let p = 0; p < s.playerCount; p++) pickupRadii[p] = pickupRadiusOf(s, p);
+  const frozen = chipsFrozen(s);
 
   for (let i = 0; i < MAX_CHIPS; i++) {
     if (!s.cActive[i]) continue;
@@ -425,6 +441,8 @@ export function stepChips(s: SimState): void {
     pushOutOfColumns(s, add(s.cX[i], s.cVX[i]), add(s.cY[i], s.cVY[i]), CHIP.radius);
     s.cX[i] = pushedX;
     s.cY[i] = pushedY;
+
+    if (frozen) continue;
 
     for (let p = 0; p < s.playerCount; p++) {
       if ((s.pFlags[p] & EntityFlag.Alive) === 0) continue;

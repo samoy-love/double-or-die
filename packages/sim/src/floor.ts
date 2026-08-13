@@ -16,7 +16,7 @@ import { APPETITE, HOUSE, LEG_UP, MAX_ACTIVE_BETS } from './config';
 import { Btn, type InputFrame } from './input';
 import { Stream, nextInt } from './rng';
 import { freezeArena } from './run';
-import { BetState, Curse, Meta, Obligation, RunPhase, type SimState } from './state';
+import { BetState, Curse, EntityFlag, Meta, Obligation, RunPhase, type SimState } from './state';
 import { sellUpgrade } from './upgrades';
 
 /**
@@ -128,6 +128,25 @@ export function expireCurse(s: SimState): void {
   s.meta[Meta.CurseRoom] = 0;
   // Долг гасится вместе с проклятием: он и был проклятием на комнату.
   s.meta[Meta.Debt] = 0;
+}
+
+/**
+ * Разовые эффекты проклятий, срабатывающие в момент входа в проклятую
+ * комнату, а не постоянно все её тики.
+ *
+ * Сейчас это только «Кровью»: остальные пять проклятий читают
+ * `Meta.Curse`/`Meta.CurseRoom` сами, где нужно (скорость врагов, рывок,
+ * подбор фишек, выплата, виньетка), и отдельного входа не требуют.
+ */
+export function applyCurseEffects(s: SimState): void {
+  if (s.meta[Meta.Curse] !== Curse.Blood || s.meta[Meta.CurseRoom] !== 1) return;
+
+  for (let p = 0; p < s.playerCount; p++) {
+    if ((s.pFlags[p] & EntityFlag.Alive) === 0) continue;
+    // Забег обязан остаться проходимым: проклятие снимает сердце, но не
+    // добивает — на последнем сердце оно просто ничего не делает.
+    s.pHearts[p] = Math.max(1, s.pHearts[p] - 1);
+  }
 }
 
 /**
