@@ -32,6 +32,7 @@ import {
   Meta,
   Obligation,
   summaryLineCount,
+  TICK_HZ,
   type SimState,
 } from '@dod/sim';
 import type { Feedback } from '../feedback';
@@ -883,7 +884,7 @@ export function drawSettlement(r: Renderer, s: SimState, w: number, h: number, f
        */
       const seconds = Math.max(
         0,
-        Math.round((s.meta[Meta.RoomStartTick] - fb.betLostTick[k]) / 60),
+        Math.round((s.meta[Meta.RoomStartTick] - fb.betLostTick[k]) / TICK_HZ),
       );
       const time = spec.progress === BetProgress.Time && seconds > 0;
       drawNumber(
@@ -927,7 +928,7 @@ export function drawSettlement(r: Renderer, s: SimState, w: number, h: number, f
     ring.b,
     0.7,
   );
-  drawNumber(b, Math.ceil(left / 60), w / 2, h / 2 + rows * 34 + 46, 14, PALETTE.hudText);
+  drawNumber(b, Math.ceil(left / TICK_HZ), w / 2, h / 2 + rows * 34 + 46, 14, PALETTE.hudText);
 
   /*
    * Трамплин — объясняет молчаливое правило симуляции: провал обязывает
@@ -1038,7 +1039,7 @@ export function drawAceBetScreen(
     ring.b,
     0.7,
   );
-  drawNumber(r.batch, Math.ceil(left / 60), w / 2, h / 2 + 120, 16, PALETTE.hudText);
+  drawNumber(r.batch, Math.ceil(left / TICK_HZ), w / 2, h / 2 + 120, 16, PALETTE.hudText);
 
   r.confirmHint(w, h / 2 + SCREEN.hintY);
   r.cancelHint(w, h / 2 + SCREEN.hintY + SCREEN.hintStep);

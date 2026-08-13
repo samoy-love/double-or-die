@@ -271,7 +271,7 @@ export function drawHud(
     r.screenTitle(t('death.title'), w, h / 2 - 150);
     r.screenLine(t('death.hint'), w, h / 2 - 92, PALETTE.hudDim, TEXT.subtitle);
     b.push(Shape.Ring, w / 2, h / 2, 60, 60, 0, 0, 0, 0, 0, 6, c.r, c.g, c.b, 0.9);
-    drawNumber(b, Math.ceil(left / 60), w / 2, h / 2, 42, PALETTE.hudText);
+    drawNumber(b, Math.ceil(left / TICK_HZ), w / 2, h / 2, 42, PALETTE.hudText);
   }
 
   r.drawRunScreens(s, w, h, fb);
