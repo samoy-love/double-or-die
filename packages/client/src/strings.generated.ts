@@ -255,7 +255,7 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
     'ace.bark.yawn.2': 'Карты, между прочим, не бесплатные. Хотя нет, бесплатные.',
     'ace.bark.yawn.3': 'Третья комната. Я уже начал полировать перчатки.',
     'ace_bet.desc':
-      'Ставит против вас без вашего согласия. Смолчите — карта уйдёт вместе с волной, без потерь',
+      'Ставит против вас — решать вам. Смолчите — карта уйдёт вместе с волной, без потерь',
     'ace_bet.stake': 'Его кон',
     'ace_bet.title': 'Крупье предлагает пари',
     'appetite.hint.key': '1 / 2 / 3 — тир кона',
@@ -486,7 +486,7 @@ export const STRINGS: Record<Lang, Readonly<Record<StringKey, string>>> = {
     'ace.bark.yawn.2': 'The cards are not free, you know. Correction: they are.',
     'ace.bark.yawn.3': 'Third room. I have started polishing the gloves.',
     'ace_bet.desc':
-      'Betting against you without asking. Stay silent and the card leaves with the wave, no cost',
+      'Betting against you — your call. Stay silent and the card leaves with the wave, no cost',
     'ace_bet.stake': 'His stake',
     'ace_bet.title': 'The Ace offers a bet',
     'appetite.hint.key': '1 / 2 / 3 for the stake tier',

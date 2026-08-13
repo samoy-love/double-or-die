@@ -215,24 +215,6 @@ export class InputSource {
   attach(canvas: HTMLCanvasElement): void {
     window.addEventListener('keydown', (e) => {
       this.touched();
-      // Множество нажатого — заодно и детектор фронта: автоповтор клавиатуры
-      // шлёт keydown десятками в секунду, а выбор кона обязан быть одним
-      // событием на одно нажатие.
-      const fresh = !this.keys.has(e.code);
-      this.keys.add(e.code);
-      this.scheme = InputScheme.Keyboard;
-      if (fresh) {
-        this.appetiteKey(e.code);
-        // Поштучный забор: те же стрелки, что двигают фокус экранов
-        // (`SCREEN_BINDINGS`), — конфликта нет, потому что цикл цели
-        // работает только в бою, а фокус экрана — только на паузе.
-        if (e.code === 'ArrowLeft') this.cashOutStep -= 1;
-        if (e.code === 'ArrowRight') this.cashOutStep += 1;
-        // Дубль паузы на `P` обязателен: в веб-сборке Esc выбивает из
-        // полноэкранного режима и снимает захват курсора, и до игры он
-        // доходит не всегда (UX §2).
-        if (e.code === 'Escape' || e.code === 'KeyP') this.pauseToggle?.();
-      }
       // Пробел и стрелки скроллят страницу, а Tab уводит фокус с канваса —
       // в игре это раздражает.
       //
@@ -243,6 +225,32 @@ export class InputSource {
       // Tab браузеру, чтобы фокус ушёл на неё (docs/UX.md).
       const swallowTab =
         e.code !== 'Tab' || document.querySelector('.update:not([hidden])') === null;
+      // Плашка обновления показана, нажат Tab — событие целиком отдаётся
+      // браузеру: код не попадает в `this.keys`, иначе геймпадный Tab,
+      // нажатый ради фокуса на плашке, ОДНОВРЕМЕННО сработал бы как
+      // Btn.Confirm на активном модальном экране (Ставка Крупье/лавка/
+      // дверь) позади нее — тот же класс регрессии, что чинил swallowTab,
+      // только с другой стороны условия.
+      if (swallowTab) {
+        // Множество нажатого — заодно и детектор фронта: автоповтор
+        // клавиатуры шлёт keydown десятками в секунду, а выбор кона
+        // обязан быть одним событием на одно нажатие.
+        const fresh = !this.keys.has(e.code);
+        this.keys.add(e.code);
+        this.scheme = InputScheme.Keyboard;
+        if (fresh) {
+          this.appetiteKey(e.code);
+          // Поштучный забор: те же стрелки, что двигают фокус экранов
+          // (`SCREEN_BINDINGS`), — конфликта нет, потому что цикл цели
+          // работает только в бою, а фокус экрана — только на паузе.
+          if (e.code === 'ArrowLeft') this.cashOutStep -= 1;
+          if (e.code === 'ArrowRight') this.cashOutStep += 1;
+          // Дубль паузы на `P` обязателен: в веб-сборке Esc выбивает из
+          // полноэкранного режима и снимает захват курсора, и до игры он
+          // доходит не всегда (UX §2).
+          if (e.code === 'Escape' || e.code === 'KeyP') this.pauseToggle?.();
+        }
+      }
       if (
         swallowTab &&
         ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.code)

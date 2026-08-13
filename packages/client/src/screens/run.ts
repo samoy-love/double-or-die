@@ -351,9 +351,11 @@ export function drawShopScreen(r: Renderer, s: SimState, w: number, h: number): 
      * с фишками, стояла с голыми именами.
      */
     r.wrapped(upgradeDesc(item - 1), x, cardY + 40, 280, TEXT.body, PALETTE.hudDim, 0.85);
-    // Цена алым, когда не хватает: решение здесь одно — «беру или коплю», —
-    // и считается оно из двух чисел, цены и кошелька. У Дара цены нет вовсе.
-    if (!gift) r.priceTag(price, x, cardY + 118, 20, afford ? PALETTE.chip : PALETTE.danger);
+    // Цена терракотой, когда не хватает: тот же экономический минус, что и
+    // недостача на плате заведению, near-miss и кон Крупье (PALETTE.loss) —
+    // алый (`danger`) занят объявленной атакой и здесь означал бы то же,
+    // что и телеграф удара, хотя опасности тут никакой нет.
+    if (!gift) r.priceTag(price, x, cardY + 118, 20, afford ? PALETTE.chip : PALETTE.loss);
   }
 
   // Зазор до подсказок: число кошелька набрано крупно, и подсказка,
