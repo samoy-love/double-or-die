@@ -387,9 +387,9 @@ const DEFAULT_CALIBRATION: CalibrationParams = {
   // veteran/master остались в допуске без изменений.
   roomDurationScale: {
     novice: 0.693,
-    median: 1.0743,
-    veteran: 1.509,
-    master: 1.555,
+    median: 1.288,
+    veteran: 1.686,
+    master: 2.068,
   },
   /*
    * novice/median/veteran/master пересчитаны точечно (не полный ре-трейн,
@@ -402,28 +402,28 @@ const DEFAULT_CALIBRATION: CalibrationParams = {
    * бага заодно с ним. Полный ре-трейн по SIMULATION §2 остаётся долгом.
    */
   hitsScale: {
-    novice: 11.244,
-    median: 10.515,
-    veteran: 10.885,
-    master: 10.525,
+    novice: 8.703,
+    median: 9.186,
+    veteran: 9.238,
+    master: 6.28,
   },
   // Значения по умолчанию (1.0) не пишутся явно — отсутствующий профиль и так
   // читается как 1.0 (см. комментарий поля выше); ниже — только профили с
   // измеренным отклонением. Четыре гейт-профиля пересчитаны той же правкой,
   // что и `hitsScale` выше — остальные двенадцать ждут полного ре-трейна.
   chipsScale: {
-    'novice:single': 0.184,
+    'novice:single': 0.213,
     'novice:stack': 2.68,
     'median:single': 2.68,
-    'median:stack': -0.295,
-    'veteran:chips': -0.2551,
+    'median:stack': -0.1156,
+    'veteran:chips': -0.5207,
     'master:none': 0.7706,
   },
   // 'novice:single', 'median:stack' и 'veteran:chips' пересчитаны той же
   // точечной правкой — остальные девять ждут полного ре-трейна вместе с
   // прочими полями выше.
   betWinScale: {
-    'novice:single': 0.4849,
+    'novice:single': 0.6197,
     'novice:stack': 0.0083,
     'novice:chips': 0.0083,
     'median:single': 0.1022,
@@ -431,7 +431,7 @@ const DEFAULT_CALIBRATION: CalibrationParams = {
     'median:chips': 0.1022,
     'veteran:single': 0.1532,
     'veteran:stack': 0.1532,
-    'veteran:chips': 0.5812,
+    'veteran:chips': 0.7009,
     'master:single': 0.19,
     'master:stack': 0.19,
     'master:chips': 0.19,
