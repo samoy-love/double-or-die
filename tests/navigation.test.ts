@@ -115,23 +115,24 @@ describe.each(['pad', 'keys'] as const)('экран двери с «%s»', (sche
   const right = bits(scheme, Btn.NavRight);
   const confirm = bits(scheme, Btn.Confirm);
 
-  it('первое нажатие поднимает фокус из «ничего не выбрано»', () => {
+  it('первое нажатие поднимает фокус СО СТОРОНЫ ЖЕСТА', () => {
     const s = atDoors();
     expect(s.meta[Meta.DoorPick]).toBe(-1);
     tap(s, right, stepDoors);
-    expect(s.meta[Meta.DoorPick]).toBe(0);
+    expect(s.meta[Meta.DoorPick], 'вправо из пустоты — на крайнюю правую').toBe(MAX_DOORS - 1);
 
     const back = atDoors();
     tap(back, left, stepDoors);
-    expect(back.meta[Meta.DoorPick], 'влево из пустоты — на последнюю дверь').toBe(MAX_DOORS - 1);
+    expect(back.meta[Meta.DoorPick], 'влево из пустоты — на крайнюю левую').toBe(0);
   });
 
   it('достижима каждая дверь из каждой', () => {
     for (let from = 0; from < MAX_DOORS; from++) {
       for (let to = 0; to < MAX_DOORS; to++) {
         const s = atDoors();
-        // Встаём на исходную дверь теми же нажатиями, что и игрок.
-        tap(s, right, stepDoors);
+        // Встаём на исходную дверь теми же нажатиями, что и игрок: «влево»
+        // поднимает фокус на крайнюю левую, дальше шагаем вправо.
+        tap(s, left, stepDoors);
         for (let i = 0; i < from; i++) tap(s, right, stepDoors);
         expect(s.meta[Meta.DoorPick]).toBe(from);
 
@@ -144,7 +145,7 @@ describe.each(['pad', 'keys'] as const)('экран двери с «%s»', (sche
 
   it('упор в край не роняет выбор', () => {
     const s = atDoors();
-    tap(s, right, stepDoors);
+    tap(s, left, stepDoors);
     // Пять нажатий подряд при трёх дверях: за краем фокус обязан ОСТАТЬСЯ на
     // крайней, а не обнулиться и не перепрыгнуть по кругу — «поменьше» на
     // нижнем тире не имеет права стать «по-крупному» (UX §2).
@@ -158,7 +159,7 @@ describe.each(['pad', 'keys'] as const)('экран двери с «%s»', (sche
     const s = atDoors();
     expect(stepDoors(s, [frame(confirm)]), 'подтвердил пустой выбор').toBe(false);
     stepDoors(s, [frame(0)]);
-    tap(s, right, stepDoors);
+    tap(s, left, stepDoors);
     expect(stepDoors(s, [frame(confirm)]), 'выбранная дверь не подтверждается').toBe(true);
   });
 });
@@ -179,7 +180,7 @@ describe.each(['pad', 'keys'] as const)('лавка с «%s»', (scheme) => {
 
   it('достижим каждый слот прилавка', () => {
     const s = atShop(1000);
-    tap(s, right, stepReward);
+    tap(s, left, stepReward);
     expect(s.meta[Meta.DoorPick]).toBe(0);
     for (let i = 1; i < SHOP_SLOTS; i++) {
       tap(s, right, stepReward);
@@ -193,7 +194,7 @@ describe.each(['pad', 'keys'] as const)('лавка с «%s»', (scheme) => {
 
   it('упор в край не роняет выбор', () => {
     const s = atShop(1000);
-    tap(s, right, stepReward);
+    tap(s, left, stepReward);
     for (let i = 0; i < 5; i++) tap(s, left, stepReward);
     expect(s.meta[Meta.DoorPick]).toBe(0);
     for (let i = 0; i < 5 + SHOP_SLOTS; i++) tap(s, right, stepReward);
@@ -202,7 +203,7 @@ describe.each(['pad', 'keys'] as const)('лавка с «%s»', (scheme) => {
 
   it('покупка идёт по фокусу, а выход — отказом', () => {
     const s = atShop(1000);
-    tap(s, right, stepReward);
+    tap(s, left, stepReward);
     const price = s.shopPrice[0];
     const before = s.pChips[0];
     stepReward(s, [frame(confirm)]);

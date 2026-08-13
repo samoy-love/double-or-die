@@ -16,7 +16,8 @@
       "category": "style",
       "multiplier": 2.0,
       "progress": "threat",
-      "conflicts": []
+      "conflicts": [],
+      "excludeCurses": ["leadfeet"]
     },
     {
       "id": "under_45s",
@@ -41,7 +42,8 @@
       "category": "greed",
       "multiplier": 2.0,
       "progress": "threat",
-      "conflicts": []
+      "conflicts": [],
+      "excludeCurses": ["frozen"]
     },
     {
       "id": "demolitionist",

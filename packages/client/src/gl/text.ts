@@ -170,8 +170,10 @@ export class TextAtlas {
    * рисовалки в кадре центрируют по вертикали, и базовая линия здесь означала
    * бы, что подпись рядом с шестиугольником каждый раз двигается вручную.
    *
-   * `align` слева или по центру — двух хватает: справа в этом интерфейсе
-   * ничего не выравнивается, а лишний случай надо было бы проверять глазами.
+   * `align` — слева, по центру или справа. Правый случай появился вместе со
+   * строкой состояния в правом верхнем углу HUD (проклятие, долг): она растёт
+   * влево от кромки, и выравнивать её вручную вычитанием измеренной ширины в
+   * месте вызова значило бы завести ту же логику копией.
    */
   push(
     text: string,
@@ -183,11 +185,12 @@ export class TextAtlas {
     g: number,
     b: number,
     a = 1,
-    align: 'left' | 'center' = 'left',
+    align: 'left' | 'center' | 'right' = 'left',
   ): void {
     if (!this.ready || text === '') return;
     const table = this.glyphs[face];
-    let pen = align === 'center' ? x - this.width(text, size, face) / 2 : x;
+    const measured = align === 'left' ? 0 : this.width(text, size, face);
+    let pen = align === 'center' ? x - measured / 2 : align === 'right' ? x - measured : x;
     const baseline = y + this.cap[face] * size * 0.5;
 
     for (const ch of text) {

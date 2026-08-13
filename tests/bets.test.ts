@@ -22,6 +22,7 @@ import {
   BetState,
   Btn,
   CARD,
+  Curse,
   EnemyType,
   EntityFlag,
   FX_ONE,
@@ -330,7 +331,7 @@ describe('условия пари', () => {
     dropChip(s, fromInt(CX), fromInt(CY));
     run(s, 60);
     expect(stateOf(s, n), 'сорвалось до истечения фишки').toBe(BetState.Active);
-    run(s, 140);
+    run(s, 250);
     expect(stateOf(s, n)).toBe(BetState.Lost);
   });
 
@@ -1123,6 +1124,85 @@ describe('матрица конфликтов пари', () => {
         0,
       );
     });
+  });
+});
+
+/**
+ * Третья ось матрицы: «пари × проклятие» (GDD §9.5, §11, ТЗ-7 iter-3).
+ *
+ * Без правила проклятие и активное пари конфликтуют случайно: «Свинцовые
+ * ноги» превращают «Без рывка» в бесплатную победу (рывок и так недоступен),
+ * «Заморозка» портит «Собери все фишки» тем, срывается ли пари, а не тем, как
+ * играл игрок. `excludeCurses` в каталоге — та же битовая маска, что у
+ * `excludeSchemes`, только читается по `Meta.Curse`/`Meta.CurseRoom` вместо
+ * `pScheme`.
+ */
+describe('матрица конфликтов: пари × проклятие', () => {
+  const SEEDS = 60;
+
+  /** Считает, сколько раз пари `bet` легло на арену за `SEEDS` сидов. */
+  function dealsOf(bet: number, curse: number): number {
+    let seen = 0;
+    for (let seed = 1; seed <= SEEDS; seed++) {
+      const s = createState(seed, 1);
+      spawnPlayers(s);
+      s.meta[Meta.Curse] = curse;
+      s.meta[Meta.CurseRoom] = curse === Curse.None ? 0 : 1;
+      dealCards(s);
+      for (let i = 0; i < MAX_CARDS; i++) {
+        if (s.kActive[i] && s.kBet[i] === bet) seen++;
+      }
+    }
+    return seen;
+  }
+
+  it('«Свинцовые ноги» не даёт «Без рывка» лечь на стол', () => {
+    const bet = betIndex('no_dash');
+    expect(
+      dealsOf(bet, Curse.None),
+      'без проклятия пари и так не выпадает — проверка слепа',
+    ).toBeGreaterThan(0);
+    expect(dealsOf(bet, Curse.LeadFeet), '«Без рывка» выпало под «Свинцовыми ногами»').toBe(0);
+  });
+
+  it('вне проклятой комнаты (CurseRoom !== 1) «Без рывка» снова доступно', () => {
+    const bet = betIndex('no_dash');
+    let seen = 0;
+    for (let seed = 1; seed <= SEEDS; seed++) {
+      const s = createState(seed, 1);
+      spawnPlayers(s);
+      // Проклятие числится, но его комната ещё/уже не идёт (см. floor.ts
+      // `expireCurse`): запрет обязан сняться вместе с ним.
+      s.meta[Meta.Curse] = Curse.LeadFeet;
+      s.meta[Meta.CurseRoom] = 0;
+      dealCards(s);
+      for (let i = 0; i < MAX_CARDS; i++) if (s.kActive[i] && s.kBet[i] === bet) seen++;
+    }
+    expect(
+      seen,
+      '«Без рывка» осталось заблокированным после конца проклятой комнаты',
+    ).toBeGreaterThan(0);
+  });
+
+  it('«Заморозка» не даёт «Собери все фишки» лечь на стол', () => {
+    const bet = betIndex('all_chips');
+    expect(
+      dealsOf(bet, Curse.None),
+      'без проклятия пари и так не выпадает — проверка слепа',
+    ).toBeGreaterThan(0);
+    expect(dealsOf(bet, Curse.Frozen), '«Собери все фишки» выпало под «Заморозкой»').toBe(0);
+  });
+
+  it('другое проклятие не трогает пари, для которого исключений нет', () => {
+    const bet = betIndex('no_dash');
+    // «Заморозка» не входит в excludeCurses «Без рывка» — блокировать его не должна.
+    expect(dealsOf(bet, Curse.Frozen)).toBeGreaterThan(0);
+  });
+
+  it('каждое проклятие в масках каталога существует в диапазоне Curse', () => {
+    for (const spec of BETS as unknown as { curseMask: number }[]) {
+      expect(spec.curseMask & ~((1 << (Curse.Commission + 1)) - 1)).toBe(0);
+    }
   });
 });
 

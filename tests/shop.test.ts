@@ -81,7 +81,7 @@ function clearRoom(s: SimState, room: number): void {
 
 /** Купить первый попавшийся товар с прилавка так, как это делает игрок. */
 function buyFirst(s: SimState): void {
-  step(s, press(Btn.NavRight));
+  step(s, press(Btn.NavLeft));
   step(s, idle);
   step(s, press(Btn.Confirm));
 }

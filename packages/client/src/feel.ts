@@ -84,6 +84,25 @@ export class Feel {
     this.flashDecay = this.flashAlpha / 0.25;
   }
 
+  /**
+   * Вспышка по команде отладки — мимо всех трёх отказов обычной.
+   *
+   * `flash()` молчит при `stable`, при нулевом `flashScale` и чаще раза в
+   * треть секунды. Съёмка идёт именно в `stable`, поэтому общим путём кадр
+   * вспышки не снять никогда — ни ожиданием, ни везением.
+   *
+   * Ограничение частоты остаётся правилом игры: здесь его нет ровно потому,
+   * что здесь нет игрока — команда приходит от сценария съёмки, а не от боя.
+   * Потолок яркости при этом сохранён: даже отладочный кадр не должен
+   * показывать полноэкранного белого.
+   */
+  debugFlash(colour: Rgb, alpha: number): void {
+    this.sinceFlash = 0;
+    this.flashColour = colour;
+    this.flashAlpha = Math.min(MAX_FLASH_ALPHA, alpha);
+    this.flashDecay = this.flashAlpha / 0.25;
+  }
+
   /** Идёт ли сейчас хитстоп: цикл в это время не делает тиков. */
   get frozen(): boolean {
     return this.hitstop > 0;

@@ -84,9 +84,20 @@ test.describe('релизная сборка', () => {
      * опрос ввода идёт раз в кадр, и нажатие с отпусканием в одном микротаске
      * игра не увидит.
      */
-    await page.keyboard.down('Enter');
-    await page.waitForTimeout(200);
-    await page.keyboard.up('Enter');
+    /*
+     * Нажатий ДВА, и это не запас на всякий случай.
+     *
+     * На чистом профиле первым экраном открывается справка (`openTutorial` в
+     * main.ts, первый забег), и первое подтверждение закрывает её. Одно
+     * нажатие делает ровно одно дело — иначе оно закрывало бы справку и
+     * запускало забег разом, а игрок не успевал бы прочитать ни строки.
+     */
+    for (let i = 0; i < 2; i++) {
+      await page.keyboard.down('Enter');
+      await page.waitForTimeout(200);
+      await page.keyboard.up('Enter');
+      await page.waitForTimeout(200);
+    }
     await page.waitForTimeout(900);
 
     const first = await overlayText(page);

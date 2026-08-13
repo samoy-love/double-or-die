@@ -58,7 +58,8 @@ function clearRoom(s: SimState, type: number, room = 2): void {
 
 /** Взять первое предложение так, как это делает игрок: фокус и подтверждение. */
 function takeFirst(s: SimState): void {
-  step(s, press(Btn.NavRight));
+  // «Влево» из пустого фокуса ставит первый слот (см. `moveFocus`).
+  step(s, press(Btn.NavLeft));
   step(s, idle);
   step(s, press(Btn.Confirm));
 }

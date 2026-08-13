@@ -1193,7 +1193,11 @@ export function passDoors(
   const target = strategyName ? pickDoorSlot(s, strategyName) : 0;
 
   let button: number;
-  if (focus < 0 || focus < target) button = Btn.NavRight;
+  // Из пустого фокуса «влево» ставит крайний левый элемент (`moveFocus`), и
+  // бот начинает оттуда: раньше он жал «вправо» и попадал на крайний правый,
+  // а до нужной двери шёл назад лишними кадрами.
+  if (focus < 0) button = Btn.NavLeft;
+  else if (focus < target) button = Btn.NavRight;
   else if (focus > target) button = Btn.NavLeft;
   else button = Btn.Confirm;
 
@@ -1307,7 +1311,7 @@ export function passReward(
   const target = strategyName ? pickShopSlot(s, strategyName) : -1;
 
   let button: number;
-  if (focus < 0) button = Btn.NavRight;
+  if (focus < 0) button = Btn.NavLeft;
   else if (target >= 0 && focus !== target) button = focus < target ? Btn.NavRight : Btn.NavLeft;
   else if (canBuy(s, 0, focus)) button = Btn.Confirm;
   else if (focus < SHOP_SLOTS - 1) button = Btn.NavRight;

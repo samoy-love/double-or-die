@@ -68,21 +68,30 @@ async function main(): Promise<void> {
   const profile = new Profile();
   if (profile.problem) log('save_recovered', { source: profile.source, problem: profile.problem });
   /*
-   * Первый забег — глоссарий открывается сам, без нажатия «как играть».
-   *
-   * Playtest: «сейчас ничего не понятно» — а туториал стоял за отдельной
-   * кнопкой, которую новый игрок мог и не найти на голом меню. Счётчик
-   * `runs` уже существовал для этого разбора (см. комментарий ниже про
-   * «Выбор режима», GDD §23) — используем то же поле, не заводя нового.
-   * На втором забеге и далее счётчик не нулевой, и меню остаётся голым.
+   * Глоссарий больше не открывается сам на первом запуске (iter-3 ТЗ-12):
+   * контекстное обучение действием (`coach.ts`) уже покрывает базовые
+   * термины для нового игрока, а принудительный экран-справка до первого
+   * пари противоречил GDD §9.2 («опасным должен быть поступок, а не
+   * чтение»). Справка остаётся доступной по явному вызову из меню/паузы.
    */
-  if (profile.save.runs === 0) loop.openTutorial();
   loop.audio.setVolume(profile.save.settings.volume);
   loop.feel.flashScale = profile.save.settings.flash;
   loop.setCashOutFocusedOnly(profile.save.settings.cashOutFocusedOnly);
+  loop.setUiScale(profile.save.settings.uiScale);
+  /*
+   * Пройденные уроки приезжают из профиля и туда же уезжают.
+   *
+   * Иначе обучение начиналось бы заново каждый забег: подсказка «WASD — идти»
+   * на двадцатом забеге — это не обучение, а шум, от которого перестают
+   * читать и полезные строки.
+   */
+  loop.coach.restore(profile.save.taught);
+  loop.coach.onLearned(() => profile.set({ taught: loop.coach.learnedList() }));
   // Настройка меняется из экрана настроек (`loop.ts`), а не только на
   // загрузке — сейв обязан узнать об этом сразу, а не при следующем визите.
-  loop.onSettingsChange((cashOutFocusedOnly) => profile.set({ settings: { cashOutFocusedOnly } }));
+  loop.onSettingsChange((cashOutFocusedOnly, uiScale) =>
+    profile.set({ settings: { cashOutFocusedOnly, uiScale } }),
+  );
   /*
    * Забег считается на старте, а не по итогам: до экрана итогов игрок может
    * закрыть вкладку, и несчитанные забеги обесценили бы сам счётчик.

@@ -232,9 +232,14 @@ test('меню рисуется и держит забег до нажатия',
    * макросом. Человеческое нажатие длится десятки миллисекунд, и тест
    * повторяет именно его.
    */
-  await page.keyboard.down('Enter');
-  await page.waitForTimeout(200);
-  await page.keyboard.up('Enter');
+  // Нажатий два: первое закрывает справку, открытую на первом забеге
+  // (main.ts), второе жмёт «Играть». Одно нажатие — одно действие.
+  for (let i = 0; i < 2; i++) {
+    await page.keyboard.down('Enter');
+    await page.waitForTimeout(200);
+    await page.keyboard.up('Enter');
+    await page.waitForTimeout(200);
+  }
   await page.waitForTimeout(600);
   const after = await page.evaluate(() => window.__DOD__!.state().tick);
   expect(after, 'нажатие «Играть» не начало забег').toBeGreaterThan(idle);

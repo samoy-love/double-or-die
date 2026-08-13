@@ -176,9 +176,11 @@ describe('запись сейва', () => {
         volume: DEFAULT_SAVE.settings.volume,
         flash: 0,
         cashOutFocusedOnly: DEFAULT_SAVE.settings.cashOutFocusedOnly,
+        uiScale: DEFAULT_SAVE.settings.uiScale,
       },
       keys: 7,
       runs: 1,
+      taught: [],
     });
   });
 
