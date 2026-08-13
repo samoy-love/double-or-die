@@ -44,6 +44,7 @@ import { Stream, nextInt } from './rng';
 import {
   AceGesture,
   BetState,
+  Curse,
   DoorType,
   EntityFlag,
   MAX_CARDS,
@@ -363,11 +364,48 @@ export function aceAtSettlement(s: SimState): void {
     if (s.aState[k] === BetState.Active) pending++;
   }
   if (pending === 0) return;
-  if (!enterAce(s)) return;
+  aceEnter(s);
+}
+
+/**
+ * Вывести Крупье на арену на обычный срок. Возвращает false, если выйти нельзя.
+ *
+ * Отдельный экспорт нужен отладке: состояние «Крупье стоит у стены» снаружи не
+ * набирается ничем — точка стояния считается по центру масс живых игроков, и
+ * руками её не воспроизвести, а прямая запись `AceX`/`AceY`/`AceLeaveAt` прошла
+ * бы мимо бюджета выходов и паузы между ними.
+ *
+ * Второй экземпляр связки «вышел — значит уйдёт» заводить нельзя, поэтому
+ * `aceAtSettlement` зовёт эту же функцию: разойдись здесь порядок полей, разница
+ * между расчётом и отладкой всплыла бы кадром, которого в игре не бывает.
+ */
+export function aceEnter(s: SimState): boolean {
+  if (!enterAce(s)) return false;
   // Уходит по тем же часам, что и с любого выхода: телеграф плюс три секунды.
   // Пауза расчёта длиннее (пять секунд), так что уход виден игроку целиком —
   // заведение приняло ставки и удалилось, а не растворилось со сменой экрана.
   s.meta[Meta.AceLeaveAt] = s.tick + CARD.aceTelegraphTicks + CARD.aceStayTicks;
+  return true;
+}
+
+/**
+ * Замахнуться на подброс: выйти и объявить бросок телеграфом.
+ *
+ * Возвращает false, если выходить нельзя (никого живого, исчерпан бюджет
+ * выходов, не истекла пауза). Отладке нужна затем, что кольцо телеграфа живёт
+ * ровно `aceTelegraphTicks` и наступает по порогу зачищенной угрозы — поймать
+ * его случаем практически невозможно. Подмена `TossAt` руками нарисовала бы
+ * кольцо, но карту после телеграфа кладёт `stepAce`, и рассинхрон полей лёг бы
+ * на отладку.
+ *
+ * Тело общее со `stepAce` намеренно: срок ухода и срок броска обязаны
+ * ставиться в одном месте, иначе один из двух путей однажды забудет второе поле.
+ */
+export function startAceToss(s: SimState): boolean {
+  if (!enterAce(s)) return false;
+  s.meta[Meta.TossAt] = s.tick + CARD.aceTelegraphTicks;
+  s.meta[Meta.AceLeaveAt] = s.tick + CARD.aceTelegraphTicks + CARD.aceStayTicks;
+  return true;
 }
 
 /**
@@ -444,10 +482,7 @@ function stepAce(s: SimState): void {
   const total = s.meta[Meta.RoomThreat];
   if (total <= 0) return;
   if (s.meta[Meta.ThreatCleared] * 100 < total * CARD.tossAtThreatPct) return;
-  if (!enterAce(s)) return;
-
-  s.meta[Meta.TossAt] = s.tick + CARD.aceTelegraphTicks;
-  s.meta[Meta.AceLeaveAt] = s.tick + CARD.aceTelegraphTicks + CARD.aceStayTicks;
+  startAceToss(s);
 }
 
 /**
@@ -533,9 +568,18 @@ function moodCameo(s: SimState, g: AceGesture): void {
 const freeBets = new Int32Array(BET_COUNT);
 
 function pickBet(s: SimState, owner: number): number {
+  /*
+   * Ставка Крупье не участвует в раскладке стола: она предлагается отдельно
+   * (`offerAceBet`) и не должна конкурировать за тот же огрызок каталога,
+   * что уже разобрала раздача этой же комнаты — иначе Крупье достаются
+   * только наглые/редкие пари, оставшиеся от игроков, а не независимая
+   * половина ~50.5% (ECONOMY §10А). Конфликт со схемой/проклятием остаётся:
+   * это не про доступность карты, а про её исполнимость.
+   */
+  const ignorePlayerCards = owner === ACE;
   let free = 0;
   for (let b = 0; b < BET_COUNT; b++) {
-    if (!betAvailable(s, b, owner)) continue;
+    if (!betAvailable(s, b, owner, ignorePlayerCards)) continue;
     freeBets[free++] = b;
   }
 
@@ -547,7 +591,7 @@ function pickBet(s: SimState, owner: number): number {
      * (GDD §9.5).
      */
     for (let b = 0; b < BET_COUNT; b++) {
-      if (!schemeBlocked(s, b, owner)) freeBets[free++] = b;
+      if (!schemeBlocked(s, b, owner) && !curseBlocked(s, b)) freeBets[free++] = b;
     }
     /*
      * Выдать нечего — значит карты не будет, и это законный исход.
@@ -572,23 +616,32 @@ function pickBet(s: SimState, owner: number): number {
  * которая исполняется на каждой выдаваемой карте, обязана быть числовой
  * (TECH §4).
  */
-function betAvailable(s: SimState, bet: number, owner: number): boolean {
+function betAvailable(s: SimState, bet: number, owner: number, ignorePlayerCards = false): boolean {
   if (schemeBlocked(s, bet, owner)) return false;
+  if (curseBlocked(s, bet)) return false;
   // Красной зоны на боссовой арене нет — значит нет и пари на неё (GDD §8.1).
   // Пари, условие которого выполняется само собой, — это не выбор, а подарок.
   if (bet === BetId.NoRedZone && s.meta[Meta.Phase] === RunPhase.Boss) return false;
   // Конфликты взаимны — это проверяет схема, — поэтому одной маски хватает.
   const mask = BETS[bet].conflictMask;
 
-  for (let i = 0; i < MAX_CARDS; i++) {
-    if (!s.kActive[i]) continue;
-    if (s.kBet[i] === bet) return false;
-    if ((mask & (1 << s.kBet[i])) !== 0) return false;
-  }
-  for (let i = 0; i < s.playerCount * MAX_ACTIVE_BETS; i++) {
-    if (s.aState[i] !== BetState.Active) continue;
-    if (s.aBet[i] === bet) return false;
-    if ((mask & (1 << s.aBet[i])) !== 0) return false;
+  /*
+   * `ignorePlayerCards` — только для Ставки Крупье (`pickBet(s, ACE)`):
+   * её карта ложится в центр стола отдельно от раздачи и не должна терять
+   * доступность пари только из-за того, что эту же карту уже держит другой
+   * игрок этой же комнаты (ECONOMY §10А, iter-6 разбор G12).
+   */
+  if (!ignorePlayerCards) {
+    for (let i = 0; i < MAX_CARDS; i++) {
+      if (!s.kActive[i]) continue;
+      if (s.kBet[i] === bet) return false;
+      if ((mask & (1 << s.kBet[i])) !== 0) return false;
+    }
+    for (let i = 0; i < s.playerCount * MAX_ACTIVE_BETS; i++) {
+      if (s.aState[i] !== BetState.Active) continue;
+      if (s.aBet[i] === bet) return false;
+      if ((mask & (1 << s.aBet[i])) !== 0) return false;
+    }
   }
   return true;
 }
@@ -616,6 +669,25 @@ function schemeBlocked(s: SimState, bet: number, owner: number): boolean {
     if ((mask & (1 << s.pScheme[p])) !== 0) return true;
   }
   return false;
+}
+
+/**
+ * Невыполнимо ли пари под текущим проклятием комнаты (GDD §9.5, §11).
+ *
+ * Третья ось той же матрицы-как-данные, что и `schemeBlocked`: одни
+ * проклятия делают запрещённое ими действие ненужным для условия пари
+ * («Свинцовые ноги» и так отключают рывок — «Без рывка» перестаёт быть
+ * риском), другие портят его случайностью вне контроля игрока («Заморозка»
+ * блокирует подбор фишек, пока жив помеченный враг, — «Собери все фишки»
+ * тогда решает не игрок). Проверяется только пока проклятая комната ИДЁТ
+ * (`CurseRoom === 1`): до входа и после снятия проклятие не действует, и
+ * запрет на пари вместе с ним обязан сняться.
+ */
+function curseBlocked(s: SimState, bet: number): boolean {
+  if (s.meta[Meta.CurseRoom] !== 1) return false;
+  const curse = s.meta[Meta.Curse];
+  if (curse === Curse.None) return false;
+  return (BETS[bet].curseMask & (1 << curse)) !== 0;
 }
 
 /*
@@ -1037,6 +1109,20 @@ function gesture(s: SimState, g: AceGesture): void {
   s.meta[Meta.AceGesture] = g;
   s.meta[Meta.AceGestureUntil] = s.tick + CARD.gestureTicks;
 }
+
+/**
+ * Сыграть жест Крупье снаружи ядра — для сценариев и отладки.
+ *
+ * Четыре жеста из шести случаются по редким условиям (третья комната вхолостую,
+ * прогресс под самый куш, нелепая смерть), и дождаться их боем нельзя. Прямая
+ * запись `AceGesture`/`AceGestureUntil` дала бы кадр мимо дозировки по серии
+ * смертей, мимо выхода «на настроение» и мимо правила «жест не перебивает
+ * жест» — то есть показала бы состояние, которого в игре не бывает.
+ *
+ * Обёртка, а не копия: `gesture` остаётся единственным местом, знающим правила
+ * жеста, — иначе отладка и бой разошлись бы в поведении.
+ */
+export const playAceGesture = (s: SimState, g: AceGesture): void => gesture(s, g);
 
 /**
  * Жесты, которые не привязаны к событию, а следуют из положения дел.
