@@ -25,6 +25,7 @@
     "test:coverage": "vitest run --coverage",
     "test:calibration": "vitest run --config vitest.calibration.config.ts",
     "e2e": "playwright test",
+    "shots": "tsx scripts/shots.ts",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
