@@ -148,6 +148,26 @@ describe('цены лавки', () => {
       }
     }
   });
+
+  it('«На кураже»: серия выигранных пари даёт 5% за шаг, потолок 5', () => {
+    expect(priceOf(100, 1, 0)).toBe(100);
+    expect(priceOf(100, 1, 1)).toBe(95);
+    expect(priceOf(100, 1, 3)).toBe(85);
+    expect(priceOf(100, 1, 5)).toBe(75);
+    // Выше потолка (5) скидка не растёт дальше.
+    expect(priceOf(100, 1, 9)).toBe(75);
+  });
+
+  it('прилавок читает серию из Meta.WinStreak', () => {
+    const s = fresh();
+    s.meta[Meta.WinStreak] = 3;
+    openShop(s);
+    for (let i = 0; i < SHOP_SLOTS; i++) {
+      const spec = UPGRADES[s.shopItem[i] - 1];
+      expect(s.shopPrice[i]).toBe(priceOf(spec.base, 1, 3));
+      expect(s.shopPrice[i]).toBeLessThan(priceOf(spec.base, 1, 0));
+    }
+  });
 });
 
 describe('ассортимент', () => {
