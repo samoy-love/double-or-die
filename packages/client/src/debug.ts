@@ -574,8 +574,13 @@ export interface DebugApi {
    * Сетка средних цветов о типографике не говорит ничего, а снаружи канвас
    * читается пустым: без снимка изнутри вёрстку экранов проверять нечем,
    * кроме как глазами на живой машине.
+   *
+   * `focus` — вырезать и увеличить прямоугольник кадра вокруг мировой точки
+   * (те же единицы, что у `state().ace.x/y`) вместо кадра целиком: мелкие
+   * фигуры (жест Крупье, ~60×90px на игровом разрешении) на обычном снимке
+   * не читаются.
    */
-  framePng(): string;
+  framePng(focus?: { x: number; y: number; halfW: number; halfH: number; scale?: number }): string;
   /** События с указанного тика включительно. Без аргумента — все. */
   events(sinceTick?: number): SimEvent[];
   replay(): string;
@@ -1404,8 +1409,8 @@ export function installDebugApi(loop: GameLoop): void {
       return loop.frameGrid(cols, rows);
     },
 
-    framePng() {
-      return loop.framePng();
+    framePng(focus) {
+      return loop.framePng(focus);
     },
 
     stable(on = true) {
