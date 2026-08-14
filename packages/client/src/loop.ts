@@ -927,8 +927,8 @@ export class GameLoop {
   }
 
   /** Кадр картинкой: глазная проверка вёрстки и типографики (`Renderer.framePng`). */
-  framePng(): string {
-    return this.renderer.framePng(() => this.renderOnce());
+  framePng(focus?: { x: number; y: number; halfW: number; halfH: number; scale?: number }): string {
+    return this.renderer.framePng(() => this.renderOnce(), focus);
   }
 
   /** Сколько фигур не влезло в батч: потолок кадра обязан быть виден. */

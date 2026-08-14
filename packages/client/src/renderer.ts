@@ -358,8 +358,28 @@ export class Renderer implements RenderKit {
    *
    * Кодируется канвасом 2D, а не вручную: PNG нужен один раз на прогон, и
    * своя реализация сжатия здесь была бы кодом без второго читателя.
+   *
+   * `focus` — необязательный прямоугольник вырезки плюс масштаб, задан в
+   * МИРОВЫХ координатах арены (те же единицы, что `Meta.AceX/AceY`), а не
+   * в пикселях кадра: пиксель зависит от вьюпорта съёмки и масштаба letterbox
+   * (`contain`, см. `draw()`), а мировая точка — нет. Вырезается ИЗ уже
+   * отрисованного кадра, а не отдельным проходом рендера с другой камерой:
+   * камеры у игры одна (симуляция не знает о зуме), и звать `draw()` дважды
+   * с разным состоянием батча рискованнее, чем обрезать готовый растр.
+   * Нужен для приближённых кадров съёмки (жесты Крупье, `scripts/screens.ts`)
+   * — фигура на игровом разрешении занимает считаные пиксели, и обычный кадр
+   * не даёт разглядеть форму жеста.
    */
-  framePng(draw: () => void): string {
+  framePng(
+    draw: () => void,
+    focus?: {
+      readonly x: number;
+      readonly y: number;
+      readonly halfW: number;
+      readonly halfH: number;
+      readonly scale?: number;
+    },
+  ): string {
     const { px, w, h } = this.readFrame(draw);
     const out = document.createElement('canvas');
     out.width = w;
@@ -374,7 +394,34 @@ export class Renderer implements RenderKit {
       img.data.set(px.subarray(src, src + w * 4), y * w * 4);
     }
     ctx.putImageData(img, 0, 0);
-    return out.toDataURL('image/png');
+    if (!focus) return out.toDataURL('image/png');
+
+    // Тот же перевод «мир → пиксель кадра», что `draw()` отдаёт шейдеру
+    // через `uView` (letterbox `contain`, см. комментарий там) — здесь
+    // считается заново, а не переиспользуется: `uView` живёт в клип-спейсе
+    // шейдера (−1…1, Y вверх), а нужен растровый пиксель (0…w, Y вниз).
+    const fitScale = Math.min(w / this.arenaW, h / this.arenaH);
+    const padX = (w - this.arenaW * fitScale) / 2;
+    const padY = (h - this.arenaH * fitScale) / 2;
+    const crop = {
+      x: focus.x * fitScale + padX - focus.halfW * fitScale,
+      y: focus.y * fitScale + padY - focus.halfH * fitScale,
+      w: focus.halfW * 2 * fitScale,
+      h: focus.halfH * 2 * fitScale,
+    };
+
+    const scale = focus.scale ?? 1;
+    const cropped = document.createElement('canvas');
+    cropped.width = Math.round(crop.w * scale);
+    cropped.height = Math.round(crop.h * scale);
+    const cctx = cropped.getContext('2d');
+    if (!cctx) throw new Error('снимок кадра: нет контекста 2D для обрезки');
+    // Целочисленное масштабирование без сглаживания: фигура игры собрана из
+    // плоских примитивов (см. gl/batch.ts), и линейный blur здесь не нужен —
+    // нужны те же чёткие грани, что и на несжатом кадре.
+    cctx.imageSmoothingEnabled = false;
+    cctx.drawImage(out, crop.x, crop.y, crop.w, crop.h, 0, 0, cropped.width, cropped.height);
+    return cropped.toDataURL('image/png');
   }
 
   /** Пиксели кадра из своего буфера — общее тело снимка и сетки. */

@@ -30,6 +30,7 @@ import {
   FX_ONE,
   InputScheme,
   MAX_ACTIVE_BETS,
+  MAX_BALLS,
   MAX_BULLETS,
   MAX_CARDS,
   MAX_CHIPS,
@@ -309,6 +310,17 @@ export interface DebugState {
    * есть, но неразличим», ни поставить проверку на видимость.
    */
   ace: { gesture: number; bark: string; onArena: boolean; x: number; y: number };
+  /**
+   * Босс: фаза и шары. `null` вне боссовой комнаты (`bossInPlay` ложно) —
+   * а не нули по умолчанию, чтобы «босса нет» не путалось с «босс есть, но
+   * фаза 0» на глаз при чтении дампа.
+   */
+  boss: {
+    phase: number;
+    hp: number;
+    maxHp: number;
+    balls: { i: number; active: boolean; x: number; y: number; landAt: number }[];
+  } | null;
 }
 
 export interface DebugApi {
@@ -574,8 +586,13 @@ export interface DebugApi {
    * Сетка средних цветов о типографике не говорит ничего, а снаружи канвас
    * читается пустым: без снимка изнутри вёрстку экранов проверять нечем,
    * кроме как глазами на живой машине.
+   *
+   * `focus` — вырезать и увеличить прямоугольник кадра вокруг мировой точки
+   * (те же единицы, что у `state().ace.x/y`) вместо кадра целиком: мелкие
+   * фигуры (жест Крупье, ~60×90px на игровом разрешении) на обычном снимке
+   * не читаются.
    */
-  framePng(): string;
+  framePng(focus?: { x: number; y: number; halfW: number; halfH: number; scale?: number }): string;
   /** События с указанного тика включительно. Без аргумента — все. */
   events(sinceTick?: number): SimEvent[];
   replay(): string;
@@ -771,6 +788,20 @@ function snapshot(s: SimState, hash: string, bark: string): DebugState {
       x: toFloat(s.meta[Meta.AceX]),
       y: toFloat(s.meta[Meta.AceY]),
     },
+    boss: bossInPlay(s)
+      ? {
+          phase: s.meta[Meta.BossPhase],
+          hp: s.meta[Meta.BossHP],
+          maxHp: s.meta[Meta.BossMaxHP],
+          balls: Array.from({ length: MAX_BALLS }, (_, i) => ({
+            i,
+            active: s.ballActive[i] !== 0,
+            x: toFloat(s.ballX[i]),
+            y: toFloat(s.ballY[i]),
+            landAt: s.ballLandAt[i],
+          })),
+        }
+      : null,
   };
 }
 
@@ -1066,6 +1097,21 @@ export function installDebugApi(loop: GameLoop): void {
         // поэтому считается уже после её выплаты — запас прочности читается
         // заново, и менять порядок нельзя.
         while (counterBetRunning(s)) loop.advance(1);
+        /*
+         * Ставка выигрывается не в тот тик, когда СНАРУЖИ перестаёт быть
+         * true `counterBetRunning` (`s.tick < CounterBetUntil`), а на шаг
+         * позже: `s.tick` растёт ПОСЛЕ `stepBoss` внутри `step()`
+         * (`sim.ts`), и `stepCounterBet` разрешает ставку (лечит босса —
+         * `boss.ts`, `stepCounterBet`) именно на тике, где `s.tick ===
+         * CounterBetUntil`, — том самом, что цикл выше уже не проходит,
+         * потому что снаружи в этот момент `counterBetRunning` уже читается
+         * ложным. Не досчитав этот тик, третья фаза считала бы порог от
+         * ещё не выплаченного лечения — запас прочности выше нужного на
+         * `BOSS.counterBetHealPct`, и `drop(phaseThreePct)` ниже бил бы
+         * мимо цели вдвое (проверено: 1120 вместо честных 1360 — ровно
+         * недостающие 15%).
+         */
+        if (s.meta[Meta.CounterBetUntil] !== 0) loop.advance(1);
         if (s.meta[Meta.BossPhase] < 3) drop(BOSS.phaseThreePct);
       }
 
@@ -1404,8 +1450,8 @@ export function installDebugApi(loop: GameLoop): void {
       return loop.frameGrid(cols, rows);
     },
 
-    framePng() {
-      return loop.framePng();
+    framePng(focus) {
+      return loop.framePng(focus);
     },
 
     stable(on = true) {
