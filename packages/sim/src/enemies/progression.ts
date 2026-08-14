@@ -161,7 +161,7 @@ function payRoomClear(s: SimState): void {
   const n = s.playerCount;
   let payout = Math.trunc((amount * (n + 1)) / (n * 2));
   // Комиссия (GDD §11): выплата за комнату урезана, пока проклятие активно.
-  if (s.meta[Meta.Curse] === Curse.Commission && s.meta[Meta.CurseRoom] === 1) {
+  if (s.meta[Meta.Curse] === Curse.Commission && (s.meta[Meta.CurseRoom] & 1) === 1) {
     payout = Math.trunc((payout * CURSE.commissionPayoutPct) / 100);
   }
   for (let p = 0; p < n; p++) {

@@ -419,7 +419,7 @@ function skipSettlement(s: SimState): void {
 function tryDash(s: SimState, i: number, inp: InputFrame): boolean {
   // Свинцовые ноги: рывок недоступен всю проклятую комнату — как будто
   // кнопка вообще не нажата (GDD §11).
-  if (s.meta[Meta.Curse] === Curse.LeadFeet && s.meta[Meta.CurseRoom] === 1) return false;
+  if (s.meta[Meta.Curse] === Curse.LeadFeet && (s.meta[Meta.CurseRoom] & 1) === 1) return false;
   if (!isDown(inp, Btn.Dash)) return false;
   if (s.tick < s.pDashReady[i]) return false;
 

@@ -139,7 +139,7 @@ export function expireCurse(s: SimState): void {
  * подбор фишек, выплата, виньетка), и отдельного входа не требуют.
  */
 export function applyCurseEffects(s: SimState): void {
-  if (s.meta[Meta.Curse] !== Curse.Blood || s.meta[Meta.CurseRoom] !== 1) return;
+  if (s.meta[Meta.Curse] !== Curse.Blood || (s.meta[Meta.CurseRoom] & 1) === 0) return;
 
   for (let p = 0; p < s.playerCount; p++) {
     if ((s.pFlags[p] & EntityFlag.Alive) === 0) continue;

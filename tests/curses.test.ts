@@ -211,6 +211,45 @@ describe('Заморозка', () => {
     expect(s.eFlags[j] & EntityFlag.Marked).toBe(0);
   });
 
+  it('метка не выдаётся второй раз, даже если первый помеченный умер раньше следующего спавна', () => {
+    // Спавны той же волны разнесены по РАЗНЫМ тикам (WAVE.spawnStaggerTicks),
+    // и если первый помеченный враг гибнет раньше срока следующего —
+    // countActive() снова видит пустую арену. Раньше это давало вторую
+    // метку (iter-1 С-1 → iter-3 §0-А, подтверждено чтением кода,
+    // не чинилось до этого захода).
+    const s = fresh();
+    s.meta[Meta.Curse] = Curse.Frozen;
+    s.meta[Meta.CurseRoom] = 1;
+    s.meta[Meta.Wave] = 1;
+
+    const i = spawnEnemy(s, EnemyType.Wedge, s.pX[0] - fromInt(300), s.pY[0]);
+    expect(s.eFlags[i] & EntityFlag.Marked).not.toBe(0);
+
+    // Помеченный погиб раньше следующего спавна той же волны — арена снова
+    // пуста, но метка уже выдана и на комнату этого достаточно.
+    s.eActive[i] = 0;
+    const j = spawnEnemy(s, EnemyType.Wedge, s.pX[0] - fromInt(200), s.pY[0]);
+    expect(s.eFlags[j] & EntityFlag.Marked).toBe(0);
+  });
+
+  it('в следующей проклятой комнате метка выдаётся заново', () => {
+    // Бит «метка уже выдана» живёт в CurseRoom и обязан сбрасываться вместе
+    // со входом в новую проклятую комнату, а не залипать на весь забег.
+    const s = fresh();
+    s.meta[Meta.Curse] = Curse.Frozen;
+    s.meta[Meta.CurseRoom] = 1;
+    s.meta[Meta.Wave] = 1;
+    const i = spawnEnemy(s, EnemyType.Wedge, s.pX[0] - fromInt(300), s.pY[0]);
+    expect(s.eFlags[i] & EntityFlag.Marked).not.toBe(0);
+    s.eActive[i] = 0;
+
+    // Новая проклятая комната: CurseRoom сбрасывается на 1 заново
+    // (expireCurse/curse — floor.ts), бит метки должен уйти вместе с ним.
+    s.meta[Meta.CurseRoom] = 1;
+    const j = spawnEnemy(s, EnemyType.Wedge, s.pX[0] - fromInt(200), s.pY[0]);
+    expect(s.eFlags[j] & EntityFlag.Marked).not.toBe(0);
+  });
+
   it('без проклятия фишки подбираются как обычно', () => {
     const s = fresh();
     const before = s.pChips[0];
