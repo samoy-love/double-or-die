@@ -48,11 +48,12 @@ const ALLOWED = new Set(['packages/client/src/strings.generated.ts']);
 /**
  * Исключено осознанно, а не забыто.
  *
- * `debug.ts` — отладочный интерфейс, вырезаемый из релиза (`check:no-debug-api`
- * стоит на страже этого отдельно). `contrast.ts` — подписи пар в отчёте о
- * контрасте: они уходят в лог CI, а не игроку.
+ * `debug.ts` и подсистемы под `debug/` — отладочный интерфейс, вырезаемый из
+ * релиза (`check:no-debug-api` стоит на страже этого отдельно). `contrast.ts`
+ * — подписи пар в отчёте о контрасте: они уходят в лог CI, а не игроку.
  */
 const EXCLUDED = new Set(['packages/client/src/debug.ts', 'packages/client/src/contrast.ts']);
+const EXCLUDED_DIRS = ['packages/client/src/debug/'];
 
 /** Конструкции, чей текст адресован разработчику, а не игроку. */
 const DEV_CONTEXT = /\bthrow\b|\bconsole\s*\.|\blogError\s*\(|\blog\s*\(/;
@@ -147,7 +148,8 @@ function main(): void {
 
   for (const file of walk(SCAN)) {
     const rel = relative(ROOT, file).replace(/\\/g, '/');
-    if (ALLOWED.has(rel) || EXCLUDED.has(rel)) continue;
+    if (ALLOWED.has(rel) || EXCLUDED.has(rel) || EXCLUDED_DIRS.some((d) => rel.startsWith(d)))
+      continue;
     checked++;
 
     const lines = stripComments(readFileSync(file, 'utf8')).split('\n');

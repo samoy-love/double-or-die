@@ -22,7 +22,7 @@ import { Phase, RESOLUTIONS, SCREENS } from '../scripts/screens';
 /** Имена методов отладочного API — из его же объявления, а не копией. */
 const debugApiMethods = (): Set<string> => {
   const src = readFileSync(
-    join(import.meta.dirname, '..', 'packages', 'client', 'src', 'debug.ts'),
+    join(import.meta.dirname, '..', 'packages', 'client', 'src', 'debug', 'types.ts'),
     'utf8',
   );
   const start = src.indexOf('export interface DebugApi {');
