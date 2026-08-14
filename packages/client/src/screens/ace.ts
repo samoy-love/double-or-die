@@ -8,13 +8,54 @@
  */
 import { AceGesture, EntityFlag, CARD, Meta, toFloat, type SimState } from '@dod/sim';
 import type { Feedback } from '../feedback';
-import { Shape } from '../gl/batch';
+import { Shape, type ShapeBatch } from '../gl/batch';
 import { Face } from '../gl/text';
 import { PALETTE } from '../palette';
 import { TEXT } from '../typography';
 import { entity, clamp01, glow, channels } from '../gl/primitives';
-import { drawEyes } from './arena';
 import type { Renderer } from '../renderer';
+
+/**
+ * Глаза Крупье: НЕПОДВИЖНАЯ пара плюс зрачок, смещённый в сторону взгляда.
+ *
+ * Не переиспользует `drawEyes` (`screens/arena.ts`) специально: та ставит
+ * саму пару глаз ПЕРПЕНДИКУЛЯРНО направлению взгляда — приём, рассчитанный
+ * на существ без верха и низа (враги, Желешка), которые могут «смотреть»
+ * туда и разворачиваться вместе со взглядом всем телом. У Крупье есть
+ * голова с фиксированным верхом (цилиндр) и лицо на строго определённом
+ * месте под ним, и та же формула при взгляде вниз или по диагонали
+ * разворачивала пару глаз в вертикальную линию — на лице это читается не
+ * как взгляд в сторону, а как повреждённое лицо (владелец, iter-9: «глаза
+ * ужасные, как у камбалы, повёрнутые на бок»). Здесь склеры стоят на
+ * фиксированной горизонтали всегда, а взгляд несёт только зрачок,
+ * смещённый внутри склеры, — тот же приём, что в любой мультипликации.
+ */
+function drawAceEyes(b: ShapeBatch, x: number, y: number, gx: number, gy: number): void {
+  const scleraR = 6.5;
+  const pupilR = 3;
+  const reach = scleraR - pupilR - 0.5;
+  const eye = PALETTE.eye;
+  const pupil = PALETTE.pupil;
+  for (const sx of [-9, 9]) {
+    const ex = x + sx;
+    b.push(Shape.Circle, ex, y, scleraR, scleraR, 0, ...channels(eye), 1, 0, 0, 0, 0, 0);
+    b.push(
+      Shape.Circle,
+      ex + gx * reach,
+      y + gy * reach,
+      pupilR,
+      pupilR,
+      0,
+      ...channels(pupil),
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+    );
+  }
+}
 
 export function drawAce(rend: Renderer, s: SimState, fb: Feedback): void {
   if (s.meta[Meta.AceX] === 0) return;
@@ -88,7 +129,38 @@ export function drawAce(rend: Renderer, s: SimState, fb: Feedback): void {
     0,
   );
   entity(b, Shape.Box, x, brimY, 32, 5, tilt, PALETTE.ace, 0.9);
+  // Второй, более тонкий контур полей чуть ниже основного — край цилиндра
+  // читается ТОЛЩИНОЙ, а не одной плоской линией (владелец, iter-9: «сделай
+  // более сложную рисовку»).
+  entity(b, Shape.Box, x, brimY + 5, 26, 2, tilt, PALETTE.ace, 0.6);
   entity(b, Shape.Circle, x, faceY, 18, 18, 0, PALETTE.ace, 0.9);
+
+  /*
+   * Бабочка на воротнике — костюмная деталь дилера (GDD §17А зовёт его
+   * «Крупье», не просто цилиндром), а заодно и единственный элемент силуэта
+   * ниже лица: без неё фигура обрывается на подбородке, что на общем плане
+   * читается как обрезанный кадр, а не как «у него нет тела по замыслу».
+   * Два треугольника остриями друг к другу и узел-квадрат между ними — тот
+   * же набор примитивов, что у пипа туза (без кривых в этой палитре форм).
+   */
+  const bowY = faceY + 21;
+  b.push(Shape.Triangle, x - 7, bowY, 8, 6, tilt, ...channels(PALETTE.accent), 0.9, 0, 0, 0, 0, 0);
+  b.push(
+    Shape.Triangle,
+    x + 7,
+    bowY,
+    8,
+    6,
+    tilt + Math.PI,
+    ...channels(PALETTE.accent),
+    0.9,
+    0,
+    0,
+    0,
+    0,
+    0,
+  );
+  b.push(Shape.Box, x, bowY, 2.5, 2.5, tilt, ...channels(PALETTE.ace), 0.95, 0, 0, 0, 0, 0);
 
   /*
    * Перчатки — часть силуэта ВСЕГДА, а не только во время жеста.
@@ -169,18 +241,47 @@ export function drawAce(rend: Renderer, s: SimState, fb: Feedback): void {
   }
   const len = Math.hypot(dx, dy) || 1;
   const look = g === AceGesture.TurnAway ? -1 : 1;
+  /*
+   * Брови — то немногое, что переводит «шарик с глазами» в «характер».
+   * Скептический наклон по умолчанию (внешние концы выше внутренних) читает
+   * Крупье как оценивающего, а не безучастного; жесты сдвигают наклон и
+   * высоту — тем же приёмом, что мимика бровей работает у живых актёров:
+   * положение глаз не меняется вовсе, меняется только то, что над ними.
+   */
+  let browTilt = 0.18;
+  let browY = -12;
+  if (g === AceGesture.ThumbsDown) browTilt = -0.32;
+  if (g === AceGesture.Applaud || g === AceGesture.Ovation) {
+    browTilt = -0.1;
+    browY = -14;
+  }
   if (g !== AceGesture.Yawn) {
-    // Глаза на лице (faceY), не на тулье — ТЗ-1 iter-3: тулья и поля
-    // заканчиваются на brimY + 5, лицо начинается на faceY − 18.
-    drawEyes(rend, x, faceY, 9, (look * dx) / len, (look * dy) / len, 6, false);
+    for (const side of [-1, 1]) {
+      b.push(
+        Shape.Box,
+        x + side * 9,
+        faceY + browY,
+        5,
+        1.6,
+        side * browTilt,
+        ...channels(PALETTE.pupil),
+        0.85,
+        0,
+        0,
+        0,
+        0,
+        0,
+      );
+    }
+    drawAceEyes(b, x, faceY, (look * dx) / len, (look * dy) / len);
   } else {
     // Зевает: щёлки вместо глаз и открытый рот — на лице же.
     const e = PALETTE.pupil;
-    for (const sx of [-5, 5]) {
-      b.push(Shape.Box, x + sx, faceY, 5, 1.5, 0, e.r, e.g, e.b, 0.9, 0, 0, 0, 0, 0);
+    for (const sx of [-9, 9]) {
+      b.push(Shape.Box, x + sx, faceY, 6, 1.5, 0, e.r, e.g, e.b, 0.9, 0, 0, 0, 0, 0);
     }
     const m = 3 + Math.abs(Math.sin(s.tick * 0.02)) * 4;
-    b.push(Shape.Circle, x, faceY - 10, m, m, 0, e.r, e.g, e.b, 0.9, 0, 0, 0, 0, 0);
+    b.push(Shape.Circle, x, faceY + 9, m, m, 0, e.r, e.g, e.b, 0.9, 0, 0, 0, 0, 0);
   }
 
   if (s.meta[Meta.TossAt] !== 0) {
