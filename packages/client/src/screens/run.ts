@@ -1011,8 +1011,13 @@ export function drawAceBetScreen(
   );
   drawMultiplier(r.batch, spec.multiplier / FX_ONE, w / 2 + 190, rowY, 16, PALETTE.hudText);
 
+  // Кон Крупье — не потеря игрока (это его собственные деньги, не списание
+  // с кошелька, ECONOMY §10А), поэтому цвет фишек, а не PALETTE.loss —
+  // тот занят экономическим минусом ИГРОКА (недостача, near-miss, кон,
+  // поставленный ПРОТИВ него после проигрыша), а здесь наоборот, это то,
+  // что игрок может ОБОБРАТЬ, приняв пари.
   const stake = aceStakeFor(s, 0);
-  r.screenValue(t('ace_bet.stake'), stake, w, h / 2 - 70, 30, PALETTE.loss);
+  r.screenValue(t('ace_bet.stake'), stake, w, h / 2 - 70, 30, PALETTE.chip);
 
   /*
    * Сколько осталось молчать — кольцом обратного отсчёта.

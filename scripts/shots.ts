@@ -191,7 +191,12 @@ async function shoot(page: Page, screen: Screen, dir: string): Promise<string[]>
   try {
     for (const step of screen.steps) await runStep(page, step);
     await page.evaluate(() => window.__DOD__!.render());
-    const url = await page.evaluate(() => window.__DOD__!.framePng());
+    const zoom = screen.zoom;
+    const url = await page.evaluate((z) => {
+      if (!z) return window.__DOD__!.framePng();
+      const { x, y } = window.__DOD__!.state().ace;
+      return window.__DOD__!.framePng({ x, y, halfW: z.halfW, halfH: z.halfH, scale: z.scale });
+    }, zoom);
     writeFileSync(join(dir, `${screen.id}.png`), Buffer.from(url.split(',')[1], 'base64'));
   } catch (e) {
     problems.push(`${screen.id}: ${String(e)}`);
