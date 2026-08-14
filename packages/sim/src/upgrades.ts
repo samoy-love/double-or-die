@@ -50,15 +50,24 @@ export const upgradeAt = (index: number): UpgradeSpec => UPGRADES[index];
  * Считается целыми: полтора живут парой чисел в конфиге, а не дробью, потому
  * что дробное умножение в ядре расходится между движками. Усечение вниз — то
  * же самое, что стоит в таблице расходов ECONOMY §5 (45 → 67 → 101).
+ *
+ * `winStreak` — необязательная скидка «На кураже» (`UPGRADE.
+ * winStreakDiscountPctPerStreak/Cap`), применяется ТОЛЬКО ценой прилавка
+ * (вызывающий её опускает у `buybackOf`): выкуп заведением считается от
+ * полной цены, скидка на покупку не должна тайком удешевлять и продажу.
  */
-export function priceOf(base: number, floor: number): number {
+export function priceOf(base: number, floor: number, winStreak = 0): number {
   let num = base;
   let den = 1;
   for (let f = 1; f < floor; f++) {
     num *= UPGRADE.priceGrowthNum;
     den *= UPGRADE.priceGrowthDen;
   }
-  return Math.trunc(num / den);
+  const full = Math.trunc(num / den);
+  const streak = Math.min(winStreak, UPGRADE.winStreakDiscountCap);
+  if (streak <= 0) return full;
+  const discountPct = streak * UPGRADE.winStreakDiscountPctPerStreak;
+  return full - Math.trunc((full * discountPct) / 100);
 }
 
 /**
@@ -360,7 +369,9 @@ function layOut(s: SimState, priced: boolean): void {
     const upgrade = pool[pick];
     pool[pick] = pool[--free];
     s.shopItem[i] = upgrade + 1;
-    if (priced) s.shopPrice[i] = priceOf(UPGRADES[upgrade].base, floor);
+    if (priced) {
+      s.shopPrice[i] = priceOf(UPGRADES[upgrade].base, floor, s.meta[Meta.WinStreak]);
+    }
   }
 }
 

@@ -458,6 +458,25 @@ describe('расчёт комнаты', () => {
     expect(stateOf(s, 0)).toBe(BetState.Lost);
   });
 
+  it('«На кураже»: выигрыш растит серию, провал сбрасывает', () => {
+    const s = arena(1, 0);
+    expect(s.meta[Meta.WinStreak]).toBe(0);
+
+    bet(s, 'no_damage', 100);
+    settleBets(s);
+    expect(s.meta[Meta.WinStreak]).toBe(1);
+
+    bet(s, 'no_damage', 100);
+    settleBets(s);
+    expect(s.meta[Meta.WinStreak]).toBe(2);
+
+    bet(s, 'no_damage', 100);
+    incoming(s);
+    run(s, 30);
+    settleBets(s);
+    expect(s.meta[Meta.WinStreak], 'провал обрывает серию').toBe(0);
+  });
+
   it('аппетит задаёт кон тремя тирами', () => {
     for (let tier = 0; tier < APPETITE.length; tier++) {
       const s = arena(1, 500);
