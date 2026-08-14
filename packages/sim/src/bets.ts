@@ -1061,6 +1061,9 @@ function loseBet(s: SimState, player: number, n: number): void {
   s.aNearMiss[k] = progressOf(s, player, n);
   s.aState[k] = BetState.Lost;
   s.meta[Meta.BetsLost]++;
+  // «На кураже» (см. `Meta.WinStreak`): любой провал обрывает серию, откуда
+  // бы он ни пришёл — расчёт комнаты или смерть игрока (`loseBetsOnDeath`).
+  s.meta[Meta.WinStreak] = 0;
   // Выиграл Крупье — забирает эквивалент из кошелька игрока. У обычного пари кон
   // списан ещё при подборе, и здесь не происходит ничего.
   payAce(s, player, k);
@@ -1320,6 +1323,10 @@ export function settleBets(s: SimState): void {
         const ace = -s.aStake[k];
         s.pChips[p] += ace > 0 ? ace : Math.trunc((s.aStake[k] * spec.multiplier) / FX_ONE);
         s.meta[Meta.BetsWon]++;
+        // «На кураже» (ECONOMY/GDD §12): скидка на боевые/экономические
+        // апгрейды растёт с каждым выигранным подряд пари — `priceOf`,
+        // `upgrades.ts`. Потолок держит сама формула цены, не счётчик.
+        s.meta[Meta.WinStreak]++;
       } else {
         loseBet(s, p, i);
         /*

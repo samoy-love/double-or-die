@@ -381,6 +381,7 @@ function checkAce(s: SimState): void {
     if (taken > 1) fail(`у игрока ${p} ${taken} Ставки Крупье сразу`, s.tick);
   }
   if (s.meta[Meta.DeathStreak] < 0) fail('серия смертей ушла в минус', s.tick);
+  if (s.meta[Meta.WinStreak] < 0) fail('серия выигранных пари ушла в минус', s.tick);
   if (s.meta[Meta.AceCameos] < 0) fail('счётчик выходов Крупье ушёл в минус', s.tick);
   // Тело без позиции и позиция без тела — разные поломки, но обе означают,
   // что клиент нарисует Крупье не там, где он есть.
