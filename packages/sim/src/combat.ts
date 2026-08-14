@@ -414,7 +414,7 @@ const pickupRadii = new Int32Array(MAX_PLAYERS);
  * снятие блокировки обязано случиться в тот же тик, что и его смерть.
  */
 function chipsFrozen(s: SimState): boolean {
-  if (s.meta[Meta.Curse] !== Curse.Frozen || s.meta[Meta.CurseRoom] !== 1) return false;
+  if (s.meta[Meta.Curse] !== Curse.Frozen || (s.meta[Meta.CurseRoom] & 1) === 0) return false;
   for (let i = 0; i < MAX_ENEMIES; i++) {
     if (s.eActive[i] && (s.eFlags[i] & EntityFlag.Marked) !== 0) return true;
   }
