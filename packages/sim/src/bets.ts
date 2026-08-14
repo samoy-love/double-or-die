@@ -680,11 +680,12 @@ function schemeBlocked(s: SimState, bet: number, owner: number): boolean {
  * риском), другие портят его случайностью вне контроля игрока («Заморозка»
  * блокирует подбор фишек, пока жив помеченный враг, — «Собери все фишки»
  * тогда решает не игрок). Проверяется только пока проклятая комната ИДЁТ
- * (`CurseRoom === 1`): до входа и после снятия проклятие не действует, и
- * запрет на пари вместе с ним обязан сняться.
+ * (бит 0 `CurseRoom`): до входа и после снятия проклятие не действует, и
+ * запрет на пари вместе с ним обязан сняться. Бит 1 — метка Заморозки
+ * («уже выдана в этой комнате», см. `enemies/spawn.ts`) — сюда не входит.
  */
 function curseBlocked(s: SimState, bet: number): boolean {
-  if (s.meta[Meta.CurseRoom] !== 1) return false;
+  if ((s.meta[Meta.CurseRoom] & 1) === 0) return false;
   const curse = s.meta[Meta.Curse];
   if (curse === Curse.None) return false;
   return (BETS[bet].curseMask & (1 << curse)) !== 0;

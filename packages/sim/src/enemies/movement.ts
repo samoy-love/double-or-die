@@ -33,7 +33,7 @@ const units = (v: Fx): number => v / 65536;
  * не должны требовать помнить обо всех местах разом.
  */
 export function curseSpeedMul(s: SimState): Fx {
-  return s.meta[Meta.Curse] === Curse.Hustle && s.meta[Meta.CurseRoom] === 1
+  return s.meta[Meta.Curse] === Curse.Hustle && (s.meta[Meta.CurseRoom] & 1) === 1
     ? CURSE.hustleSpeedMul
     : FX_ONE;
 }
