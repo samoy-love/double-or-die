@@ -1,7 +1,8 @@
 name: Deploy
 
-# Две цели: прод и nightly. Разделены, потому что проверять сборку нужно
-# ровно так, как её увидит игрок, но не роняя при этом то, во что играют.
+# Одна цель — прод. Каждый коммит в main уезжает на die.samoy.love; отдельного
+# nightly-стенда нет: сборку проверяют гейты до выкатки, а «как увидит игрок» —
+# сам прод, он же и есть единственная сборка.
 
 on:
   push:
@@ -11,11 +12,6 @@ on:
       - 'docs/**'
   workflow_dispatch:
     inputs:
-      target:
-        description: 'Что катим'
-        type: choice
-        options: [all, game, dev]
-        default: all
       dry-run:
         type: boolean
         default: false
@@ -39,26 +35,7 @@ permissions:
 # Запиннить его по SHA значит завести N молча расходящихся деплоев — риск
 # больше того, от которого пиннинг защищает.
 jobs:
-  # Nightly едет первым: он и существует ради того, чтобы поймать то, что
-  # не поймал CI, до того как это увидит игрок.
-  dev:
-    if: inputs.target == '' || inputs.target == 'all' || inputs.target == 'dev'
-    uses: tr0llex/deploy-kit/.github/workflows/static-site.yml@main
-    with:
-      config: .deploy-kit/dev.env
-      gates: sh scripts/retry.sh npm ci && npm run check && npm test && npm run build && npm run check:no-debug-api
-      dry-run: ${{ inputs.dry-run == true }}
-    secrets: inherit
-
   game:
-    # Раньше game ждал dev (needs: dev), хотя гейты у обеих целей одинаковые,
-    # а деплоятся они на разные хосты (dev.die.samoy.love и die.samoy.love) —
-    # общих ресурсов и порядка миграций между ними нет. Последовательность
-    # добавляла ~1 минуту ожидания на каждый деплой без всякой причины.
-    # Общая очередь на репозиторий и так не даёт им столкнуться: она уже
-    # встроена в static-site.yml и ключ включает цель (target), так что dev и
-    # game — это разные группы concurrency и катятся параллельно.
-    if: inputs.target == '' || inputs.target == 'all' || inputs.target == 'game'
     uses: tr0llex/deploy-kit/.github/workflows/static-site.yml@main
     with:
       config: .deploy-kit/game.env
