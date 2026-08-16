@@ -10,10 +10,8 @@ Bet cards lie on the arena during the fight: "no damage", "under 45 seconds",
 under fire. The bolder the bet, the fatter the pot, and the only one you lose
 to is yourself.
 
-The build lives at **[die.samoy.love](https://die.samoy.love)**; the nightly
-of every commit to `main` is at
-**[dev.die.samoy.love](https://dev.die.samoy.love)**. This is an internal
-alpha for now — the public release starts with version 0.5.0.
+The build lives at **[die.samoy.love](https://die.samoy.love)** — every commit
+to `main` ships there. This is an internal alpha for now — the public release starts with version 0.5.0.
 
 ## How it works
 

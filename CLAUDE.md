@@ -131,8 +131,7 @@ dk rollback <цель> # откатить
 Локальная выкатка и CI идут одним и тем же путём: одно описание цели
 (`.deploy-kit/*.env`) и один `release.sh` на сервере.
 
-Цели этого проекта: `game` (прод, `die.samoy.love`) и `dev`
-(nightly, `dev.die.samoy.love`).
+Цель этого проекта одна: `game` (прод, `die.samoy.love`).
 
 ## nginx
 
