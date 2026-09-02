@@ -351,13 +351,7 @@ function inRedZoneAt(s: SimState, x: number, y: number): boolean {
  * `avoidRed` — держит ли игрок «Не заходи в красную зону»: карта в зоне для
  * него не цель, а способ проиграть пари, за которое он уже заплатил кон.
  */
-function findCard(
-  s: SimState,
-  player: number,
-  px: number,
-  py: number,
-  avoidRed = false,
-): void {
+function findCard(s: SimState, player: number, px: number, py: number, avoidRed = false): void {
   foundDist = Infinity;
   for (let c = 0; c < MAX_CARDS; c++) {
     if (!s.kActive[c]) continue;
@@ -452,13 +446,7 @@ function holdsBet(s: SimState, player: number, bet: number): boolean {
 let foundAxisX = 0;
 let foundAxisY = 0;
 
-function considerThreat(
-  dx: number,
-  dy: number,
-  axisX: number,
-  axisY: number,
-  type: number,
-): void {
+function considerThreat(dx: number, dy: number, axisX: number, axisY: number, type: number): void {
   const d = Math.hypot(dx, dy);
   if (d >= foundDist) return;
   foundDist = d;
@@ -748,7 +736,6 @@ class ProfileBot implements Bot {
   /** Сердец в прошлом тике: по их убыли `single` решает соскочить. */
   private readonly hearts: Int32Array;
   private readonly bailing: Uint8Array;
-
 
   constructor(skill: SkillName, strategy: StrategyName, seed: number, players: number) {
     this.profile = `${skill}:${strategy}`;

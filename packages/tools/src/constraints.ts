@@ -380,7 +380,10 @@ function g7(samples: readonly Sample[]): ConstraintResult {
   return result('G7', 'Доля забегов с долгом', '15–35%', samples.length, () => {
     const withDebt = samples.filter((r) => r.debtSeen).length;
     const share = withDebt / samples.length;
-    return { measured: pctCi(share, samples.length), verdict: inRange(share, 0.15, 0.35) ? 'green' : 'red' };
+    return {
+      measured: pctCi(share, samples.length),
+      verdict: inRange(share, 0.15, 0.35) ? 'green' : 'red',
+    };
   });
 }
 
@@ -389,7 +392,10 @@ function g8(samples: readonly Sample[]): ConstraintResult {
   return result('G8', 'Победа в забеге у медианного игрока', '25–40%', s.length, () => {
     const won = s.filter((r) => r.victory).length;
     const share = won / s.length;
-    return { measured: pctCi(share, s.length), verdict: inRange(share, 0.25, 0.4) ? 'green' : 'red' };
+    return {
+      measured: pctCi(share, s.length),
+      verdict: inRange(share, 0.25, 0.4) ? 'green' : 'red',
+    };
   });
 }
 
@@ -491,7 +497,10 @@ function g14(samples: readonly Sample[]): ConstraintResult {
     () => {
       const cashed = resolved.filter((b) => b.outcome === 'cashed').length;
       const share = cashed / resolved.length;
-      return { measured: pctCi(share, resolved.length), verdict: inRange(share, 0.15, 0.35) ? 'green' : 'red' };
+      return {
+        measured: pctCi(share, resolved.length),
+        verdict: inRange(share, 0.15, 0.35) ? 'green' : 'red',
+      };
     },
   );
 }
@@ -579,7 +588,10 @@ function d3(samples: readonly Sample[]): ConstraintResult {
   return result('D3', 'Доля побед у медианного игрока', '25–40%', s.length, () => {
     const won = s.filter((r) => r.victory).length;
     const share = won / s.length;
-    return { measured: pctCi(share, s.length), verdict: inRange(share, 0.25, 0.4) ? 'green' : 'red' };
+    return {
+      measured: pctCi(share, s.length),
+      verdict: inRange(share, 0.25, 0.4) ? 'green' : 'red',
+    };
   });
 }
 
