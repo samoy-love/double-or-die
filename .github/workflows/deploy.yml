@@ -36,7 +36,7 @@ permissions:
 # больше того, от которого пиннинг защищает.
 jobs:
   game:
-    uses: tr0llex/deploy-kit/.github/workflows/static-site.yml@main
+    uses: samoy-love/deploy-kit/.github/workflows/static-site.yml@main
     with:
       config: .deploy-kit/game.env
       gates: sh scripts/retry.sh npm ci && npm run check && npm test && npm run build && npm run check:no-debug-api
