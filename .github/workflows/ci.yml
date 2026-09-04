@@ -72,7 +72,7 @@ jobs:
   # остальные шаги (лint, типы, сборка) обязаны идти и при ручном запуске.
   quality:
     name: Линт, типы, коммиты, секреты, сборка
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, home]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -224,7 +224,7 @@ jobs:
   # падение реестра не должно выглядеть как сломанный линт.
   supply-chain:
     name: 'Зависимости: аудит и лицензии'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, home]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -330,7 +330,7 @@ jobs:
   cross-platform:
     name: Платформы согласны
     needs: determinism
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, home]
     timeout-minutes: 10
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -395,7 +395,7 @@ jobs:
   # выглядеть как сломанный линт.
   hooks:
     name: Хуки разбираются
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, home]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -432,7 +432,7 @@ jobs:
   # `hooks` выше) не должна читаться как «workflow разбирается неверно».
   workflows:
     name: Сами workflow разбираются
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, home]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -454,7 +454,7 @@ jobs:
   # 2000 частиц и 200 болванок в бюджете кадра.
   e2e:
     name: Сквозные тесты и бенч рендера
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, home]
     # Реально ~1m21s, запас на холодный кэш Playwright и общую загрузку раннера.
     timeout-minutes: 15
     steps:
@@ -525,7 +525,7 @@ jobs:
   # передаётся только этому шагу, а не всей задаче.
   protection-sync:
     name: Защита ветки соответствует задачам CI
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, home]
     timeout-minutes: 5
     # needs — не про очерёдность результата, а про то, что видит Jobs API.
     # GitHub регистрирует задачу с зависимостями в API прогона только когда
