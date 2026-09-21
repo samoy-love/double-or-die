@@ -318,7 +318,7 @@ jobs:
         with:
           name: hashes-${{ matrix.os }}
           path: hashes-${{ matrix.os }}.json
-          retention-days: 7
+          retention-days: 1
 
   # Сверка хешей между платформами. Тесты выше проверяют, что машина
   # воспроизводит саму себя; здесь — что все три согласны друг с другом.
@@ -502,7 +502,7 @@ jobs:
           path: |
             playwright-report/
             test-results/
-          retention-days: 7
+          retention-days: 1
 
   # `build` слит в задачу `quality` выше: у него не было ни отдельного
   # сетевого шага, ни явной причины стоять изолированно от линта — только
